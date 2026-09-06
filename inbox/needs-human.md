@@ -19,3 +19,13 @@ record the ruling under it. Then land the ruling as a durable artifact — a rul
 a hook pattern, a runbook, a test pin — in the same session.
 
 ---
+
+## Post-compact probe harness — no way to compact on demand (2026-09-06)
+
+The plan's 0.3 item "post-compact probe harness" cannot be built honestly today:
+`claude -p` has no compaction trigger and `/compact` is interactive-only, so a
+probe would be prompts nothing can run. The deterministic `SessionStart(compact)`
+output is pinned by the selftest and is the whole measurement for now.
+Re-check on 2026-10-01 whether `claude plugin eval` can drive a session through
+compaction. Cost of waiting: none measurable. Cost of building now: a harness
+that reports success by running nothing. Row set to `inbox`.
