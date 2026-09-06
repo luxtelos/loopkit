@@ -14,6 +14,17 @@
 - `scripts/run-capped.sh` — one word after `--` is a shell string and runs
   under `bash -o pipefail -c`, so the hook's single-quoted form keeps the
   exit code (`'false | true'` → 1). Several words are still an argv.
+- `scripts/judge.py` — the pairwise judge discipline as a script
+  (`specs/pairwise-judge-verdicts.md`): `claude -p --output-format json`
+  twice per criterion with positions swapped; the two runs disagreeing is
+  `FINAL: TIE confidence 0.5`, agreeing is that verdict with the confidence
+  clamped to [0.5, 1.0]; `--judge` equal to `--generator` exits 3 with no
+  verdict. The prompt is built from judge.md's Rules section at run time —
+  the script carries no rule text. One block per `--criterion` in judge.md's
+  output shape, raw responses under `state/judge/<ts>-<pid>.json`, one
+  `judge` event (final, confidence) in `state/ticks.jsonl`. Selftest pins
+  it with a stub `claude`, as fan-out is pinned; `judge.md` and `/doctor`
+  point at it.
 
 ## 0.2.0-alpha.4 — 2026-09-06 (batch d: profiles, fan-out, the override counter)
 
