@@ -79,6 +79,7 @@ else                          S="discover";   A="no actionable rows. Run morning
 fi
 
 echo "STAGE: $S"
+python3 "$HERE/ticks.py" append --root "$ROOT" --event stage --k "stage=$S" --k "scope=${SCOPE:-}" >/dev/null 2>&1 || true
 if [ "$S" != "discover" ]; then
   T="$(first_of "$S")"
   echo "TARGET: ${T:0:110}"

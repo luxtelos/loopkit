@@ -59,6 +59,8 @@ read -r -a CODE_GLOBS <<< "$LOOP_CODE_GLOBS"
 # changes the verdict.
 note() {
     python3 "$PLUGIN_ROOT/scripts/progress.py" append --root "$ROOT" --text "$1" >/dev/null 2>&1 || true
+    local result="FAIL"; [[ "$1" == "gate PASS" ]] && result="PASS"
+    python3 "$PLUGIN_ROOT/scripts/ticks.py" append --root "$ROOT" --event gate --k "result=$result" --k "reason=${1#gate FAIL: }" >/dev/null 2>&1 || true
 }
 
 fail() {  # <message> — record, print, reject the stop
