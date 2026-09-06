@@ -327,9 +327,9 @@ for ev in require_recall.py offload_nudge.py; do grep -q "$ev" "$P/hooks/hooks.j
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.
-leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
+leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
 [ -z "$leaks" ] && ok "no project-specific tokens anywhere in the repo" || { fail "project tokens in: $leaks"; }
-orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
+orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
 [ -z "$orgs" ] && ok "the only org reference is luxtelos/loopkit" || { fail "other org references: $orgs"; }
 
 unset CLAUDE_PROJECT_DIR
@@ -345,3 +345,9 @@ fi
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
+
+# --- the repo's own gate config must source silently: an unquoted multi-word
+# value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
+section "dogfood: .loopkit/config.env sources clean"
+cfg_err="$( ( set -a; . "$REPO_ROOT/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
+if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi

@@ -247,3 +247,8 @@ to its state machine. The fixed twin exits 0.
 The files `init` created stay in your project; delete them if you do not want
 them. Nothing else was written outside the project except `~/.loopkit/tools`
 if you ran step 8.
+
+## Platforms
+
+- **macOS** (bash 3.2, the default shell) — the development platform; every script is written for it.
+- **Linux** — `tests/selftest.sh` passes on `node:22-bookworm` (Debian 12: Python 3.11, Node 22, bash 5.2). `.github/workflows/selftest.yml` runs it on `ubuntu-latest` for every push and pull request. The CI job runs the selftest only; `install.sh`'s Linux branch is not exercised by it.

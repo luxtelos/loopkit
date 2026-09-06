@@ -19,3 +19,5 @@ MC.*
 
 # Local scratch
 /tmp/
+
+# LoopKit: this repo's gate config is tracked (no webhook, no secrets); see .loopkit/config.env
