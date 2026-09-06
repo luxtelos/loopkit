@@ -160,3 +160,25 @@ change what an agent can finish unaided.
 - **Plain `git push` has no working credential** over either transport, so the
   release script now falls back to the `gh` token inline. It is never written to
   a file and never echoed.
+
+## The queue lags its own work by however long review takes (2026-09-07)
+
+`loop-next.sh` served a row one tick after that row was advanced, because the
+advance lives on a branch and the lookup reads the checkout. Both states are
+real. The assessment is in `state/2026-09-07-queue-lags-review-assessment.md`;
+it classifies this as architecture rather than process, because "merge the state
+PR sooner" is a habit and the failure recurs at exactly the review latency.
+
+Three options, each costing something:
+
+- **Exempt `state/` from review and write it to the trunk.** Immediate, and
+  gives up the audit trail on the loop's own memory.
+- **One long-lived state branch** the loop reads and writes, merged
+  periodically. Keeps review; the lookup must then read that ref instead of the
+  checkout, which changes how every project runs the loop.
+- **Accept the lag, make it visible.** Warn when the checkout's queue differs
+  from the newest pushed state branch. Changes no workflow and fixes nothing —
+  it only stops the loop being surprised by its own memory.
+
+Related, and the reason this surfaced now: five pull requests are open and
+unmerged, so the lag is currently hours rather than minutes.
