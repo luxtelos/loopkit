@@ -6,25 +6,29 @@ a PreToolUse hook cannot see how big the result will be. What it CAN see is the
 command's shape. So: when the command matches a line of
 `.loopkit/offload-patterns.txt` (Python `re.search`), rewrite it to
 
-    bash <plugin>/scripts/run-capped.sh -- '<original, single-quoted>'
+    bash <plugin>/scripts/run-capped.sh --shell -- '<original, single-quoted>'
 
 and the full output lands in `.loopkit/scratch/` with only head+tail in the
 window. Passive when the file is absent or holds only blank and `#` lines.
 
-Mechanism — Claude Code hooks reference, https://code.claude.com/docs/en/hooks,
-section "Decision control" (read 2026-09-06):
-  "For PreToolUse, the decision fields are permissionDecision and updatedInput."
-  "updatedInput replaces tool arguments before the tool runs, so Claude sees
-   what you changed and the tool receives your modifications."
-  "You can update the command field for Bash, the code field for the Code
-   tool, and the path or content fields for Write."
-Shape (the doc's own example, minus the decision):
-  {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                          "updatedInput": {"command": "..."}}}
+Mechanism — Claude Code hooks reference, https://code.claude.com/docs/en/hooks
+(re-read 2026-09-07; the earlier header paraphrased this and lost the third
+sentence, which is the one that matters):
+  "For `PreToolUse`, `PostToolUse`, and `PostToolUseFailure`, the
+   `updatedInput` field lets your hook modify the tool input before Claude
+   Code executes or has executed the tool."
+  "The object you return replaces the entire input object, so you must include
+   every field that the tool requires, even if your hook doesn't change them."
+  "Unchanged fields must be included in full (for example, an object field
+   must include all its properties)."
+So this hook echoes the WHOLE `tool_input` back with only `command` replaced.
+Emitting `{"command": ...}` alone silently dropped `run_in_background`,
+`timeout` and `description` from every rewritten call — found in review of
+PR #7, and pinned in tests/selftest.sh so it cannot come back.
 `permissionDecision` is deliberately NOT emitted: "allow" would skip the user's
 permission prompt for the rewritten command, and this hook has no business
-deciding permissions. The doc says the two fields are independent decision
-fields; it does not show updatedInput alone, so that is the one live-semantics
+deciding permissions. The doc lists the two as independent decision fields and
+does not show `updatedInput` alone, so that remains the one live-semantics
 claim a reviewer should confirm in a real session.
 
 Fail-open everywhere: any error → exit 0 with no stdout, the command runs as
@@ -114,7 +118,7 @@ def decide(cmd: str, patterns: list[tuple[str, "re.Pattern[str]"]], wrapper: Pat
         return None
     for src, rx in patterns:
         if rx.search(cmd):
-            return f"bash {shlex.quote(str(wrapper))} -- {shlex.quote(cmd)}", src
+            return f"bash {shlex.quote(str(wrapper))} --shell -- {shlex.quote(cmd)}", src
     return None
 
 
@@ -145,8 +149,12 @@ def main() -> int:
             return 0
         new_cmd, src = hit
         record(root, src, cmd)
+        # updatedInput REPLACES the entire input object (doc, above), so carry
+        # every field the caller sent and change only `command`.
+        updated = dict(payload.get("tool_input") or {})
+        updated["command"] = new_cmd
         sys.stdout.write(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                            "updatedInput": {"command": new_cmd}}}))
+                                                            "updatedInput": updated}}))
         sys.stdout.flush()
     except Exception:
         pass

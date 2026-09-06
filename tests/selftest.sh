@@ -497,7 +497,7 @@ raw="$(cd "$O" && bash -c "$rt")"
 grep -qF "IT'S|\"Q\"|" <<<"$raw" && ok "round-trip fixture carries ' \" \$ and |" || fail "fixture: $raw"
 out="$(rw "$rt")"; [ -n "$out" ] && ok "a matching command gets updatedInput" || fail "no updatedInput for a matching command"
 new="$(newcmd <<<"$out")"
-grep -qE "^bash '?[^ ]*run-capped\.sh'? -- '" <<<"$new" && ok "rewrite is bash <plugin>/scripts/run-capped.sh -- '<original>'" || fail "rewrite shape: $new"
+grep -qE "^bash '?[^ ]*run-capped\.sh'? --shell -- '" <<<"$new" && ok "rewrite is bash <plugin>/scripts/run-capped.sh --shell -- '<original>'" || fail "rewrite shape: $new"
 wrapped="$(cd "$O" && bash -c "$new")"
 [ "$(sed '$d' <<<"$wrapped")" = "$raw" ] && ok "wrapped stdout equals the raw run byte-for-byte" || fail "round-trip differs: raw=[$raw] wrapped=[$wrapped]"
 grep -q 'run-capped: exit 0' <<<"$wrapped" && ok "wrapped run reports its exit line" || fail "no exit line: $wrapped"
@@ -507,6 +507,25 @@ out="$(rw $'printf a\nprintf b')"; [ -z "$out" ] && ok "a multi-line command is 
 out="$(rw '')"; [ -z "$out" ] && ok "an empty command is left unchanged" || fail "empty rewritten: $out"
 new="$(rw 'false | true' | newcmd)"
 ( cd "$O" && bash -c "$new" >/dev/null 2>&1 ); rc=$?; [ "$rc" = 1 ] && ok "wrapped 'false | true' exits 1 (pipefail kept)" || fail "wrapped pipeline rc=$rc"
+# PR #7 review: updatedInput REPLACES the whole input object, so every field the
+# caller sent must come back or it is silently dropped from the executed call.
+full="$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"seq 1 5","description":"count","timeout":120000,"run_in_background":True}}))' \
+  | CLAUDE_PROJECT_DIR="$O" python3 "$P/hooks/offload_rewrite.py" 2>/dev/null)"
+kept="$(python3 -c 'import json,sys; u=json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]; print(",".join(sorted(u)))' <<<"$full")"
+[ "$kept" = "command,description,run_in_background,timeout" ] && ok "updatedInput carries every input field, not just command" || fail "updatedInput dropped fields, kept: $kept"
+bg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["run_in_background"])' <<<"$full")"
+[ "$bg" = "True" ] && ok "an unchanged field keeps its value through the rewrite" || fail "run_in_background became $bg"
+# the doc sentence the header quotes must actually be in the header (no paraphrase drift)
+grep -q 'replaces the entire input object' "$P/hooks/offload_rewrite.py" && ok "the header quotes the replace-entire-object rule" || fail "header lost the replace-entire-object citation"
+# --shell is explicit: arity must never decide
+argv_out="$(cd "$O" && bash "$P/scripts/run-capped.sh" -- "$P/../../tests/selftest.sh" --nonexistent-flag 2>&1 | tail -1 || true)"
+mkdir -p "$O/dir with space"; printf '#!/bin/sh\necho one-word-argv\n' > "$O/dir with space/prog"; chmod +x "$O/dir with space/prog"
+one="$(cd "$O" && bash "$P/scripts/run-capped.sh" -- "$O/dir with space/prog" 2>&1)"
+grep -q 'one-word-argv' <<<"$one" && ok "a one-word argv with a space runs as a program, not a shell string" || fail "one-word argv broke: $one"
+sh_rc=0; ( cd "$O" && bash "$P/scripts/run-capped.sh" --shell -- 'false | true' >/dev/null 2>&1 ) || sh_rc=$?
+[ "$sh_rc" = 1 ] && ok "--shell runs one string under pipefail" || fail "--shell rc=$sh_rc"
+bad_rc=0; ( cd "$O" && bash "$P/scripts/run-capped.sh" --shell -- echo a b >/dev/null 2>&1 ) || bad_rc=$?
+[ "$bad_rc" = 2 ] && ok "--shell with several arguments is refused, not guessed" || fail "--shell multi-arg rc=$bad_rc"
 out="$(rw 'seq 1 3')"; errs="$(grep -c 'invalid pattern' "$O/rw.err" || true)"
 [ -n "$out" ] && [ "$errs" = 1 ] && ok "an invalid regex line is skipped with one stderr line; a later line still matches" || fail "invalid line: out=[$out] stderr=$(cat "$O/rw.err")"
 before="$( { [ -f "$O/.loopkit/metrics.jsonl" ] && grep -c offload_rewrite "$O/.loopkit/metrics.jsonl"; } || echo 0)"
