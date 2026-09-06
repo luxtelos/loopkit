@@ -93,6 +93,11 @@ Three rules, and they are the whole of it:
 3. Record every transition, keyed on --source (NOT --finding):
        python3 {s}/triage_state.py update --state state/triage.md \\
          --source "<row source>" --status <new-status>
+4. Never sleep unless something OUTSIDE the loop must move first. Read the
+   NEXT: line loop-next.sh prints: CONTINUE means run the next tick now, no
+   wakeup; WAIT (a PR review, CI, a human ruling) is the only case for a
+   ScheduleWakeup; IDLE means run morning-triage now. Ask "what am I waiting
+   on?" — if the answer is "nothing", a timer is a delay, not a discipline.
 
 The skill you invoked carries everything else, and is the source of truth."""
 

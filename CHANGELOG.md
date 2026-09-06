@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0-alpha.4 — 2026-09-06 (batch d: profiles, fan-out, the override counter)
+
+- `loopkit-init.sh --profile commerce` — templates and checks for a project
+  built on Anthropic's commerce-agents blueprint, never a product: named block
+  patterns (`no-live-keys`, `no-live-mode-flag`, `no-payout-refund-capture-from-shell`,
+  `no-ledger-deletes`), protected `pricing/`/`catalog/`/`policies/`, recall
+  triggers on checkout/refund/pricing code, EARS constraints appended to
+  `constitution.md`, a snapshot-eval template, `check-snapshot.py` (end state,
+  never path), and the `commerce-review` skill with its six-line checklist.
+  Marker-guarded; a second run is a no-op.
+- `scripts/fanout.sh` — one headless `claude -p` per brief, each in its own
+  worktree, tools and turns scoped, one JSON result per brief, worktrees
+  removed, nothing merged. `templates/brief.md` is the shape.
+- The stop gate counts consecutive blocks per session: the seventh says the
+  eighth will be overridden by Claude Code and records
+  `gate_override_imminent`; a PASS resets. Stdin is read once, bounded.
+- `docs/research/watchlist.md` — ads, ACP, AP2, GEO and the DeepSeek
+  subagent packages: what is published (nothing, or ad-free), what is claimed,
+  when to look again. Research only, by owner ruling.
+- Deferred, stated plainly: a `claude -p` judge runner and PreToolUse
+  `updatedInput` offload need live semantics not yet verified here.
+
 ## 0.2.0-alpha.3 — 2026-09-06 (batch c: OKF and the knowledge layer)
 
 The thesis becomes testable: a project's rulings, traps and invariants as

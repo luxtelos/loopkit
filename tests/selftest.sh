@@ -72,8 +72,17 @@ python3 "$TS" upsert --state "$T/state/triage.md" --finding "Login page flicker 
 python3 "$TS" upsert --state "$T/state/triage.md" --finding "Waiting on pricing ruling" --source "inbox § pricing" --priority high --status blocked >/dev/null
 out="$(bash "$P/scripts/loop-next.sh")"
 grep -q '^STAGE: new' <<<"$out" && ok "loop-next serves STAGE: new" || fail "loop-next: $out"
+grep -q '^NEXT: CONTINUE' <<<"$out" && ok "loop-next says CONTINUE while rows are actionable (no wakeup)" || fail "NEXT line: $out"
 grep -q '^BLOCKED: 1' <<<"$out" && ok "loop-next reports the blocked row" || fail "blocked row not reported"
 grep -q 'Login page flicker | mobile' <<<"$out" && ok "a finding with a pipe survives the round trip" || fail "pipe in finding lost"
+E="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-empty.XXXXXX")"; mkdir -p "$E/state"
+python3 "$TS" ensure-schema --state "$E/state/triage.md" >/dev/null 2>&1 || true
+out="$(CLAUDE_PROJECT_DIR="$E" bash "$P/scripts/loop-next.sh")"
+grep -q '^NEXT: IDLE' <<<"$out" && ok "loop-next says IDLE on an empty queue (run triage, do not sleep)" || fail "IDLE line: $out"
+python3 "$TS" upsert --state "$E/state/triage.md" --finding "Awaiting owner ruling on X" --source "inbox § X" --priority high --status blocked >/dev/null
+out="$(CLAUDE_PROJECT_DIR="$E" bash "$P/scripts/loop-next.sh")"
+grep -q '^NEXT: WAIT' <<<"$out" && ok "loop-next says WAIT when only a human ruling can move things" || fail "WAIT line: $out"
+find "$E" -delete
 out="$(bash "$P/scripts/loop-next.sh" --scope billing)"
 grep -q '^TARGET: Invoice totals' <<<"$out" && ok "--scope billing picks the invoice row" || fail "scope pick: $out"
 python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null
@@ -112,6 +121,7 @@ expect_rc 0 "citations: a real line passes" python3 "$P/scripts/check-citations.
 # doctrine prints absolute script paths
 out="$(echo '{"prompt":"/loop"}' | python3 "$P/hooks/loop_doctrine.py")"
 grep -q "$P/scripts/loop-next.sh" <<<"$out" && ok "doctrine carries absolute paths" || fail "doctrine paths"
+grep -q 'Never sleep unless something OUTSIDE the loop must move first' <<<"$out" && ok "doctrine rule 4: no wakeup while work is actionable" || fail "doctrine rule 4"
 
 # --- 0.2.0-a: the practice floor -------------------------------------------
 echo "== protect_tests (a test count may never drop)"
@@ -406,6 +416,67 @@ out="$(python3 "$P/scripts/loop-metrics.py" --root "$T")"
 grep -q '^  ticks' <<<"$out" && grep -q 'gate_pass_rate' <<<"$out" && grep -q 'n=' <<<"$out" && ok "loop-metrics prints every figure with its n=" || fail "metrics: $out"
 out="$(python3 "$P/scripts/loop-metrics.py" --root "$B" 2>/dev/null || CLAUDE_PROJECT_DIR="$(mktemp -d)" python3 "$P/scripts/loop-metrics.py")"
 grep -q 'n=0' <<<"$out" && ok "metrics on an empty ledger say n=0, never a number" || fail "empty metrics: $out"
+
+# --- 0.2.0-d: profiles, fan-out, the override counter ----------------------
+echo "== commerce profile"
+expect_rc 0 "init --profile commerce (first run)" bash "$P/scripts/loopkit-init.sh" --project "$T" --profile commerce
+expect_rc 0 "init --profile commerce (second run)" bash "$P/scripts/loopkit-init.sh" --project "$T" --profile commerce
+[ "$(grep -c 'loopkit-profile:commerce:block-patterns.txt' "$T/.loopkit/block-patterns.txt")" = 1 ] && ok "profile patterns appended exactly once" || fail "profile marker count"
+grep -q 'Commerce constraints (profile: commerce)' "$T/constitution.md" && ok "commerce constraints appended to constitution.md" || fail "constitution profile section"
+[ -f "$T/evals/commerce/snapshot.template.json" ] && ok "snapshot template copied to evals/commerce/" || fail "snapshot template missing"
+expect_rc 2 "unknown profile is refused" bash "$P/scripts/loopkit-init.sh" --project "$T" --profile nope
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe refunds create --amount 100 --live"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
+[ "$rc" = 2 ] && grep -qE 'ruling: no-(live-mode-flag|payout-refund-capture-from-shell)' <<<"$err" && ok "a live-mode refund from the shell is refused, naming its ruling" || fail "profile block: rc=$rc $err"
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo sk_live_abcdefghijklmnop"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
+[ "$rc" = 2 ] && grep -q 'ruling: no-live-keys' <<<"$err" && ok "a live key literal is refused" || fail "live key: rc=$rc"
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe customers list --limit 3"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
+[ "$rc" = 0 ] && ok "a read-only test-mode call passes" || fail "read-only call blocked: $err"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/pricing/plans.json","content":"{}"}}' "$T" | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "pricing/ is protected under the profile" || fail "pricing guard"
+expect_rc 0 "check-snapshot: the template passes" python3 "$P/scripts/check-snapshot.py" --root "$T" --strict
+printf '{"id":"bad","transcript":[{"role":"user","content":"x"}],"state_before":{},"expected_state_after":{"steps":["call refund"]},"cap":1}' > "$T/evals/commerce/bad.json"
+out="$(python3 "$P/scripts/check-snapshot.py" --root "$T")"
+grep -q 'grades a PATH' <<<"$out" && ok "check-snapshot rejects path-graded expectations" || fail "snapshot path: $out"
+expect_rc 1 "check-snapshot --strict fails on it" python3 "$P/scripts/check-snapshot.py" --root "$T" --strict
+expect_rc 0 "check-skills --strict still passes with commerce-review" python3 "$P/scripts/check-skills.py" --root "$(mktemp -d)" --plugin "$P" --strict
+
+echo "== fan-out with a stub claude"
+mkdir -p "$T/briefs"
+printf '# brief one\n\nObjective: list files.\n' > "$T/briefs/one.md"
+printf '# brief two\n\nObjective: count lines.\n' > "$T/briefs/two.md"
+cat > "$T/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+# stub: consume the brief on stdin, echo a JSON result naming the flags it saw
+brief="$(cat)"
+printf '{"result":"ok","brief_bytes":%d,"args":"%s"}\n' "${#brief}" "$*"
+STUB
+chmod +x "$T/bin/claude"
+out="$(cd "$T" && PATH="$T/bin:$PATH" bash "$P/scripts/fanout.sh" --briefs "$T/briefs" --run-id selftest --max-turns 3 --allowed-tools "Read,Grep")"
+grep -q 'FANOUT: 2/2 briefs exited 0' <<<"$out" && ok "fan-out ran one claude per brief" || fail "fanout: $out"
+[ -f "$T/state/fanout/selftest/one.json" ] && grep -q '"brief_bytes"' "$T/state/fanout/selftest/one.json" && ok "each brief has a JSON result" || fail "fanout results"
+grep -q -- '--max-turns 3 --allowedTools Read,Grep' "$T/state/fanout/selftest/two.json" && ok "turns and tools are scoped per run" || fail "fanout flags: $(cat "$T/state/fanout/selftest/two.json")"
+[ -z "$(git -C "$T" worktree list | grep fanout-selftest || true)" ] && ok "fan-out worktrees removed" || fail "worktrees left behind"
+grep -q 'nothing was merged' <<<"$out" && ok "fan-out says it merged nothing" || fail "fanout merge line"
+
+echo "== stop gate: the eighth block is an override, so the seventh says so"
+export LOOP_TEST_CMD="false" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="" LOOP_TEST_JSON_CMD="false"
+SG='{"session_id":"stopblocks-selftest-'$$'","hook_event_name":"Stop"}'
+last=""
+for i in 1 2 3 4 5 6 7; do last="$(printf '%s' "$SG" | bash "$P/hooks/stop_gate.sh" 2>&1 || true)"; done
+grep -q 'OVERRIDE IMMINENT: this is consecutive block 7' <<<"$last" && ok "seventh consecutive block warns that the eighth is an override" || fail "override warning: $last"
+grep -q '"event": "gate_override_imminent"' "$T/state/ticks.jsonl" && ok "override-imminent recorded in the ticks ledger" || fail "override event missing"
+export LOOP_TEST_CMD="true" LOOP_TEST_JSON_CMD="true"
+printf 'tests/a.test.ts :: adds\n' > "$T/state/known-test-failures.txt"
+# The JSON command is a script file, so the value holds no quotes or braces
+# except the placeholder: a `\"`-laden string built inside "$( … )" on bash
+# 3.2 arrived with a stray `}` and looked like a substitution bug (it was not).
+printf '#!/usr/bin/env bash\nprintf "{\\"testResults\\":[]}" > "$1"\n' > "$T/bin/fakereport"; chmod +x "$T/bin/fakereport"
+out="$(printf '%s' "$SG" | LOOP_TEST_JSON_CMD="$T/bin/fakereport {report}" bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+grep -q 'PASS: all gates passed' <<<"$out" && ok "a PASS resets the counter" || fail "reset pass: $out"
+grep -q 'Running the suite once' <<<"$out" && ! grep -qE 'test-report\.json\.[A-Za-z0-9]+\}' <<<"$out" && ok "the {report} placeholder substitutes with no stray brace" || fail "placeholder: $out"
+last="$(printf '%s' "$SG" | LOOP_TEST_CMD=false LOOP_TEST_JSON_CMD=false bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+grep -q 'consecutive block 1)' "$T/state/progress.md" && ok "the count restarted at 1 after the PASS" || fail "counter did not reset: $(tail -2 "$T/state/progress.md")"
+unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD LOOP_TEST_JSON_CMD
+[ -f "$REPO/docs/research/watchlist.md" ] && grep -q 'ad-free' "$REPO/docs/research/watchlist.md" && ok "research watchlist states what is published" || fail "watchlist"
 
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
