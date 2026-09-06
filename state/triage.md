@@ -18,3 +18,9 @@ read, and a hand edit breaks that.
 | Release 0.2.0: tag + GitHub release once PRs #2 #3 #4 are merged by the owner | release §0.2.0 | high |  | blocked |
 | Submit to anthropics/claude-plugins-official once 0.2.0 is tagged | plan §distribution official-marketplace | medium |  | blocked |
 | Bloom profile (six behaviour seeds + check-bloom.py) — waits on the owner's spend decision and a control-case run | docs/research/bloom-assessment.md | medium |  | blocked |
+| M1 runtime spec: specs/loopkit-runtime.md (EARS), ADR-0001..0004, docs/DDD-ERD.md, spec/fixtures, loopkit-runtime.model.fizz | docs/research/runtime-plan.md §M1 | high |  | new |
+| M2 loopkit-core: extract portable modules, lift stage+NEXT into loop_next_pick.decide, Provider (stub/OpenAI-compat/Anthropic), Store (fs/sqlite/s3), Runner, projection | docs/research/runtime-plan.md §M2 | high |  | blocked |
+| M3 plugin becomes an adapter over loopkit-core; selftest unchanged | docs/research/runtime-plan.md §M3 | medium |  | blocked |
+| M4 projections + protocols: knowledge project --schema, A2A agent card, AG-UI emitter behind a flag | docs/research/runtime-plan.md §M4 | medium |  | blocked |
+| M5 loopkit-js from the conformance fixtures (packages/js) | docs/research/runtime-plan.md §M5 | low |  | blocked |
+| M6 bench: prompt-driven vs policy-driven on one task set, ledger metrics | docs/research/runtime-plan.md §M6 | low |  | blocked |

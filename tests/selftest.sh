@@ -203,9 +203,9 @@ grep -q 'protect_tests.py' "$P/hooks/hooks.json" && ok "protect_tests wired" || 
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.
-leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
+leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
 [ -z "$leaks" ] && ok "no project-specific tokens anywhere in the repo" || { fail "project tokens in: $leaks"; }
-orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
+orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
 [ -z "$orgs" ] && ok "the only org reference is luxtelos/loopkit" || { fail "other org references: $orgs"; }
 
 unset CLAUDE_PROJECT_DIR

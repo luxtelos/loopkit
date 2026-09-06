@@ -29,3 +29,10 @@ output is pinned by the selftest and is the whole measurement for now.
 Re-check on 2026-10-01 whether `claude plugin eval` can drive a session through
 compaction. Cost of waiting: none measurable. Cost of building now: a harness
 that reports success by running nothing. Row set to `inbox`.
+
+## Runtime plan milestones M2–M6 are sequenced, not blocked on a ruling (2026-09-07)
+
+Rows M2–M6 in state/triage.md sit at `blocked` only because each depends on the
+previous milestone's PR merging (M1 spec first — the owner's paper-trail rule).
+No decision is pending: the plan was approved 2026-09-07 with one ruling folded
+in (SQLite, no Postgres). Flip each row to `new` when its predecessor merges.
