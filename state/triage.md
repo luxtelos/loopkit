@@ -10,8 +10,8 @@ never by hand — a finding containing `|` is escaped on write and unescaped on
 read, and a hand edit breaks that.
 | finding | source | priority | spec | status |
 |---|---|---|---|---|
-| Judge runner: judge.py runs a pairwise, position-swapped LLM judge via claude -p (references/judge.md made executable) | plan §0.3 judge-runner | medium | specs/pairwise-judge-verdicts.md | spec-ready |
-| PreToolUse updatedInput offload: rewrite a large Bash result to .loopkit/scratch and return the path | plan §0.3 updatedInput-offload | medium | specs/bash-output-offload.md | spec-ready |
+| Judge runner: judge.py runs a pairwise, position-swapped LLM judge via claude -p (references/judge.md made executable) | plan §0.3 judge-runner | medium | specs/pairwise-judge-verdicts.md | fixing |
+| PreToolUse updatedInput offload: rewrite a large Bash result to .loopkit/scratch and return the path | plan §0.3 updatedInput-offload | medium | specs/bash-output-offload.md | fixing |
 | Post-compact probe harness: recall / artifact / continuation / decision probes after a compaction | plan §0.3 post-compact-probes | low |  | inbox |
 | Adoption runbook for a project that already carries its own hooks: init, memory.json, duplicate hooks, rulings dry-run, ledger baseline | plan §adoption runbook | medium |  | pr-open |
 | install.sh Linux path unexercised; selftest verified on node:22-bookworm — say so in GETTING-STARTED and pin a Linux run in CI | docs/GETTING-STARTED.md §linux | low |  | pr-open |
