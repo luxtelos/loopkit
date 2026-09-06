@@ -51,6 +51,18 @@ echo "NOTES ($(printf '%s\n' "$NOTES" | grep -c .) lines):"; printf '%s\n' "$NOT
 [ "$DRY" = 1 ] && { echo "dry run — no tag, no release"; exit 0; }
 
 git tag -a "$TAG" "$SHA" -m "LoopKit $VERSION"
-git push -q origin "refs/tags/$TAG"
+# A bare push needs a working agent or a credential helper. When neither is
+# there, fall back to gh's token — interpolated inline, never written down, and
+# the output is filtered so a URL cannot leak into a log.
+if ! git push -q origin "refs/tags/$TAG" 2>/dev/null; then
+  if command -v gh >/dev/null 2>&1 && gh auth token >/dev/null 2>&1; then
+    echo "note: plain push failed (no agent or helper); using the gh token" >&2
+    git push -q "https://x-access-token:$(gh auth token)@github.com/${REMOTE_REPO}.git" \
+      "refs/tags/$TAG" 2>&1 | grep -v x-access-token
+    [ "${PIPESTATUS[0]}" = 0 ] || { echo "FAIL: could not push $TAG by either route" >&2; exit 7; }
+  else
+    echo "FAIL: could not push $TAG and gh is not authenticated" >&2; exit 7
+  fi
+fi
 printf '%s\n' "$NOTES" | gh release create "$TAG" --repo "$REMOTE_REPO" --target "$SHA" --title "LoopKit $VERSION" $PRE --notes-file -
 echo "RELEASED: https://github.com/$REMOTE_REPO/releases/tag/$TAG"
