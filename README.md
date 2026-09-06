@@ -110,6 +110,7 @@ plugins/loopkit/
   scripts/morning-triage.sh        headless discovery run, audit-logged
   scripts/loopkit-init.sh          lay the files into a project, idempotently; --profile commerce
   scripts/fanout.sh                one claude -p per brief, own worktree, scoped tools/turns, JSON results, nothing merged
+  scripts/judge.py                 pairwise judge: claude -p twice per criterion with positions swapped, disagreement → TIE 0.5, judge ≠ generator
   scripts/check-snapshot.py        snapshot evals: shape, end-state-only, no live keys
   scripts/rulings-extract.py       rulings hiding in the inbox, ADRs, specs → concept messages (dry run by default)
   scripts/rulings-compile.py       every Invariant/Gate names an artefact that exists; --strict

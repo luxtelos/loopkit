@@ -3,6 +3,10 @@
 Read this when a review must choose between two candidate fixes, two specs,
 or two outputs, or when an LLM is asked to score anything.
 
+Run it, do not hand-roll it: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/judge.py" --criterion "<EARS line>" --a FILE --b FILE --judge <name> --generator <name>`
+reads the rules below, asks `claude -p` twice with positions swapped, applies
+rule 2 deterministically and prints the output shape (exit 3 if judge = generator).
+
 ## Rules
 
 1. **Justification before score.** Write why, then the verdict. Scoring first
