@@ -654,12 +654,34 @@ else
   echo "  skip claude CLI not on PATH"
 fi
 
-echo
-[ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
-exit $([ "$fails" = 0 ] && echo 0 || echo 1)
-
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
 section "dogfood: .loopkit/config.env sources clean"
-cfg_err="$( ( set -a; . "$REPO_ROOT/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
+cfg_err="$( ( set -a; . "$REPO/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
 if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi
+
+# A release that does not bump the manifests reaches nobody: Claude Code caches
+# a plugin per version string, so the old cache directory keeps being used.
+# release.sh must refuse that, and this proves it refuses rather than warns.
+section "release.sh refuses a version the manifests do not carry"
+rel_out="$(cd "$REPO" && bash tools/release.sh 0.0.0-nonexistent --dry-run 2>&1 || true)"
+case "$rel_out" in
+  *"no '## 0.0.0-nonexistent' section in CHANGELOG.md"*) ok "release.sh stops before tagging an unwritten version" ;;
+  *"says version"*) ok "release.sh refuses a manifest/version mismatch" ;;
+  *) fail "release.sh did not refuse 0.0.0-nonexistent: $rel_out" ;;
+esac
+grep -q 'bump the manifest or nobody receives this release' "$REPO/tools/release.sh" && ok "release.sh carries the manifest-version guard" || fail "release.sh lost the manifest-version guard"
+grep -q 'Updating LoopKit in a project that uses it' "$REPO/docs/GETTING-STARTED.md" && ok "the guide documents how consumers receive an update" || fail "no updating section in GETTING-STARTED.md"
+
+# Every check must run BEFORE the summary. Two blocks added on 2026-09-07 landed
+# below `exit` and printed after the verdict, so their fails could never count —
+# the repo's own "a gate that cannot fail" class, committed into the gate itself.
+# This check is structural: nothing that records a result may sit after the
+# summary line.
+section "the suite has no checks after its own verdict"
+after="$(awk '/^\[ "\$fails" = 0 \] && echo "ALL PASS"/{f=1} f' "$0" | grep -cE '^[[:space:]]*(ok|fail)[[:space:]]|^[[:space:]]*section[[:space:]]' || true)"
+[ "${after:-0}" = 0 ] && ok "no ok/fail/section call sits below the summary" || fail "$after check line(s) run after the verdict and cannot fail the suite"
+
+echo
+[ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
+exit $([ "$fails" = 0 ] && echo 0 || echo 1)

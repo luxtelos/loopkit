@@ -33,6 +33,16 @@ NOTES="$(awk -v v="$VERSION" '
 [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ] || { echo "FAIL: no '## $VERSION' section in CHANGELOG.md — write the notes first" >&2; exit 3; }
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "FAIL: tracked files are modified; commit or set them aside first" >&2; exit 4; }
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && { echo "FAIL: tag $TAG already exists; a release is never re-pointed" >&2; exit 5; }
+
+# The manifests are what an installed copy compares against. Claude Code caches
+# a plugin per VERSION STRING (~/.claude/plugins/cache/<market>/<plugin>/<ver>),
+# so a release whose manifest still carries the previous version reaches nobody:
+# the cache directory already exists and the old copy keeps being used. Refuse.
+for manifest in plugins/loopkit/.claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+  [ -f "$manifest" ] || continue
+  mver="$(python3 -c 'import json,sys,re; t=open(sys.argv[1]).read(); m=re.search(r"\"version\"\s*:\s*\"([^\"]+)\"", t); print(m.group(1) if m else "")' "$manifest")"
+  [ "$mver" = "$VERSION" ] || { echo "FAIL: $manifest says version $mver, releasing $VERSION — bump the manifest or nobody receives this release" >&2; exit 6; }
+done
 SHA="$(git rev-parse --verify "$TARGET^{commit}")"
 PRE=""; case "$VERSION" in *-*) PRE="--prerelease" ;; esac
 
