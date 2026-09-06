@@ -108,3 +108,25 @@ escalations need a human:
 
 An escalation that could have been answered from the repo is noise in your
 queue, so the two answerable ones were withdrawn rather than left standing.
+
+## Merges are outrunning their reviews (2026-09-07)
+
+Twice today a pull request merged before its reviewer's verdict posted: #8 and
+#15. Both verdicts were FAIL and both found real defects — the first found the
+governance hook was not guarding the shell at all, the second found an undefined
+noun that the derivability pin quietly papered over. Nothing was lost, because
+the findings became rows and then fixes, but the sequence is backwards: the
+review is what the merge is supposed to wait for.
+
+This needs your ruling because both options cost something.
+
+- **Require a review before merge** (a branch protection rule, or a convention
+  the runner honours). Cost: every fix waits on a reviewer agent, roughly seven
+  to ten minutes each, and a stalled agent blocks the queue.
+- **Keep merging fast and treat review as post-hoc.** Cost: defects reach the
+  trunk and, twice today, a tagged release. `v0.2.0` shipped a specification
+  with an undefined noun and a fabricated citation.
+
+There is a middle option: require the review only for changes under `specs/`,
+`hooks/` and `.github/`, and let everything else merge on the gate alone. That
+matches where today's defects actually were.
