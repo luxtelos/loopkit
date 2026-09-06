@@ -103,8 +103,10 @@ Files (all in `luxtelos/loopkit`):
   named JSON Schema over concepts).
   Load-bearing criteria (verbatim intent):
   - WHEN a Run starts, the runtime SHALL read the policy bundle and pass each
-    agent only the concepts whose `scopes` match its lane, never the whole
-    bundle (today's `traps_for`, generalised).
+    agent only the concepts whose `tags` put them in its lane, never the whole
+    bundle (today's `traps_for`, generalised). The field is `tags` and the
+    matching rule is `specs/loopkit-runtime.md` §Policy scoping; this line
+    said `scopes` until 2026-09-07, a field no Concept has ever carried.
   - WHEN an agent proposes a side effect, the runtime SHALL journal the
     intent before executing it and journal the result after; WHEN a Run is
     resumed, the runtime SHALL replay the journal and SHALL NOT call the

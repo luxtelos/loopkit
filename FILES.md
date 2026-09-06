@@ -29,7 +29,6 @@
 | Requirements and acceptance criteria        | `specs/<feature>.md`                                  |
 | Why a design decision went that way         | `docs/adr/NNNN-<slug>.md`                             |
 | Behaviour every SDK must reproduce          | `spec/fixtures/*.json` (the contract, not a test)     |
-
 | Known-failing tests                         | `state/known-test-failures.txt`                       |
 | User prefs, feedback, cross-session gotchas | Claude auto-memory                                    |
 | Code structure (callers, callees, chains)   | derived — query the code, never author it             |
