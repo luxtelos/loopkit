@@ -682,6 +682,31 @@ section "the suite has no checks after its own verdict"
 after="$(awk '/^\[ "\$fails" = 0 \] && echo "ALL PASS"/{f=1} f' "$0" | grep -cE '^[[:space:]]*(ok|fail)[[:space:]]|^[[:space:]]*section[[:space:]]' || true)"
 [ "${after:-0}" = 0 ] && ok "no ok/fail/section call sits below the summary" || fail "$after check line(s) run after the verdict and cannot fail the suite"
 
+
+echo "== protect_governance covers Bash, not only the edit tools"
+G="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-gov.XXXXXX")"; mkdir -p "$G/specs"
+gov() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" \
+  | CLAUDE_PROJECT_DIR="$G" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; echo $?; }
+gov_blocked=0
+for c in 'cat > specs/x.md' 'tee specs/x.md' 'rm specs/x.md' 'mv a specs/b.md' 'cp a specs/b.md' 'sed -i "" s/a/b/ specs/x.md' 'perl -pi -e s/a/b/ specs/x.md' '> constitution.md'; do
+  [ "$(gov "$c")" = 2 ] && gov_blocked=$((gov_blocked+1)) || fail "shell write to a protected path NOT blocked: $c"
+done
+[ "$gov_blocked" = 8 ] && ok "every shell write shape into specs/ or the constitution is blocked" || fail "only $gov_blocked/8 shell write shapes blocked"
+gov_allowed=0
+for c in 'git status' 'cat specs/x.md' 'grep -r foo specs/' 'echo hi > /dev/null' 'ls specs/'; do
+  [ "$(gov "$c")" = 0 ] && gov_allowed=$((gov_allowed+1)) || fail "a READ of a protected path was blocked: $c"
+done
+[ "$gov_allowed" = 5 ] && ok "reads and unrelated commands pass through" || fail "only $gov_allowed/5 benign commands allowed"
+ovr="$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"cat > specs/x.md"}}))' \
+  | GOVERNANCE_EDIT_OK=1 CLAUDE_PROJECT_DIR="$G" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; echo $?)"
+[ "$ovr" = 0 ] && ok "GOVERNANCE_EDIT_OK=1 still opens the ratified door" || fail "override no longer works (rc=$ovr)"
+gov_m="$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1])); h=d.get("hooks",d)
+print(next(m["matcher"] for m in h["PreToolUse"] if any("protect_governance" in k.get("command","") for k in m["hooks"])))' "$P/hooks/hooks.json")"
+case "$gov_m" in *Bash*) ok "hooks.json wires protect_governance on Bash" ;; *) fail "protect_governance matcher lacks Bash: $gov_m" ;; esac
+find "$G" -delete 2>/dev/null || true
+
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
