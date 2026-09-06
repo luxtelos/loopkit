@@ -381,6 +381,7 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe subscriptions
 
 echo "== rulings-extract (dry run, then apply)"
 printf '\n## RESOLVED 2026-09-01 — Grace-lane reactivation goes through a fresh checkout\n\nOwner ruled: reactivation from grace is a new checkout, never an un-cancel.\n' >> "$T/inbox/needs-human.md"
+printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n' >> "$T/inbox/needs-human.md"
 mkdir -p "$T/docs/adr"; printf '# ADR-001: Postgres-direct for new domains\n\n## Decision\n\nNew domains write to Postgres directly; the BI layer is read-only.\n' > "$T/docs/adr/ADR-001-postgres-direct.md"
 out="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
 grep -q 'Grace-lane reactivation' <<<"$out" && grep -q 'ADR-001' <<<"$out" && grep -q 'dry run' <<<"$out" && ok "extract finds the inbox ruling and the ADR, writes nothing" || fail "extract: $out"
@@ -388,6 +389,10 @@ grep -q 'Grace-lane reactivation' <<<"$out" && grep -q 'ADR-001' <<<"$out" && gr
 out="$(python3 "$P/scripts/rulings-extract.py" --root "$T" --apply)"
 grep -qE 'ENQUEUED ([2-9]|[1-9][0-9])/\1' <<<"$out" && ok "apply enqueues one upsert per ruling (all of them)" || fail "apply: $out"
 grep -q 'Grace-lane reactivation goes through a fresh checkout' <<<"$out" && ok "a RESOLVED heading's title survives its date's dashes" || fail "title: $out"
+dry="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
+grep -q 'Two SHALLs fire on undefined conditions' <<<"$dry" && ok "a struck-through heading with a trailing stamp is a ruling" || fail "struck: $dry"
+grep -q 'Spec v3 SHIPPED: PR open for review' <<<"$dry" && ok "a [superseded]-tagged heading is a ruling, tag and date stripped" || fail "tagged: $dry"
+grep -q 'Still open: the pricing anchor' <<<"$dry" && fail "an open heading was extracted as a ruling" || ok "an open heading is not a ruling"
 expect_rc 0 "drain the rulings" $MEM knowledge drain --root "$T"
 ls "$T"/knowledge/rulings/*.md | grep -q 'grace-lane' && ok "inbox ruling became a concept (no queue cited as source)" || fail "ruling concept missing"
 grep -q 'resource: docs/adr/ADR-001-postgres-direct.md' "$T"/knowledge/rulings/adr-001*.md && ok "ADR ruling cites the ADR file as its source" || fail "ADR source missing"

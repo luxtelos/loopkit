@@ -61,6 +61,25 @@ def classify(text: str) -> str:
     return "Decision"
 
 
+STAMP = re.compile(r"\b(RESOLVED|CLOSED|ANSWERED|SUPERSEDED|WITHDRAWN|DONE|COMPLETE|COMPLETED|MERGED|SHIPPED|LANDED)\b")
+
+
+def clean_title(heading: str) -> str:
+    """The finding's own title: strike-through, a leading [tag], the stamp word,
+    dates and the separators around them removed; the date keeps its dashes."""
+    t = heading.replace("~~", "")
+    t = re.sub(r"^\s*\[[^\]]+\]\s*", "", t)
+    # A stamp is a stamp only at the START ("RESOLVED 2026-… — title") or
+    # after a trailing separator ("title — RESOLVED 2026-…"); a stamp word
+    # inside the title ("Spec v3 SHIPPED: PR open") is part of the title.
+    t = re.sub(r"^\s*" + STAMP.pattern + r"\s*(\d{4}-\d{2}-\d{2})?(\s*\(EOD\))?\s*[:—–-]*\s*", "", t)
+    t = re.sub(r"\s*[—–-]\s*" + STAMP.pattern + r"\s*(\d{4}-\d{2}-\d{2})?\s*$", "", t)
+    t = re.sub(r"^\s*\d{4}-\d{2}-\d{2}(\s*\(EOD\))?\s*[:—–-]*\s*", "", t)
+    t = re.sub(r"^[\s:—–-]+|[\s:—–-]+$", "", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip() or heading.strip()
+
+
 def slug(text: str, limit: int = 48) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s[:limit].rstrip("-") or "ruling"
@@ -70,17 +89,20 @@ def extract(root: Path) -> list[dict]:
     out: list[dict] = []
     inbox = root / "inbox" / "needs-human.md"
     if inbox.exists():
+        # One recogniser of "closed", shared with the inbox bridge: a struck
+        # heading, a leading [tag], or an UPPERCASE stamp anywhere in it.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("i2t", Path(__file__).resolve().parent / "inbox_to_triage.py")
+        i2t = importlib.util.module_from_spec(spec); sys.modules["i2t"] = i2t; spec.loader.exec_module(i2t)
         text = inbox.read_text(encoding="utf-8")
         for m in re.finditer(r"^##\s+(.+?)\s*$", text, re.M):
             heading = m.group(1)
-            if not re.match(r"(?:RESOLVED|CLOSED|SUPERSEDED|ANSWERED|DONE)\b", heading):
+            if not i2t.is_closed(heading):
                 continue
             end = text.find("\n## ", m.end())
             body = text[m.end():end if end > 0 else len(text)].strip()
             date = re.search(r"\d{4}-\d{2}-\d{2}", heading)
-            title = re.sub(r"^(?:RESOLVED|CLOSED|SUPERSEDED|ANSWERED|DONE)\b", "", heading)
-            title = re.sub(r"^\s*\d{4}-\d{2}-\d{2}", "", title)
-            title = re.sub(r"^[\s:—–-]+", "", title).strip() or heading
+            title = clean_title(heading)
             out.append({"kind": "inbox", "title": title[:120], "date": date.group(0) if date else "", "type": classify(heading + " " + body[:600]),
                         "sources": [], "quote": body[:800], "origin": f"inbox/needs-human.md § {heading[:80]}"})
     for adr in sorted((root / "docs" / "adr").glob("*.md")) if (root / "docs" / "adr").is_dir() else []:
