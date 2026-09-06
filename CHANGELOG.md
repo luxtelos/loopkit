@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.2.1 — 2026-09-07
+
+A guard that was never guarding, found by review rather than by the suite.
+
+### Fixed
+
+- **`protect_governance` covered the edit tools and left the shell open.** The
+  hook matched the four editing tools while `cat > specs/foo.md`, `tee`,
+  `sed -i`, `cp`, `mv` and `rm` walked straight past it. Its sibling
+  `protect_tests` has carried shell coverage from the start, three lines away in
+  the same file. This is not hypothetical: the runtime specification that landed
+  in 0.2.0 was written through this gap. Bash is now matched, and every path a
+  writing command might touch is collected — redirect targets and every non-flag
+  token after the tools that write. Deliberately over-broad; a false block costs
+  one visible override, a miss is a silent write to ratified text. Reads pass
+  through. Pinned: eight write shapes blocked, five benign commands allowed, the
+  ratified override still open, and the matcher itself asserted from the wiring.
+  The first attempt scanned only the token after the tool and missed
+  `sed -i "" s/a/b/ specs/x.md`; that miss is in the pin set.
+- **The suite called a `section()` helper it never defined.** Three interpreter
+  errors printed on every run, on both platforms, since the day before. The
+  checks themselves ran and counted, so no verdict was ever wrong, but a helper
+  that had never been exercised anywhere shipped in 0.2.0. A run on Linux is
+  what made it visible.
+
+### Changed
+
+- The board carries the findings from the first external review of the runtime
+  specification, and two of that specification's four escalations were withdrawn
+  because the repository already answers them.
+
 ## 0.2.0 — 2026-09-07
 
 Consolidation release. Everything from the alpha line reaches `main` in one

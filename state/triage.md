@@ -27,5 +27,5 @@ read, and a hand edit breaks that.
 | M1 spec review FAIL: scoping field is fiction (scopes/scope/tags vs okf.py's lane\|scope\|domain prefix), fixture 05 message lacks required enqueued_at, criterion 1 run_start contradicts all four fixtures, fixture 04 events ambiguous, counts undefined | PR #8 review §spec-defects | high |  | new |
 | Model checker: EffectAtMostOnce is VACUOUS (deleting the convergence guard still passes; Commit's result==0 guard makes redelivery unreachable) and criterion 27's lease-guard claim is false | PR #8 review §vacuous-invariant | high |  | new |
 | Criterion 33 cites a prompt-bytes-per-tick ceiling that does not exist anywhere in the repo — an unpinned proxy presented as a check | PR #8 review §phantom-proxy | high |  | new |
-| protect_governance had no Bash matcher; shell writes into specs/ bypassed it entirely | PR #8 review §hook-gap | critical |  | pr-open |
-| selftest called an undefined section() helper; three 'command not found' lines per run on both platforms | linux-validation 2026-09-07 | low |  | pr-open |
+| protect_governance had no Bash matcher; shell writes into specs/ bypassed it entirely | PR #8 review §hook-gap | critical |  | done |
+| selftest called an undefined section() helper; three 'command not found' lines per run on both platforms | linux-validation 2026-09-07 | low |  | done |
