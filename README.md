@@ -32,6 +32,9 @@ that transfers.
 /plugin install loopkit@loopkit
 ```
 
+Where this is going: **[ROADMAP.md](ROADMAP.md)** — the milestones, the
+position they take, and the claim that would falsify them.
+
 First time? **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** walks
 through install (GitHub or a local folder), init, configuring the gate,
 seeding the test baseline, finding work and running the first tick — with
