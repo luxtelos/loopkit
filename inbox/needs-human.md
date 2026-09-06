@@ -92,3 +92,19 @@ and stops. What happens next is undecided.
   changes existing actor behaviour that is already tested and already exits 6 to
   signal it; mixes machine-generated envelope failures into a file written for
   humans to read, and a noisy Run could bury a real ruling request.
+## Two of the four M1 spec questions are already answered (2026-09-07)
+
+A review of the merged runtime specification found that only two of its four
+escalations need a human:
+
+- **Still yours:** whether budget exhaustion is resumable or terminal, and what
+  unit a budget counts (calls, tokens or seconds). Both are product choices with
+  no evidence in the repo either way.
+- **Answerable without you, and now closed:** whether `Store.list` returns a
+  total or an iterator is already settled normatively by the specification's own
+  criterion 30; the dead-letter destination is settled by its constraint that
+  existing behaviour is not redefined, and the existing behaviour escalates to
+  this file.
+
+An escalation that could have been answered from the repo is noise in your
+queue, so the two answerable ones were withdrawn rather than left standing.
