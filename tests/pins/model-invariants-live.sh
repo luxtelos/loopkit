@@ -26,6 +26,20 @@ ok()   { echo "  ok   $1"; }
 fail() { echo "  FAIL $1"; fails=$((fails+1)); }
 
 if ! command -v node >/dev/null 2>&1; then echo "  skip node not on PATH"; exit 0; fi
+
+# The ENGINES are a separate question from node. `driver.mjs doctor` probes each
+# engine's output, not just its path. Without them the driver cannot run and
+# every verdict below would be a guess — so skip, loudly, and say what was NOT
+# verified. Skipping quietly is the failure this repo names as "a gated suite is
+# not a passing suite": a suite that reports success by running nothing.
+# Install with plugins/loopkit/skills/run-state-model/install.sh; a CI runner
+# without them leaves the model invariants unproven THERE, which is why the
+# macOS run is the one that verifies them today.
+if ! ( cd "$REPO" && node "$DRIVER" doctor ) >/dev/null 2>&1; then
+  echo "  skip model checkers not installed — the runtime model's invariants are UNVERIFIED on this machine"
+  echo "       (install: bash plugins/loopkit/skills/run-state-model/install.sh)"
+  exit 0
+fi
 [ -f "$MODEL" ]  || { echo "  FAIL no model at $MODEL"; exit 1; }
 [ -f "$DRIVER" ] || { echo "  FAIL no driver at $DRIVER"; exit 1; }
 
