@@ -7,7 +7,7 @@
     "name": "Akul",
     "url": "https://github.com/codecakes"
   },
-  "repository": "https://github.com/codecakes/loopkit",
+  "repository": "https://github.com/luxtelos/loopkit",
   "license": "MIT",
   "keywords": ["loop", "harness", "hooks", "triage", "stop-gate", "tdd", "model-checking", "agentic"],
   "hooks": "./hooks/hooks.json"

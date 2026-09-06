@@ -28,9 +28,14 @@ that transfers.
 ## Install
 
 ```
-/plugin marketplace add codecakes/loopkit
+/plugin marketplace add luxtelos/loopkit
 /plugin install loopkit@loopkit
 ```
+
+First time? **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** walks
+through install (GitHub or a local folder), init, configuring the gate,
+seeding the test baseline, finding work and running the first tick — with
+what each step should print.
 
 Then, inside the project you want the loop to run in:
 
