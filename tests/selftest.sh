@@ -200,6 +200,130 @@ python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['SessionSta
 grep -q 'protect_tests.py' "$P/hooks/hooks.json" && ok "protect_tests wired" || fail "protect_tests not wired"
 [ -f "$T/.loopkit/test-globs.txt" ] && ok "init laid down .loopkit/test-globs.txt" || fail "test-globs.txt missing after init"
 
+# --- 0.2.0-b: memory adapters ------------------------------------------------
+echo "== memory: passive without memory.json"
+B="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-bare.XXXXXX")"
+( cd "$B" && git init -q . )
+out="$(CLAUDE_PROJECT_DIR="$B" python3 "$P/scripts/memory.py" status --line)"
+grep -q 'not configured' <<<"$out" && ok "memory.py: not configured without memory.json" || fail "memory passive: $out"
+printf '{"session_id":"rc-bare-%s","tool_name":"Write","tool_input":{"file_path":"%s/db/migrations/V1.sql","content":"CREATE UNIQUE INDEX one ON t(a);"}}' "$$" "$B" | CLAUDE_PROJECT_DIR="$B" python3 "$P/hooks/require_recall.py" gate >/dev/null 2>&1
+[ $? = 0 ] && ok "require_recall is passive without memory.json" || fail "require_recall must be passive without memory.json"
+find "$B" -delete
+
+echo "== memory: registry, adapters via PATH shims"
+[ -f "$T/.loopkit/memory.json" ] && ok "init laid down .loopkit/memory.json" || fail "memory.json missing after init"
+[ -f "$T/.loopkit/recall-triggers.txt" ] && ok "init laid down .loopkit/recall-triggers.txt" || fail "recall-triggers.txt missing"
+mkdir -p "$T/bin" "$T/.mempalace/palace"
+cat > "$T/bin/codebase-memory-mcp" <<'SHIM'
+#!/usr/bin/env bash
+# selftest shim: answers like the real CLI for the calls the adapter makes
+tool="$2"; [ "$1" = "cli" ] || exit 1
+case "$tool" in
+  list_projects) printf '{"projects":[{"name":"shim-project","root_path":"%s","nodes":42,"edges":7}]}\n' "$SHIM_ROOT" ;;
+  index_status)  printf '{"project":"shim-project","nodes":42,"edges":7,"status":"ready"}\n' ;;
+  search_graph)  printf '{"total":1,"results":[{"name":"decideThing","qualified_name":"shim.decideThing","file_path":"lib/x.ts","start_line":12}],"has_more":false}\n' ;;
+  trace_path)    printf '[{"name":"callerOfThing","file_path":"lib/y.ts","start_line":3}]\n' ;;
+  get_code_snippet) printf '{"code":"function decideThing() { return 1 }"}\n' ;;
+  detect_changes) printf '[{"name":"decideThing","file_path":"lib/x.ts"}]\n' ;;
+  *) echo '{"error":"unknown tool"}'; exit 1 ;;
+esac
+SHIM
+cat > "$T/bin/mempalace" <<'SHIM'
+#!/usr/bin/env bash
+# selftest shim for the mempalace CLI
+args=("$@"); verb=""
+for a in "${args[@]}"; do case "$a" in search|wake-up|mine|status) verb="$a"; break;; esac; done
+case "$verb" in
+  search)  echo "=== results ==="; echo "drawer: UNIQUE index on t(a) re-broke bug 1274 in June"; echo "drawer: one row per user is wrong: members hold one firm row plus one per client" ;;
+  wake-up) echo "L0: shim palace"; echo "L1: 2 drawers" ;;
+  status)  echo "MemPalace Status — 2 drawers" ;;
+  mine)    echo "mined 1 file" ;;
+  *) exit 1 ;;
+esac
+SHIM
+chmod +x "$T/bin/codebase-memory-mcp" "$T/bin/mempalace"
+export SHIM_ROOT="$T"
+SHIMPATH="$T/bin:$PATH"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" status --no-cache --root "$T")"
+grep -q 'graph=codebase-memory(42 nodes)' <<<"$out" && ok "graph adapter available through the shim (project matched by root_path)" || fail "graph status: $out"
+grep -q 'memory=mempalace(2 drawers)' <<<"$out" && ok "memory adapter available through the shim" || fail "memory status: $out"
+grep -q 'knowledge=DEGRADED(disabled' <<<"$out" && ok "knowledge reports disabled, not broken" || fail "knowledge status: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" recall "unique index" --root "$T")"
+grep -q '^ADAPTER: memory=mempalace \[available\]' <<<"$out" && grep -q 're-broke bug 1274' <<<"$out" && ok "recall returns the palace's facts with the banner" || fail "recall: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" graph find decideThing --root "$T")"
+grep -q 'lib/x.ts:12  shim.decideThing' <<<"$out" && ok "graph find goes through the CLI" || fail "graph find: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" graph callers decideThing --root "$T")"
+grep -q 'callerOfThing' <<<"$out" && ok "graph callers goes through trace_path" || fail "graph callers: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" graph snippet shim.decideThing --root "$T")"
+grep -q 'function decideThing' <<<"$out" && ok "graph snippet" || fail "graph snippet: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" remember --title "period end is null on free to paid" --body "observed on 4 Sep; control case: paid firms unaffected" --tags billing,trap --root "$T")"
+note="$(sed -n 's/^REMEMBERED: //p' <<<"$out")"
+[ -n "$note" ] && [ -f "$T/$note" ] && grep -q '^valid_from:' "$T/$note" && grep -q 'tags: \[billing, trap\]' "$T/$note" && ok "remember writes a dated note ($note)" || fail "remember: $out"
+nid="$(basename "$note" .md)"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" invalidate "$nid" --reason "fixed by the activation snapshot" --root "$T")"
+grep -q "^valid_until:" "$T/$note" && grep -q 'INVALIDATED' "$T/$note" && ok "invalidate adds valid_until and keeps the note" || fail "invalidate: $out"
+out="$(python3 "$P/scripts/memory.py" recall "period end null" --no-cache --root "$T" 2>/dev/null || python3 "$P/scripts/memory.py" recall "period end null" --root "$T")"
+grep -q 'DEGRADED' <<<"$out" && grep -q 'invalidated' <<<"$out" && grep -q 'period end is null' <<<"$out" && ok "files fallback recalls the note (title, invalidation shown) when the palace is absent" || fail "files fallback: $out"
+out="$(PATH="$SHIMPATH" python3 "$P/scripts/memory.py" --format concise graph find decideThing --root "$T")"
+grep -q '^ADAPTER' <<<"$out" && ok "concise output carries the banner" || fail "concise banner"
+out="$(bash "$P/hooks/session_start.sh")"
+grep -q '^MEMORY:' <<<"$out" && ok "session start prints the MEMORY line when memory.json exists" || fail "session MEMORY line: $out"
+
+echo "== require_recall: gate, mark, outage escape"
+RSID="rc-$$-$RANDOM"
+rq() {  # <want> <label> <json>  (gate mode)
+  local want="$1" label="$2" json="$3"
+  printf '%s' "$json" | python3 "$P/hooks/require_recall.py" gate >/dev/null 2>&1; local got=$?
+  [ "$got" = "$want" ] && ok "$label (rc=$got)" || fail "$label (rc=$got, want $want)"
+}
+rq 2 "migration write blocked before recall" '{"session_id":"'"$RSID"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/db/migrations/V2.sql","content":"ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);"}}'
+rq 2 "invariant SQL in a code file blocked before recall" '{"session_id":"'"$RSID"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/lib/schema.ts","content":"sql`CREATE UNIQUE INDEX ux ON t(a)`"}}'
+rq 0 "prose about an invariant is not an invariant" '{"session_id":"'"$RSID"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/docs/notes.md","content":"we discussed the UNIQUE INDEX on t(a)"}}'
+rq 0 "ordinary code write passes" '{"session_id":"'"$RSID"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/lib/a.ts","content":"export const x = 1"}}'
+rq 2 "shell redirect into a migrations dir blocked" '{"session_id":"'"$RSID"'","tool_name":"Bash","tool_input":{"command":"cat > db/migrations/V3.sql <<EOF\nselect 1;\nEOF"}}'
+rq 0 "shell redirect elsewhere passes" '{"session_id":"'"$RSID"'","tool_name":"Bash","tool_input":{"command":"echo hi > notes.txt"}}'
+# No `\"` inside a printf FORMAT: bash printf rewrites it to `"`, which made this
+# JSON invalid and the hook (correctly) ignored it — the pin failed on its own quoting.
+printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"python3 %s/scripts/memory.py recall unique-index-t-a"}}' "$RSID" "$P" | python3 "$P/hooks/require_recall.py" mark
+rq 0 "after a memory.py recall the migration write is allowed" '{"session_id":"'"$RSID"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/db/migrations/V2.sql","content":"ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0);"}}'
+RSID2="rc2-$$-$RANDOM"
+printf '{"session_id":"%s","tool_name":"mcp__mempalace__mempalace_search","tool_input":{"query":"t"}}' "$RSID2" | python3 "$P/hooks/require_recall.py" mark
+rq 0 "an MCP recall tool also opens the gate" '{"session_id":"'"$RSID2"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/db/migrations/V4.sql","content":"CREATE UNIQUE INDEX u ON t(b);"}}'
+RSID3="rc3-$$-$RANDOM"
+printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"ls -la"}}' "$RSID3" | python3 "$P/hooks/require_recall.py" mark
+rq 2 "an unrelated Bash call does not count as recall" '{"session_id":"'"$RSID3"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/lib/schema.ts","content":"sql`CREATE UNIQUE INDEX ux ON t(a)`"}}'
+key3="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$RSID3")"
+printf 'both memory CLIs time out since 14:10' > "${TMPDIR:-/tmp}/loopkit-recall-$key3/recall-unavailable"
+rq 0 "documented outage unblocks a content-rule write" '{"session_id":"'"$RSID3"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/lib/schema.ts","content":"sql`CREATE UNIQUE INDEX ux ON t(a)`"}}'
+rq 2 "documented outage never unblocks a real migration write" '{"session_id":"'"$RSID3"'","tool_name":"Write","tool_input":{"file_path":"'"$T"'/db/migrations/V5.sql","content":"select 1;"}}'
+printf '{nope' | python3 "$P/hooks/require_recall.py" gate >/dev/null 2>&1; [ $? = 0 ] && ok "require_recall: junk input allows" || fail "require_recall must fail open"
+
+echo "== governance guards the knowledge bundle when enabled"
+python3 - "$T" <<'PYX'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1]) / ".loopkit" / "memory.json"
+d = json.loads(p.read_text()); d["knowledge"]["enabled"] = True; p.write_text(json.dumps(d))
+PYX
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "knowledge/ is guarded when enabled" || fail "knowledge guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | KNOWLEDGE_EDIT_OK=1 python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 0 ] && ok "KNOWLEDGE_EDIT_OK=1 is the door" || fail "knowledge override"
+python3 - "$T" <<'PYX'
+import json, sys, pathlib
+p = pathlib.Path(sys.argv[1]) / ".loopkit" / "memory.json"
+d = json.loads(p.read_text()); d["knowledge"]["enabled"] = False; p.write_text(json.dumps(d))
+PYX
+
+echo "== run-capped and the offload nudge"
+out="$(cd "$T" && bash "$P/scripts/run-capped.sh" --head 3 --tail 2 -- seq 1 100)"
+grep -q 'lines omitted' <<<"$out" && grep -q 'run-capped: exit 0, 100 lines' <<<"$out" && ok "run-capped keeps head+tail and writes the file" || fail "run-capped: $out"
+( cd "$T" && bash "$P/scripts/run-capped.sh" -- false >/dev/null ); [ $? = 1 ] && ok "run-capped propagates the exit code" || fail "run-capped exit code"
+big="$(python3 -c 'print("x"*9000)')"
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"cat big.log"},"tool_response":"%s"}' "$big" | python3 "$P/hooks/offload_nudge.py" 2>&1 >/dev/null)"
+grep -q 'run-capped.sh' <<<"$err" && ok "offload nudge fires past 8 KB" || fail "offload nudge: $err"
+grep -q 'large_tool_output' "$T/.loopkit/metrics.jsonl" && ok "offload event counted in metrics.jsonl" || fail "metrics.jsonl"
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"ls"},"tool_response":"small"}' | python3 "$P/hooks/offload_nudge.py" 2>&1 >/dev/null)"
+[ -z "$err" ] && ok "offload nudge silent on small output" || fail "nudge on small output: $err"
+for ev in require_recall.py offload_nudge.py; do grep -q "$ev" "$P/hooks/hooks.json" && ok "hooks.json wires $ev" || fail "hooks.json lacks $ev"; done
+
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.

@@ -73,6 +73,20 @@ def project_patterns() -> list[tuple[re.Pattern[str], str]]:
     return out
 
 
+def registry_patterns() -> list[tuple[re.Pattern[str], str]]:
+    """Paths the memory registry asks to guard (the knowledge bundle, when
+    enabled): every write goes through the mailbox, never a hand edit."""
+    if os.getenv("KNOWLEDGE_EDIT_OK") == "1":
+        return []
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from loopkit_memory import load
+        return [(re.compile(p), "knowledge bundle is written through `memory.py knowledge enqueue`, never by hand (KNOWLEDGE_EDIT_OK=1 to override)")
+                for p in load(project_root()).guard_patterns()]
+    except Exception:
+        return []
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -90,7 +104,7 @@ def main() -> int:
         return 0
     path = os.path.normpath(os.path.abspath(raw)).replace(os.sep, "/")
 
-    for pattern, why in PROTECTED + project_patterns():
+    for pattern, why in PROTECTED + project_patterns() + registry_patterns():
         if pattern.search(path):
             if os.getenv("GOVERNANCE_EDIT_OK") == "1":
                 print(
