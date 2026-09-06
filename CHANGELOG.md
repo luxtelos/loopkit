@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.2.0 — 2026-09-07
+
+Consolidation release. Everything from the alpha line reaches `main` in one
+piece, plus the knowledge layer's fixes and the first two 0.3 items.
+
+### The audit that produced this release
+
+Six pull requests reported as merged, but four of them merged into an
+intermediate branch of the stack rather than into `main`. `main` sat at
+`0.2.0-alpha.2` while the knowledge layer, the commerce profile, the fan-out
+runner, the judge and the Bash offload existed only on branches. A merged pull
+request is not a landed change; only `git merge-base --is-ancestor` says so.
+This release is the union, gated as a whole.
+
+### Added
+
+- **Memory adapters** — a registry over a code graph, a memory palace and plain
+  files, each degrading to a named fallback with the exact command to fix it.
+  One CLI, concise output by default.
+- **The knowledge layer** — typed concepts with a mailbox, a rulings extractor
+  over the inbox and the decision records, a coverage compiler that asks which
+  invariant is actually enforced by something, a ticks ledger and its metrics.
+- **Commerce profile** — block patterns, protected paths, recall triggers, an
+  EARS constitution and an end-state snapshot check.
+- **Fan-out** — briefs to parallel runs in their own worktrees.
+- **`judge.py`** — the pairwise, position-swapped judge as a script: two calls
+  per criterion with the positions swapped, disagreement is a tie at half
+  confidence, and the judge may never be the generator.
+- **`offload_rewrite`** — a noisy Bash command is rewritten before it runs so
+  its output lands in a file and only a cap reaches the window.
+- **The plugin runs its own loop** — a queue, an inbox, the contracts, a
+  tracked gate config, and Linux continuous integration.
+- **`ROADMAP.md`**, `docs/loop-ladder.md`, `docs/ADOPTION.md`, and the runtime
+  plan under `docs/research/`.
+- **`tools/release.sh`** — a version, a tag, a release, notes from this file.
+
+### Fixed
+
+- The leak grep skipped directories only, so in a worktree the `.git` pointer
+  file failed every run.
+- An unquoted multi-word value in a sourced gate config ran its second word as
+  a command.
+- A default containing a brace closed its own parameter expansion.
+- The Bash offload dropped every input field except the command, because the
+  hook returned a partial input object where the reference says the returned
+  object replaces the whole one.
+- A citation pin that could not fail, twice: the quoted text is now vendored
+  with the source digest and diffed byte for byte against the header.
+
 ## Unreleased
 
 - `hooks/offload_rewrite.py` — PreToolUse on Bash returns
