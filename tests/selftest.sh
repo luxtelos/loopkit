@@ -515,10 +515,25 @@ kept="$(python3 -c 'import json,sys; u=json.load(sys.stdin)["hookSpecificOutput"
 [ "$kept" = "command,description,run_in_background,timeout" ] && ok "updatedInput carries every input field, not just command" || fail "updatedInput dropped fields, kept: $kept"
 bg="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["run_in_background"])' <<<"$full")"
 [ "$bg" = "True" ] && ok "an unchanged field keeps its value through the rewrite" || fail "run_in_background became $bg"
-# the doc sentence the header quotes must actually be in the header (no paraphrase drift)
-grep -q 'replaces the entire input object' "$P/hooks/offload_rewrite.py" && ok "the header quotes the replace-entire-object rule" || fail "header lost the replace-entire-object citation"
+# The header QUOTES the hooks reference. A grep for a phrase inside the same file
+# can never fail — it passed twice on sentences that are not in the document at
+# all. So diff the header's CITE block against the vendored excerpt, which is
+# rewritten only by scripts/refresh-hooks-citation.sh from the fetched doc.
+cite_hook="$(python3 -c '
+import sys,pathlib
+t=pathlib.Path(sys.argv[1]).read_text()
+b=t.split("CITE-BEGIN\n",1)[1].split("CITE-END",1)[0]
+print("\n".join(l.strip() for l in b.splitlines() if l.strip()))' "$P/hooks/offload_rewrite.py")"
+cite_doc="$(python3 -c '
+import sys,pathlib
+t=pathlib.Path(sys.argv[1]).read_text()
+b=t.split("## QUOTE-BEGIN\n",1)[1].split("## QUOTE-END",1)[0]
+print("\n".join(l.strip() for l in b.splitlines() if l.strip()))' "$P/vendor/hooks-doc-excerpt.md")"
+[ -n "$cite_hook" ] && [ "$cite_hook" = "$cite_doc" ] && ok "the header's quote is byte-identical to the vendored doc excerpt" || fail "header quote differs from vendor/hooks-doc-excerpt.md"
+grep -q 'Replaces the entire input object' "$P/vendor/hooks-doc-excerpt.md" && ok "the vendored excerpt carries the replace-entire-object rule the hook relies on" || fail "vendored excerpt lost the rule"
+grep -qE '^SHA-256 of the whole document at fetch time: [0-9a-f]{64}$' "$P/vendor/hooks-doc-excerpt.md" && ok "the excerpt records the source digest" || fail "excerpt has no source digest"
+grep -q 'refresh-hooks-citation.sh' "$P/vendor/hooks-doc-excerpt.md" && [ -x "$P/scripts/refresh-hooks-citation.sh" ] && ok "the excerpt names an executable refresh path" || fail "no refresh path for the excerpt"
 # --shell is explicit: arity must never decide
-argv_out="$(cd "$O" && bash "$P/scripts/run-capped.sh" -- "$P/../../tests/selftest.sh" --nonexistent-flag 2>&1 | tail -1 || true)"
 mkdir -p "$O/dir with space"; printf '#!/bin/sh\necho one-word-argv\n' > "$O/dir with space/prog"; chmod +x "$O/dir with space/prog"
 one="$(cd "$O" && bash "$P/scripts/run-capped.sh" -- "$O/dir with space/prog" 2>&1)"
 grep -q 'one-word-argv' <<<"$one" && ok "a one-word argv with a space runs as a program, not a shell string" || fail "one-word argv broke: $one"

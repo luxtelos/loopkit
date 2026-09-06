@@ -11,25 +11,29 @@ command's shape. So: when the command matches a line of
 and the full output lands in `.loopkit/scratch/` with only head+tail in the
 window. Passive when the file is absent or holds only blank and `#` lines.
 
-Mechanism — Claude Code hooks reference, https://code.claude.com/docs/en/hooks
-(re-read 2026-09-07; the earlier header paraphrased this and lost the third
-sentence, which is the one that matters):
-  "For `PreToolUse`, `PostToolUse`, and `PostToolUseFailure`, the
-   `updatedInput` field lets your hook modify the tool input before Claude
-   Code executes or has executed the tool."
-  "The object you return replaces the entire input object, so you must include
-   every field that the tool requires, even if your hook doesn't change them."
-  "Unchanged fields must be included in full (for example, an object field
-   must include all its properties)."
-So this hook echoes the WHOLE `tool_input` back with only `command` replaced.
-Emitting `{"command": ...}` alone silently dropped `run_in_background`,
-`timeout` and `description` from every rewritten call — found in review of
-PR #7, and pinned in tests/selftest.sh so it cannot come back.
-`permissionDecision` is deliberately NOT emitted: "allow" would skip the user's
-permission prompt for the rewritten command, and this hook has no business
-deciding permissions. The doc lists the two as independent decision fields and
-does not show `updatedInput` alone, so that remains the one live-semantics
-claim a reviewer should confirm in a real session.
+Mechanism — Claude Code hooks reference, https://code.claude.com/docs/en/hooks.md
+Quoted VERBATIM below, and byte-checked by tests/selftest.sh against
+vendor/hooks-doc-excerpt.md, which records the document digest and the date it
+was fetched. Two earlier versions of this header quoted sentences that are not
+in the document — a summarising fetch's paraphrase pasted as if it were the
+source, twice. Hence the check: a quote nothing compares is not a citation.
+CITE-BEGIN
+  `PreToolUse`: `updatedInput` directly under `hookSpecificOutput` replaces a tool's arguments before it runs. See [PreToolUse decision control](#pretooluse-decision-control)
+  Modifies the tool's input parameters before execution. Replaces the entire input object, so include unchanged fields alongside modified ones. Claude Code evaluates permission rules and a Bash command's [auto-background eligibility](/docs/en/tools-reference#background-commands) against the input your hook returns, not the input Claude sent. Combine with `"allow"` to auto-approve, or `"ask"` to show the modified input to the user. For `"defer"`, ignored
+CITE-END
+Three consequences, in the order they bite:
+1. "Replaces the entire input object" is why this hook echoes the whole
+   `tool_input` back with only `command` changed. Emitting {"command": ...}
+   alone silently dropped run_in_background, timeout and description from every
+   rewritten call.
+2. Permission rules are evaluated against the input the HOOK returns, so
+   emitting `updatedInput` without `permissionDecision` prompts on the
+   rewritten command and skips nothing. That is the intended behaviour here;
+   `"allow"` would suppress the user's prompt and this hook has no business
+   deciding permissions.
+3. Auto-background eligibility is judged on the returned input too, so a
+   wrapped command is judged as the wrapper — a reason to keep the wrapper
+   thin rather than to avoid it.
 
 Fail-open everywhere: any error → exit 0 with no stdout, the command runs as
 typed. Unchanged when the command is empty, already wrapped, holds a heredoc
