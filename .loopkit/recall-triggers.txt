@@ -1,0 +1,9 @@
+# .loopkit/recall-triggers.txt — which writes require_recall.py gates until
+# memory has been consulted this session. One rule per line:
+#   path:    <regex over the file path>            (always in scope, no outage escape)
+#   content: <regex over the written text>         (code-like files only; prose exempt)
+#   bash:    <regex over a Bash command>           (the same act by another door)
+# Delete this file to use the built-in defaults, which are the three below.
+path: (^|/)(db/)?migrations/.*\.sql$
+content: \b(UNIQUE\s+INDEX|UNIQUE\s*\(|PRIMARY\s+KEY|CONSTRAINT\s+("[^"\n]+"|\w+)[^\n]{0,80}?CHECK\s*\(|EXCLUDE\s+USING|ADD\s+CONSTRAINT)\b
+bash: (>>?\s*[^\n;|&]*migrations/[^\n;|&]*\.sql|(?:^|[;|&]\s*|\$\(\s*)(?:tee\s+(?:-a\s+)?|(?:cp|mv|install)\s+)[^\n;|&]*migrations/[^\n;|&]*\.sql)
