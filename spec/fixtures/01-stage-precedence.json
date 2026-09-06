@@ -1,7 +1,14 @@
 {
   "name": "01-stage-precedence",
-  "description": "Rows at every work stage at once. Precedence is fixing > spec-ready > spec-draft > new > discover, so the served Stage is `fixing` even though `new` rows are older in file order. `pr-open` is counted and reported as a cheap poll but is never served as a Stage; `blocked` is counted and is neither.",
+  "description": "Rows at every work stage at once. Precedence is fixing > spec-ready > spec-draft > new > discover, so the served Stage is `fixing` even though `new` rows are older in file order. `pr-open` is counted and reported as a cheap poll but is never served as a Stage; `blocked` is counted and is neither. The journal is empty, so this is a fresh Run: `run_start` is the first Event appended (criterion 1), before the `stage` Event and before any Provider call.",
   "input": {
+    "run": {
+      "run_id": "run-0101",
+      "store_uri": "file://state/loopkit",
+      "provider": "stub",
+      "policy_path": "knowledge/",
+      "lane": ""
+    },
     "queue": [
       { "finding": "oldest umbrella ticket", "source": "gh#101", "priority": "low", "spec": "", "status": "new" },
       { "finding": "parser drops piped cells", "source": "gh#102", "priority": "high", "spec": "specs/parser.md", "status": "spec-draft" },
@@ -18,7 +25,10 @@
     "next": "CONTINUE",
     "counts": { "pr-open": 1, "fixing": 1, "spec-ready": 1, "spec-draft": 1, "new": 1, "blocked": 1 },
     "targets": [ { "stage": "fixing", "finding": "judge runner", "source": "gh#104" } ],
-    "events": [ { "event": "stage", "stage": "fixing", "scope": "" } ],
+    "events": [
+      { "event": "run_start", "run_id": "run-0101", "store_uri": "file://state/loopkit", "provider": "stub", "policy_path": "knowledge/" },
+      { "event": "stage", "stage": "fixing", "scope": "" }
+    ],
     "messages": []
   }
 }

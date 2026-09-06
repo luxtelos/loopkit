@@ -1,7 +1,14 @@
 {
   "name": "02-blocked-only",
-  "description": "Every row waits on a human ruling. A blocked row is counted and shown, never polled and never served as a Stage — so the Stage is `discover`, and because something outside the loop must move first the decision is WAIT, not IDLE. Distinguishing these two is the whole point: IDLE means run discovery now, WAIT means schedule a wakeup.",
+  "description": "Every row waits on a human ruling. A blocked row is counted and shown, never polled and never served as a Stage — so the Stage is `discover`, and because something outside the loop must move first the decision is WAIT, not IDLE. Distinguishing these two is the whole point: IDLE means run discovery now, WAIT means schedule a wakeup. Fresh Run, so `run_start` precedes the `stage` Event.",
   "input": {
+    "run": {
+      "run_id": "run-0102",
+      "store_uri": "file://state/loopkit",
+      "provider": "stub",
+      "policy_path": "knowledge/",
+      "lane": ""
+    },
     "queue": [
       { "finding": "pricing tier rename", "source": "gh#106", "priority": "high", "spec": "", "status": "blocked" },
       { "finding": "retention window for audit logs", "source": "gh#107", "priority": "critical", "spec": "", "status": "blocked" }
@@ -14,7 +21,10 @@
     "next": "WAIT",
     "counts": { "pr-open": 0, "fixing": 0, "spec-ready": 0, "spec-draft": 0, "new": 0, "blocked": 2 },
     "targets": [],
-    "events": [ { "event": "stage", "stage": "discover", "scope": "" } ],
+    "events": [
+      { "event": "run_start", "run_id": "run-0102", "store_uri": "file://state/loopkit", "provider": "stub", "policy_path": "knowledge/" },
+      { "event": "stage", "stage": "discover", "scope": "" }
+    ],
     "messages": []
   }
 }

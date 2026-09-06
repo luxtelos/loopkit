@@ -16,10 +16,11 @@ executable form of the criteria below.
 | --- | --- | --- |
 | **Run** | One supervisor invocation: a brief, a budget, a Store, a Provider, a Policy bundle. Identified by `run_id`. | new in M2 |
 | **Queue** | The ordered set of work rows. Columns are exactly `finding, source, priority, spec, status` (`triage_state.COLUMNS`); identity is `source`; `status` is one of `triage_state.VALID_STATUSES` — `new, spec-draft, spec-ready, fixing, pr-open, blocked, inbox, done`. | `triage_state.py` over `state/triage.md` |
-| **Stage** | The single stage a tick advances, a pure lookup over Queue counts. One of `fixing, spec-ready, spec-draft, new, discover`. Paired with a Next of `CONTINUE, WAIT, IDLE`. | precedence in `loop-next.sh`, counts in `loop_next_pick.py` |
-| **Event** | One append-only journal line: `at` (RFC3339 UTC, second precision), `event` (the kind), then flat key/value fields. | `ticks.py` over `state/ticks.jsonl` |
-| **Policy** | An OKF bundle of Concepts. A Concept is `path` (bundle-absolute, leading `/`, trailing `.md`), `frontmatter`, `body`; `status` ∈ `draft, stable, deprecated`; trust tier is derived from `verified` as `unverified → machine-confirmed → human-reviewed`. | `okf_bundle.py` (`Concept`, `VALID_STATUS`, `trust_tier`, `CANONICAL_KEY_ORDER`, `ACTOR_RE`) |
-| **Message** | The only way knowledge is written back: an OKF mailbox message with `type: okf.message`, `schema: okf-mailbox/1`, `msg_id`, `op`, `enqueued_at`, `enqueued_by`, `idempotency_key`, `reason`, `priority`, and `target` or `payload`. Ops are `upsert, deprecate, verify, link, stale, delete`. | `knowledge_actor.py` (`Message`, `VALID_OPS`, `validate_message`) |
+| **Stage** | The single stage a tick advances, a pure lookup over Counts. One of `fixing, spec-ready, spec-draft, new, discover`. Paired with a Next of `CONTINUE, WAIT, IDLE`. | precedence in `loop-next.sh`, counts in `loop_next_pick.py` |
+| **Counts** | The per-status tally the Stage lookup reads: a mapping from each of `pr-open, fixing, spec-ready, spec-draft, new, blocked` to the number of Queue rows at that status, after deduplication by `source`. All six keys are ALWAYS present, `0` when no row holds one. This is the runtime's structured form; `loop_next_pick.py`'s tab-separated stdout is the same tally rendered for bash, where a zero `blocked` line is omitted — a rendering detail of that transport, not a difference in the tally. | `loop_next_pick.WANT` plus its `blocked` line |
+| **Event** | One append-only journal line: `at` (RFC3339 UTC, second precision), `event` (the kind), then flat key/value fields. The kinds this runtime appends, and the fields each carries, are fixed by §Journal semantics: `run_start`, `stage`, `intent`, `result`. | `ticks.py` over `state/ticks.jsonl` |
+| **Policy** | An OKF bundle of Concepts. A Concept is `path` (bundle-absolute, leading `/`, trailing `.md`), `frontmatter`, `body`; `status` ∈ `draft, stable, deprecated`; trust tier is derived from `verified` as `unverified → machine-confirmed → human-reviewed`. Lane membership is `frontmatter.tags`, matched by the rule in §Policy scoping — there is no `scopes` field on a Concept and there never was. | `okf_bundle.py` (`Concept`, `VALID_STATUS`, `trust_tier`, `CANONICAL_KEY_ORDER`, `ACTOR_RE`) |
+| **Message** | The only way knowledge is written back: an OKF mailbox message. REQUIRED, exactly the set `validate_message` enforces: `type: okf.message`, `schema: okf-mailbox/1`, `msg_id`, `op`, `enqueued_at`, `enqueued_by`, `idempotency_key`, `reason`, plus `target` for the ops that take one. OPTIONAL: `priority`, `payload`. A Message missing any required field is refused and dead-lettered (criterion 18), so `enqueued_at` is load-bearing rather than decorative — this row listed it beside the optional `priority` until 2026-09-07, and fixture 05 duly omitted it. Ops are `upsert, deprecate, verify, link, stale, delete`. | `knowledge_actor.py` (`Message`, `VALID_OPS`, `validate_message`) |
 | **Projection** | A named JSON Schema over Concepts, plus the JSON the runtime emits for it. | new in M4 |
 | **Provider** | Anything implementing `complete(messages, tools, response_schema) → {text, tool_calls, usage}`. | new in M2 |
 | **Store** | Anything implementing `put_if_absent / get / append / list`, with a conditional write. | new in M2 |
@@ -27,7 +28,8 @@ executable form of the criteria below.
 ## Scope
 
 **In:** the Run lifecycle; Queue identity and the Stage/Next lookup; the
-journal-before-act contract and replay; the Policy scoping rule and the draft
+journal semantics; the journal-before-act contract and replay; the Policy
+scoping rule and the draft
 trust gate; the Message write-back path; the Provider and Store contracts; the
 Projection emit rule; the budget; and `spec/fixtures/*.json` as the executable
 form of all of it.
@@ -51,6 +53,15 @@ stream, and a vector store (non-goals in the plan).
   spec describes it generalised; a criterion that would change the current
   output of `triage_state.py`, `ticks.py`, `loop_next_pick.py`, `okf_bundle.py`
   or `knowledge_actor.py` is a bug in this spec, not a requirement.
+- **A cited check must be able to fail.** Every `[today]` check below names a
+  command that runs now AND asserts the thing it names. Two did not until
+  2026-09-07: criterion 12 cited a model assertion that survived deletion of
+  the guard it was said to protect, and criterion 27 described a counterexample
+  that did not occur. `bash tests/pins/model-invariants-live.sh` now mutates
+  every assertion and requires the checker to FAIL, and
+  `python3 tests/pins/fixture-derivable.py` recomputes every fixture from the
+  rules stated here. A criterion may cite an assertion only while that pin
+  proves it live.
 - **Symbols, not line numbers.** This spec cites code by symbol name. It sits
   outside the `scanned` list in `.loopkit/citations.json`, so
   `check-citations.py` would not catch a rotted `file:line` here — an
@@ -58,6 +69,77 @@ stream, and a vector store (non-goals in the plan).
 - **Precondition for `spec-ready`:** criteria 20 and 21 below are marked
   UNRESOLVED and go to the owner. This spec is not implementable until both are
   ruled on; a Run's identity and its budget behaviour cannot be inferred.
+
+## Journal semantics
+
+The journal is append-only. These are the Events the runtime appends and the
+fields each carries; nothing else is journaled, and a field named here is
+required.
+
+| Event | When | Fields beyond `at` and `event` |
+| --- | --- | --- |
+| `run_start` | once per Run, as its first appended Event | `run_id`, `store_uri`, `provider`, `policy_path` |
+| `stage` | once per tick, after `run_start` | `stage`, `scope` |
+| `intent` | before a side effect | `run_id`, `step`, `idempotency_key` |
+| `result` | after a side effect | `run_id`, `step`, `idempotency_key`, `status` |
+
+`scope` on a `stage` Event is the Run's lane, and the empty string when the Run
+is unscoped. It is not derived from the Queue or the Policy; it is an input,
+carried in a fixture's `input.run.lane`.
+
+Four rules decide what a fixture's `expected.events` contains. They are stated
+here because without them fixture 04 admitted three different answers, and an
+implementer in another language could not compute any of them from prose.
+
+**J1 — delta, not journal.** `expected.events` is what the run APPENDS to
+`input.journal`, in order, and nothing else. The final journal is
+`input.journal ++ expected.events`. A delta isolates the run's own behaviour;
+a full journal would restate the input in every fixture and hide which line the
+run was responsible for.
+
+**J2 — `run_start` exactly once per Run.** A Run whose journal carries no
+`run_start` is fresh and appends one as its first Event. A Run whose journal
+carries one is a resume and appends none. It is the PRESENCE of `run_start`,
+not the emptiness of the journal, that makes a Run a resume.
+
+**J3 — a re-executed step does NOT re-journal its `intent`.** Criterion 10
+requires an `intent` on disk before the effect. A step being re-executed on
+resume already has one, for the same `(run_id, step, idempotency_key)`, so the
+requirement is already met and a second `intent` would record an act that never
+went unrecorded. The model states the same thing as a guard: `JournalIntent`
+fires only when no intent is journaled.
+
+**J4 — a resume is not a no-op.** It appends a `stage` Event, and the `result`
+of every step it completes. So a Run's journal is NOT byte-identical across two
+runs, and this spec does not claim it is. That claim stood in criterion 2 until
+2026-09-07 and contradicted fixture 04's own expected output; the invariant
+that does hold is J2.
+
+## Policy scoping
+
+Lane membership lives in a Concept's `frontmatter.tags`. There is no `scopes`
+key on a Concept. The plan said `scopes`, criterion 14 said `scope`, and
+fixture 05 encoded bare tags matching neither — three names for a field the
+code does not have, and a fixture that matched no lane under the one matcher
+the repo owns. The name is `tags`, because that is what
+`okf_bundle.CANONICAL_KEY_ORDER` carries and what `okf.py` matches.
+
+**S1 — in lane.** A Concept is IN LANE `<lane>` when any of its tags,
+lowercased, is `lane/<lane>`, `scope/<lane>` or `domain/<lane>`, or ends with
+`/<lane>`. A bare tag does NOT match: `reviewer` is not in the `reviewer` lane,
+`lane/reviewer` is. This is exactly the rule `okf.py`'s `search` already
+implements, restated here so an implementer holding only this spec can apply
+it.
+
+**S2 — unscoped.** A Run whose lane is `""` treats every Concept as in lane.
+S3 still applies.
+
+**S3 — enforceable.** A Concept is ENFORCEABLE for a lane when it is in lane
+AND its `status` is `stable`. `draft` is excluded by criteria 15 and 16
+whatever its tags; `deprecated` is not enforceable either. "Enforceable" and
+"in lane" are different questions, and fixture 05 tags its draft Concept into
+the lane on purpose so that the draft gate, not the lane filter, is the reason
+it is excluded.
 
 ## Acceptance (EARS)
 
@@ -69,13 +151,20 @@ that is stated rather than hidden.
 ### Run lifecycle and identity
 
 1. WHEN a Run is started, the runtime SHALL record a `run_start` Event carrying
-   `run_id`, the Store URI, the Provider name and the Policy bundle path, before
-   any Provider call. Check `[M2]`: `python3 -m loopkit_core.conformance --fixtures spec/fixtures`
-   asserts the first journal line of a fresh Run.
-2. WHEN a Run is started with a `run_id` that already has a `run_start` Event in
-   the journal, the runtime SHALL resume that Run and SHALL NOT append a second
-   `run_start`. Check `[M2]`: `spec/fixtures/04-replay-journaled-step.json` run
-   twice; the journal is byte-identical after the second run.
+   `run_id`, `store_uri`, `provider` and `policy_path` (§Journal semantics), as
+   the first Event it appends and before any Provider call. Check `[today]`:
+   `python3 tests/pins/fixture-derivable.py` — fixtures 01, 02, 03 and 05 are
+   fresh Runs and each expects `run_start` first, recomputed from rule J2.
+   Check `[M2]`: `python3 -m loopkit_core.conformance --fixtures spec/fixtures`.
+2. WHEN a Run is started with a `run_id` whose journal already carries a
+   `run_start` Event, the runtime SHALL resume that Run and SHALL NOT append a
+   second `run_start`; the journal SHALL carry exactly one for the Run's life.
+   A resume is NOT a no-op and the journal is NOT byte-identical across two
+   runs — see rule J4, which replaced that claim on 2026-09-07 because it
+   contradicted fixture 04's own expected output. Check `[today]`:
+   `python3 tests/pins/fixture-derivable.py` — fixture 04's input journal
+   carries a `run_start` and its expected delta has none, while every
+   fresh-Run fixture's delta begins with one.
 3. WHEN two Runs are started concurrently against one Store with the same
    `run_id`, exactly one SHALL proceed and the other SHALL fail with a distinct
    "already claimed" error rather than interleaving. Check `[M2]`:
@@ -87,18 +176,24 @@ that is stated rather than hidden.
 4. WHEN the Queue holds rows at more than one work status, `decide()` SHALL
    return the Stage highest in the precedence `fixing > spec-ready > spec-draft
    > new`, and `discover` when none of those four is present. Check `[today]`:
-   `python3 plugins/loopkit/scripts/test_loop_next_pick.py`. Check `[M2]`:
+   `python3 plugins/loopkit/scripts/test_loop_next_pick.py`, and
+   `python3 tests/pins/fixture-derivable.py`, which recomputes the Stage of
+   every fixture from the precedence alone. Check `[M2]`:
    `spec/fixtures/01-stage-precedence.json`.
 5. WHILE a row is at `pr-open`, the runtime SHALL count and report it as a poll
-   and SHALL NOT serve it as a Stage. Check `[M2]`:
+   and SHALL NOT serve it as a Stage. Check `[today]`:
+   `python3 tests/pins/fixture-derivable.py`. Check `[M2]`:
    `spec/fixtures/01-stage-precedence.json` — `pr-open` is 1 in `counts`, absent
    from `targets`, and the Stage is `fixing`.
 6. WHILE a row is at `blocked`, the runtime SHALL count it, SHALL NOT poll it
-   and SHALL NOT serve it as a Stage. Check `[M2]`:
+   and SHALL NOT serve it as a Stage. Check `[today]`:
+   `python3 tests/pins/fixture-derivable.py`. Check `[M2]`:
    `spec/fixtures/02-blocked-only.json` — Stage `discover` with `blocked: 2`.
 7. WHEN the Stage is not `discover`, Next SHALL be `CONTINUE`. IF the Stage is
    `discover` AND any row is at `pr-open` or `blocked`, THEN Next SHALL be
-   `WAIT`. Otherwise Next SHALL be `IDLE`. Check `[M2]`: fixtures 01 (CONTINUE),
+   `WAIT`. Otherwise Next SHALL be `IDLE`. Check `[today]`:
+   `python3 tests/pins/fixture-derivable.py` derives all three from Counts.
+   Check `[M2]`: fixtures 01 (CONTINUE),
    02 (WAIT), 03 (IDLE) — the three-way split is the whole point, so all three
    are required.
 8. `decide(counts) → (Stage, Next)` SHALL be a pure function: the same counts
@@ -115,19 +210,35 @@ that is stated rather than hidden.
 
 10. WHEN an agent proposes a side effect, the runtime SHALL append an `intent`
     Event carrying `run_id`, `step` and `idempotency_key` BEFORE executing it,
-    and a `result` Event after it. Check `[today]`:
-    `node plugins/loopkit/skills/run-state-model/driver.mjs check specs/loopkit-runtime.model.fizz`
-    — assertion `NoEffectWithoutJournaledIntent`.
+    and a `result` Event after it. An `intent` ALREADY journaled for that
+    `(run_id, step, idempotency_key)` satisfies this: a step re-executed on
+    resume does not append a second one (rule J3). Check `[today]`:
+    `bash tests/pins/model-invariants-live.sh` — assertion
+    `NoEffectWithoutJournaledIntent`, proved live by mutation MUT-INTENT
+    (drop the guard from BOTH `Claim` and `CallProvider` and the checker
+    FAILS). Running the driver alone reports PASSED without telling you the
+    assertion could ever fail, which is why the pin, not the driver, is the
+    check named here.
 11. WHEN a Run is resumed, the runtime SHALL replay the journal and SHALL NOT
     call the Provider again for any step whose `result` Event is journaled.
-    Check `[today]`: the same driver run — assertion
-    `NoProviderCallAfterJournaledResult`. Check `[M2]`:
-    `spec/fixtures/04-replay-journaled-step.json` asserts
-    `provider_calls == {"1": 0, "2": 1}`.
+    Check `[today]`: `bash tests/pins/model-invariants-live.sh` — assertion
+    `NoProviderCallAfterJournaledResult`, proved live by mutation MUT-REPLAY
+    (make `Resume` increment `provider_calls`) — and
+    `python3 tests/pins/fixture-derivable.py`, which derives fixture 04's
+    `provider_calls == {"1": 0, "2": 1}` from the journal. Check `[M2]`:
+    `spec/fixtures/04-replay-journaled-step.json` under the conformance run.
 12. IF a step's `intent` is journaled but its `result` is not, THEN a resume
     SHALL re-execute that step, and the side effect SHALL be applied at most
-    once across both attempts. Check `[today]`: driver assertion
-    `EffectAtMostOnce`, with `Crash` bounded to one occurrence.
+    once — across both attempts, AND across an at-least-once redelivery of the
+    already-committed step. Check `[today]`:
+    `bash tests/pins/model-invariants-live.sh` — assertion `EffectAtMostOnce`,
+    proved live by mutation MUT-EFFECT (delete the convergence guard from
+    `ApplyEffect`; the checker FAILS with
+    `Invariant: EffectAtMostOnce`). Until 2026-09-07 that assertion was
+    VACUOUS: the model had no redelivery, `Commit` could not fire twice, so
+    deleting the guard changed nothing and this criterion cited a check that
+    could not fail. The `Redeliver` action, the single `ApplyEffect` site and
+    the mutation pin all exist because of that.
 13. WHEN the runner is killed between an `intent` Event and its `result` Event
     and then resumed, the Provider call count and the final journal (excluding
     `at`) SHALL equal those of an uninterrupted run of the same Run. Check
@@ -135,19 +246,29 @@ that is stated rather than hidden.
 
 ### Policy: scoping and the draft trust gate
 
-14. WHEN a Run starts, the runtime SHALL pass each agent only the Concepts whose
-    scope matches that agent's lane, and SHALL NOT pass the whole bundle. Check
-    `[M2]`: `spec/fixtures/05-draft-concept-not-enforceable.json` asserts the
-    exact `enforceable` list for one lane.
+14. WHEN a Run starts, the runtime SHALL pass each agent only the Concepts that
+    are ENFORCEABLE for that agent's lane by rules S1–S3 (§Policy scoping), and
+    SHALL NOT pass the whole bundle. Lane membership is `frontmatter.tags`; a
+    bare tag matches no lane. Check `[today]`:
+    `python3 tests/pins/fixture-derivable.py` — fixture 05 asserts the exact
+    `enforceable` list for the `reviewer` lane, and the pin recomputes it from
+    S1–S3 rather than trusting the fixture. Check `[M2]`:
+    `python3 -m loopkit_core.conformance --fixtures spec/fixtures`.
 15. IF a Concept's `status` is `draft`, THEN the runtime SHALL NOT pass it as
-    enforceable to any agent, whatever its scope. Check `[M2]`: fixture 05 —
-    `/loop/agent-guess.md` is `draft` and is absent from `enforceable`.
+    enforceable to any agent, whatever its tags. Check `[today]`:
+    `python3 tests/pins/fixture-derivable.py` — fixture 05 tags
+    `/loop/agent-guess.md` INTO the `reviewer` lane on purpose, so the only
+    reason it is absent from `enforceable` is its `draft` status. A fixture
+    where the draft Concept is also out of lane would pass for the wrong
+    reason. Check `[M2]`: the same fixture under the conformance run.
 16. A Concept whose `generated.by` is a `process:` actor SHALL be written at
     `status: draft`, and SHALL NOT be eligible for `enforced_by` until its
     `verified` carries a `human:` actor — that is, until `trust_tier` is
     `human-reviewed`. Check `[M2]`: fixture 05 asserts
     `trust_tiers == {"/loop/never-merge.md": "human-reviewed", "/loop/agent-guess.md": "unverified"}`.
-    Check `[today]`: `okf_bundle.trust_tier` already derives exactly this.
+    Check `[today]`: `python3 tests/pins/fixture-derivable.py`, which computes
+    the fixture's `trust_tiers` by calling `okf_bundle.trust_tier` itself
+    rather than reimplementing it.
 17. IF a Concept carries `enforced_by` while its `status` is `draft`, THEN the
     conformance run SHALL FAIL. Check `[M2]`: a negative fixture; the failure is
     the assertion, so a run that reports PASS on it is itself the bug.
@@ -155,7 +276,11 @@ that is stated rather than hidden.
     Message failing `validate_message` SHALL be dead-lettered rather than
     retried. Check `[today]`: `knowledge_actor.py drain` exits 6 when it
     dead-letters and 3 on a validation failure; both codes are already asserted
-    in `tests/selftest.sh`.
+    in `tests/selftest.sh`. Also `python3 tests/pins/fixture-derivable.py`,
+    which passes every fixture's expected Message through the real
+    `validate_message`: a fixture asserting a Message the runtime must refuse
+    asserts the opposite of this criterion, which is what fixture 05 did until
+    2026-09-07 by omitting `enqueued_at`.
 19. WHEN the same `idempotency_key` is delivered twice, the second delivery
     SHALL apply nothing and SHALL add no log entry. Check `[today]`: the
     `keys.txt` short-circuit plus the byte-compare in `okf_bundle.write_concept`,
@@ -206,9 +331,16 @@ that is stated rather than hidden.
     wrote. WHEN two writers call it concurrently for one key, exactly one SHALL
     receive "wrote" and the other "already present"; neither SHALL observe a
     partial value. Check `[today]`, for the design:
-    `node plugins/loopkit/skills/run-state-model/driver.mjs check specs/loopkit-runtime.model.fizz`
-    — the `Claim` action is this contract, and removing its guard produces a
-    counterexample. Check `[M2]`, for the implementations:
+    `bash tests/pins/model-invariants-live.sh` — the `Claim` action is this
+    contract and assertion `LeaseIsExclusive` is what it buys. Mutation
+    MUT-LEASE deletes `owner == ""` from `Claim`; a second writer then steals
+    the lease mid-flight, both writers reach the Provider, and the checker
+    FAILS with `Invariant: LeaseIsExclusive`. Until 2026-09-07 this criterion
+    claimed that counterexample against a model that carried NO such assertion
+    and passed the mutation cleanly. Two changes made the claim true: the
+    assertion itself, and modelling `called` PER WRITER — as one shared flag it
+    silently handed one writer's memory to the other, which is what made the
+    lease guard unfalsifiable. Check `[M2]`, for the implementations:
     `bash tests/pins/store-conditional-write.sh` with two concurrent appenders
     against MinIO (`If-None-Match`), against SQLite (`BEGIN IMMEDIATE`), and
     against the filesystem (`O_EXCL`).
@@ -288,22 +420,40 @@ that is stated rather than hidden.
 The control case is the thing that proves each gate can fail, because a gate
 that cannot fail is not a gate:
 
-1. **The model.** `specs/loopkit-runtime.model.fizz` PASSES. Its buggy twin —
-   the same file with the `intent == 1` guard removed from BOTH `Claim` and
-   `CallProvider` — yields a counterexample at `{"effects": 1, "intent": 0}` and
-   the driver exits 1. Removing the guard from `CallProvider` alone changes
-   nothing, because `Claim` already implies it; that near miss is recorded here
-   so nobody re-derives it and mistakes a redundant guard for a checked one.
-2. **The fixtures.** The stub Provider is deterministic, so a fixture that
-   passes against the stub and fails against a real provider isolates the
-   provider. A fixture asserting no `expected` key beyond `stage` asserts
-   almost nothing; the README's comparison rules say which keys are live.
+1. **The model.** `specs/loopkit-runtime.model.fizz` PASSES, and every one of
+   its four assertions is proved able to FAIL by
+   `bash tests/pins/model-invariants-live.sh`, which applies the mutation
+   recorded beside each assertion and requires driver exit 1:
+   MUT-EFFECT → `EffectAtMostOnce`, MUT-INTENT → `NoEffectWithoutJournaledIntent`,
+   MUT-REPLAY → `NoProviderCallAfterJournaledResult`, MUT-LEASE →
+   `LeaseIsExclusive`. The pin also refuses a mutation whose target string is
+   no longer in the file, so a model that drifts away from its own pin fails
+   rather than passing quietly. Two near misses are recorded so nobody
+   re-derives them: removing `intent == 1` from `CallProvider` ALONE changes
+   nothing, because `Claim` already implies it; and `EffectAtMostOnce` held
+   vacuously until a `Redeliver` action existed to exercise the guard.
+   A driver run on its own is NOT this control case — `PASSED` says nothing
+   about whether the checker would ever say FAILED.
+2. **The fixtures.** `python3 tests/pins/fixture-derivable.py` recomputes
+   `stage`, `next`, `counts`, `targets`, `events`, `provider_calls`,
+   `enforceable` and `trust_tiers` for every fixture from the rules in this
+   document, and validates every expected Message through the real
+   `validate_message`. It fails on each of the three defects found in the
+   2026-09-07 review when they are reintroduced: bare tags → `enforceable` is
+   `[]`; a missing `run_start` → the delta disagrees; a missing `enqueued_at` →
+   the Message is refused. `messages` CONTENT is the one key it cannot derive,
+   because that depends on the Provider — README rule 6 says so rather than
+   leaving a reader to find out. The stub Provider is deterministic, so a
+   fixture that passes against the stub and fails against a real provider
+   isolates the provider.
 3. **The repo.** `bash tests/selftest.sh` ends ALL PASS,
    `python3 plugins/loopkit/scripts/check-skills.py --plugin plugins/loopkit --strict`
    passes, `python3 plugins/loopkit/scripts/check-citations.py --root plugins/loopkit`
    passes, and `claude plugin validate .` passes — all four before and after this
-   spec lands. M1 adds documents only, so any change in those four is caused by
-   this PR and nothing else.
+   spec lands. M1 adds documents and two pins only, so any change in those four
+   is caused by this PR and nothing else. Both pins run inside
+   `tests/selftest.sh`, so neither can rot unnoticed by being a command nobody
+   remembers to type.
 
 ## Open questions routed to the owner
 
