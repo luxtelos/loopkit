@@ -1,5 +1,5 @@
 {
-  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, protect_governance, protect_tests, require_recall (gate), and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission — exit 0 with no output is the normal prompt. offload_rewrite returns updatedInput for a Bash command matching .loopkit/offload-patterns.txt; it never decides a permission and is passive without that file.",
+  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, protect_governance, protect_tests, require_recall (gate), and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission \u2014 exit 0 with no output is the normal prompt. offload_rewrite returns updatedInput for a Bash command matching .loopkit/offload-patterns.txt; it never decides a permission and is passive without that file.",
   "hooks": {
     "SessionStart": [
       {
@@ -59,7 +59,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -156,7 +156,7 @@
           },
           {
             "type": "agent",
-            "prompt": "FIRST run `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`, and keep only source-code files (ignore paths under .claude/, .loopkit/, state/, inbox/, docs/ and any Markdown). If there is NO changed code file, this is a conversational/setup turn with nothing to verify — return PASS immediately with the note 'no code change to review'. Otherwise run the loopkit:acceptance-review skill against specs/ for THE CHANGES JUST MADE IN THIS TURN ONLY. ORDER RULE: read the diff and the acceptance criteria and form your provisional per-criterion verdict BEFORE reading any summary, PR body or claim the implementer wrote; a judgement formed after the recommendation is not oversight. Flag only gaps that affect correctness. SCOPE RULE: verify only work the user's current mandate asked for. Untracked files, triage rows or inbox items created by OTHER sessions are NOT this turn's scope — do NOT demand specs or tests for them and do NOT let their absence block PASS; if you notice such orphaned work, note it as an inbox/ item and move on. NEVER instruct that unrelated work be committed, spec'd or folded into the current branch to satisfy this gate. Verify by acting (execute, run tests, drive the UI if there is one). Return PASS only if every EARS acceptance criterion FOR THIS TURN'S CHANGES holds with evidence; otherwise REJECT with reasons scoped to this turn's changes. $ARGUMENTS",
+            "prompt": "FIRST run `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`, and keep only source-code files (ignore paths under .claude/, .loopkit/, state/, inbox/, docs/ and any Markdown). If there is NO changed code file, this is a conversational/setup turn with nothing to verify \u2014 return PASS immediately with the note 'no code change to review'. Otherwise run the loopkit:acceptance-review skill against specs/ for THE CHANGES JUST MADE IN THIS TURN ONLY. ORDER RULE: read the diff and the acceptance criteria and form your provisional per-criterion verdict BEFORE reading any summary, PR body or claim the implementer wrote; a judgement formed after the recommendation is not oversight. Flag only gaps that affect correctness. SCOPE RULE: verify only work the user's current mandate asked for. Untracked files, triage rows or inbox items created by OTHER sessions are NOT this turn's scope \u2014 do NOT demand specs or tests for them and do NOT let their absence block PASS; if you notice such orphaned work, note it as an inbox/ item and move on. NEVER instruct that unrelated work be committed, spec'd or folded into the current branch to satisfy this gate. Verify by acting (execute, run tests, drive the UI if there is one). Return PASS only if every EARS acceptance criterion FOR THIS TURN'S CHANGES holds with evidence; otherwise REJECT with reasons scoped to this turn's changes. $ARGUMENTS",
             "timeout": 180
           }
         ]

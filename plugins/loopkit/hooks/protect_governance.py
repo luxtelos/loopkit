@@ -21,8 +21,15 @@ ESCAPE HATCH: an owner who has ratified a change sets GOVERNANCE_EDIT_OK=1 for
 that invocation. Explicit and visible beats an agent quietly finding a way
 around a wall, which is what happens when a guard has no legitimate door.
 
-Wired as PreToolUse on Write|Edit|MultiEdit|NotebookEdit. Exit 2 blocks,
+Wired as PreToolUse on Write|Edit|MultiEdit|NotebookEdit|Bash. Exit 2 blocks,
 exit 0 allows.
+
+Bash matters and was missing until 2026-09-07: the hook guarded the edit tools
+while `cat > specs/foo.md`, `tee`, `sed -i`, `cp`, `mv` and `rm` walked straight
+past it. Its sibling protect_tests.py had carried a Bash matcher from the start,
+three lines away in the same file — a guard that covers most doors is read as a
+guard that covers the door. Found in review of the M1 specification, which the
+same gap had let an agent write.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +46,42 @@ PROTECTED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?:^|/)constitution\.md$"), "constitution.md is ratified governance"),
     (re.compile(r"(?:^|/)specs/"), "specs/ is the source of truth"),
 ]
+
+
+
+# A shell command can reach a protected file without ever naming a `file_path`.
+# These are the shapes that actually write: a redirect, the tools that edit in
+# place, and the tools that remove or replace. Deliberately over-broad — a false
+# block is one visible override away, a miss is a silent write to ratified text.
+WRITE_SHELL = re.compile(
+    r"""(?:
+          >{1,2}\s*(?P<redir>[^\s;|&<>()]+)                     # > file, >> file
+        | \b(?P<tool>tee|sed|perl|awk|install|truncate|dd|rm|mv|cp|ln|touch|chmod|chown|git)\b(?P<rest>[^;|&]*)
+    )""",
+    re.X,
+)
+
+# Only the first token after `sed -i ""` is a flag and an empty argument; the
+# path is further along. So every token after a writing tool is a candidate,
+# never just the next one — that miss is how `sed -i "" s/a/b/ specs/x.md` got
+# through the first version of this guard on 2026-09-07.
+def shell_targets(cmd: str) -> list[str]:
+    """Every path a shell command might write. Over-collects on purpose: a
+    false block costs one visible override, a miss is a silent write to
+    ratified text."""
+    out: list[str] = []
+    for m in WRITE_SHELL.finditer(cmd):
+        redir = m.group("redir")
+        if redir:
+            out.append(redir.strip("\"'"))
+        rest = m.group("rest")
+        if rest:
+            try:
+                toks = shlex.split(rest)
+            except ValueError:
+                toks = rest.split()
+            out.extend(t for t in toks if t and not t.startswith("-"))
+    return [t for t in out if t and t not in {"/dev/null", "/dev/stdout", "/dev/stderr"}]
 
 
 def project_root() -> Path:
@@ -96,16 +140,26 @@ def main() -> int:
         return 0
 
     tool = payload.get("tool_name", "")
-    if tool not in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
+    if tool not in {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"}:
         return 0
 
-    raw = (payload.get("tool_input") or {}).get("file_path") or ""
-    if not raw:
+    ti = payload.get("tool_input") or {}
+    if not isinstance(ti, dict):
         return 0
-    path = os.path.normpath(os.path.abspath(raw)).replace(os.sep, "/")
+
+    if tool == "Bash":
+        candidates = shell_targets(str(ti.get("command") or ""))
+    else:
+        raw = ti.get("file_path") or ""
+        candidates = [raw] if raw else []
+    if not candidates:
+        return 0
+    paths = [os.path.normpath(os.path.abspath(c)).replace(os.sep, "/") for c in candidates]
 
     for pattern, why in PROTECTED + project_patterns() + registry_patterns():
-        if pattern.search(path):
+        hit = next((p for p in paths if pattern.search(p)), None)
+        if hit:
+            path = hit
             if os.getenv("GOVERNANCE_EDIT_OK") == "1":
                 print(
                     f">> protect_governance: ALLOWED by GOVERNANCE_EDIT_OK — {path}",
