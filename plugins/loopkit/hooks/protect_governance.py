@@ -53,34 +53,61 @@ PROTECTED: list[tuple[re.Pattern[str], str]] = [
 # These are the shapes that actually write: a redirect, the tools that edit in
 # place, and the tools that remove or replace. Deliberately over-broad — a false
 # block is one visible override away, a miss is a silent write to ratified text.
-WRITE_SHELL = re.compile(
-    r"""(?:
-          >{1,2}\s*(?P<redir>[^\s;|&<>()]+)                     # > file, >> file
-        | \b(?P<tool>tee|sed|perl|awk|install|truncate|dd|rm|mv|cp|ln|touch|chmod|chown|git)\b(?P<rest>[^;|&]*)
-    )""",
-    re.X,
-)
+# Which commands WRITE. Split deliberately, because the first version of this
+# guard collected every token after `sed`, `perl` and `awk`, so a plain read like
+# `sed -n '1,20p' <a protected file>` was blocked. That is worse than a miss: a
+# guard that blocks reading trains everyone to keep GOVERNANCE_EDIT_OK exported,
+# and then it guards nothing. Caught within the hour on 2026-09-07 — by this hook
+# blocking its own author from reading a spec — and independently by a reviewer.
+#
+#   ALWAYS_WRITE  — writes by existing at all
+#   INPLACE_ONLY  — a filter that writes only with an in-place flag
+#   GIT_WRITE     — the git subcommands that touch the working tree
+ALWAYS_WRITE = ("tee", "install", "truncate", "dd", "rm", "mv", "cp", "ln", "touch", "chmod", "chown")
+INPLACE_ONLY = ("sed", "perl", "awk", "ruby")
+GIT_WRITE = ("rm", "mv", "checkout", "restore", "apply", "clean", "stash")
+INPLACE_FLAG = re.compile(r"^(?:-[a-zA-Z]*i|--in-place)(?:$|[=.])")
 
-# Only the first token after `sed -i ""` is a flag and an empty argument; the
-# path is further along. So every token after a writing tool is a candidate,
-# never just the next one — that miss is how `sed -i "" s/a/b/ specs/x.md` got
-# through the first version of this guard on 2026-09-07.
+REDIRECT = re.compile(r">{1,2}\s*(?P<path>[^\s;|&<>()]+)")
+COMMAND = re.compile(r"\b(?P<tool>" + "|".join(ALWAYS_WRITE + INPLACE_ONLY + ("git",)) + r")\b(?P<rest>[^;|&]*)")
+
+# The hook is its own process, so an inline `GOVERNANCE_EDIT_OK=1 cmd` prefix
+# never reaches os.environ — it is text inside tool_input.command. Until
+# 2026-09-07 that meant the documented escape hatch could not be used for a Bash
+# write at all: the guard was reachable and its door was not. A guard with no
+# usable door is the one people switch off.
+INLINE_OVERRIDE = re.compile(r"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*GOVERNANCE_EDIT_OK=1\b")
+
+
+def inline_override(payload: dict) -> bool:
+    ti = payload.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        return False
+    return bool(INLINE_OVERRIDE.match(str(ti.get("command") or "")))
+
+
+def _tokens(rest: str) -> list[str]:
+    try:
+        return shlex.split(rest)
+    except ValueError:
+        return rest.split()
+
+
 def shell_targets(cmd: str) -> list[str]:
-    """Every path a shell command might write. Over-collects on purpose: a
-    false block costs one visible override, a miss is a silent write to
-    ratified text."""
+    """Every path a shell command might WRITE. Reads are not targets."""
     out: list[str] = []
-    for m in WRITE_SHELL.finditer(cmd):
-        redir = m.group("redir")
-        if redir:
-            out.append(redir.strip("\"'"))
-        rest = m.group("rest")
-        if rest:
-            try:
-                toks = shlex.split(rest)
-            except ValueError:
-                toks = rest.split()
-            out.extend(t for t in toks if t and not t.startswith("-"))
+    for m in REDIRECT.finditer(cmd):
+        out.append(m.group("path").strip("\"'"))
+    for m in COMMAND.finditer(cmd):
+        tool, toks = m.group("tool"), _tokens(m.group("rest"))
+        if tool in INPLACE_ONLY and not any(INPLACE_FLAG.match(t) for t in toks):
+            continue
+        if tool == "git":
+            sub = next((t for t in toks if not t.startswith("-")), None)
+            if sub not in GIT_WRITE:
+                continue
+            toks = toks[toks.index(sub) + 1:]
+        out.extend(t for t in toks if t and not t.startswith("-"))
     return [t for t in out if t and t not in {"/dev/null", "/dev/stdout", "/dev/stderr"}]
 
 
@@ -160,7 +187,7 @@ def main() -> int:
         hit = next((p for p in paths if pattern.search(p)), None)
         if hit:
             path = hit
-            if os.getenv("GOVERNANCE_EDIT_OK") == "1":
+            if os.getenv("GOVERNANCE_EDIT_OK") == "1" or inline_override(payload):
                 print(
                     f">> protect_governance: ALLOWED by GOVERNANCE_EDIT_OK — {path}",
                     file=sys.stderr,
