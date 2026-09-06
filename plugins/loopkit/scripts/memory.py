@@ -80,7 +80,18 @@ def main() -> int:
     f = gs.add_parser("find", parents=[common]); f.add_argument("pattern"); f.add_argument("--label"); f.add_argument("--limit", type=int, default=20)
     gs.add_parser("callers", parents=[common]).add_argument("symbol"); gs.add_parser("callees", parents=[common]).add_argument("symbol")
     gs.add_parser("snippet", parents=[common]).add_argument("qualified_name"); gs.add_parser("impact", parents=[common])
-    k = sub.add_parser("knowledge", parents=[common]); k.add_argument("verb", nargs="?", default="status"); k.add_argument("args", nargs="*")
+    k = sub.add_parser("knowledge", parents=[common]); ks = k.add_subparsers(dest="verb", required=True)
+    ks.add_parser("status", parents=[common])
+    kq = ks.add_parser("search", parents=[common]); kq.add_argument("query"); kq.add_argument("--type"); kq.add_argument("--lane"); kq.add_argument("--limit", type=int, default=8)
+    ks.add_parser("get", parents=[common]).add_argument("path")
+    ke = ks.add_parser("enqueue", parents=[common]); ke.add_argument("--op", default="upsert"); ke.add_argument("--target", required=True)
+    ke.add_argument("--reason", required=True); ke.add_argument("--by", default="process:loopkit/memory.py"); ke.add_argument("--type", dest="ctype")
+    ke.add_argument("--title"); ke.add_argument("--description"); ke.add_argument("--tags"); ke.add_argument("--sources", help="comma-separated repo-relative files")
+    ke.add_argument("--enforced-by", help="comma-separated kind:ref, e.g. hook:protect_tests.py,test:tests/x.test.ts")
+    ke.add_argument("--body"); ke.add_argument("--body-file"); ke.add_argument("--status", dest="cstatus", default="draft")
+    ks.add_parser("drain", parents=[common]); ks.add_parser("verify", parents=[common]); ks.add_parser("scan-drift", parents=[common])
+    kr = ks.add_parser("reindex", parents=[common]); kr.add_argument("--check", action="store_true")
+    ki = ks.add_parser("init", parents=[common]); ki.add_argument("--by", default="process:loopkit/seed")
     a = ap.parse_args()
     a.format = a.format or "concise"
 
@@ -104,7 +115,13 @@ def main() -> int:
         if a.cmd == "recall":
             facts = mem.recall(a.query, limit=a.limit)
             body = "\n".join(fc.line() for fc in facts) or "(no facts recalled — say so in your reasoning; do not guess)"
-            emit(f"{head}\nRECALL \"{a.query}\":\n{body}", root, "recall", a.format)
+            out = f"{head}\nRECALL \"{a.query}\":\n{body}"
+            kn = reg.get("knowledge")
+            kok, _ = kn.available()
+            if kok:
+                hits = kn.search(a.query, limit=min(a.limit, 5))
+                out += "\n" + kn.banner() + "\nCONCEPTS:\n" + ("\n".join(f"- [{h['type']}] {h['title']} ({h['path']})" for h in hits) or "- none match")
+            emit(out, root, "recall", a.format)
         elif a.cmd == "remember":
             body = a.body or (Path(a.file).read_text(encoding="utf-8") if a.file else "")
             if not body:
@@ -133,11 +150,53 @@ def main() -> int:
         emit(f"{head}\n{body}", root, f"graph-{a.verb}", a.format); return 0
 
     if a.cmd == "knowledge":
-        kn = reg.get("knowledge")
-        print(kn.banner())
-        if a.verb != "status":
-            print("knowledge verbs arrive in 0.2.0-c (OKF adapter)")
-        return 0
+        return knowledge_cmd(a, reg, root)
+    return 0
+
+
+def knowledge_cmd(a, reg, root: Path) -> int:
+    kn = reg.get("knowledge")
+    head = kn.banner()
+    if a.verb == "init":
+        from loopkit_memory import seed as seedmod
+        return seedmod.seed(root, by=a.by, fmt=a.format)
+    if not hasattr(kn, "search"):
+        print(head); print("knowledge is disabled: set knowledge.enabled=true in .loopkit/memory.json, then `memory.py knowledge init`"); return 0
+    if a.verb == "status":
+        st = kn.status()
+        print(head)
+        if st.get("by_type"):
+            print("  " + "  ".join(f"{t}={n}" for t, n in sorted(st["by_type"].items())))
+        rc, out = kn.actor_status(); print(out); return 0
+    if a.verb == "search":
+        hits = kn.search(a.query, limit=a.limit, types=(a.type,) if a.type else None, lane=a.lane)
+        body = "\n".join(f"- [{h['type']}] {h['title']} ({h['path']}) {' '.join(h['tags'])}".rstrip() for h in hits) or "(no concept matches — say so; do not guess)"
+        emit(f"{head}\nCONCEPTS \"{a.query}\":\n{body}", root, "knowledge-search", a.format); return 0
+    if a.verb == "get":
+        emit(f"{head}\n{kn.get(a.path)}", root, "knowledge-get", a.format); return 0
+    if a.verb == "enqueue":
+        fm: dict = {}
+        if a.ctype: fm["type"] = a.ctype
+        if a.title: fm["title"] = a.title
+        if a.description: fm["description"] = a.description
+        if a.cstatus: fm["status"] = a.cstatus
+        if a.tags: fm["tags"] = [t.strip() for t in a.tags.split(",") if t.strip()]
+        if a.enforced_by:
+            fm["enforced_by"] = [{k.strip(): v.strip()} for k, v in (x.split(":", 1) for x in a.enforced_by.split(",") if ":" in x)]
+        payload: dict = {"frontmatter": fm}
+        if a.sources:
+            payload["sources"] = [{"id": Path(sp.strip()).stem, "resource": sp.strip(), "title": sp.strip()} for sp in a.sources.split(",") if sp.strip()]
+        body = a.body or (Path(a.body_file).read_text(encoding="utf-8") if a.body_file else "")
+        rc, out = kn.enqueue(op=a.op, reason=a.reason, by=a.by, target=a.target, payload=payload, body=body)
+        print(f"{head}\nENQUEUED rc={rc}: {out}\nNext: memory.py knowledge drain"); return rc
+    if a.verb == "drain":
+        rc, out = kn.drain(); print(f"{head}\nDRAIN rc={rc} (0 ok, 6 = something dead-lettered — see inbox/needs-human.md)\n{out}"); return rc
+    if a.verb == "verify":
+        rc, out = kn.verify(); print(f"{head}\nVERIFY rc={rc} (0 conformant, 4 non-conformant)\n{out}"); return rc
+    if a.verb == "reindex":
+        rc, out = kn.reindex(check=a.check); print(f"{head}\nREINDEX rc={rc}{' (5 = bytes would change)' if a.check else ''}\n{out}"); return rc
+    if a.verb == "scan-drift":
+        rc, out = kn.scan_drift(); emit(f"{head}\nDRIFT rc={rc}\n{out}", root, "knowledge-drift", a.format); return rc
     return 0
 
 

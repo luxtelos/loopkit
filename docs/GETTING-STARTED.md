@@ -202,7 +202,27 @@ When the agent tries to say "done" after changing code, the Stop hook runs
 your gate — precheck, regression diff, lint, typecheck, build — and then an
 acceptance review against `specs/`. Red blocks the stop. That is the point.
 
-## 8. Optional: the model checker
+## 8. Optional: the knowledge layer
+
+```
+python3 <plugin>/scripts/memory.py knowledge init
+```
+
+Enables the bundle and seeds ten concepts about the loop itself (three of
+them Gates and an Invariant with `enforced_by`). Then:
+
+```bash
+python3 <plugin>/scripts/rulings-extract.py            # dry run: what your inbox, ADRs and specs already ruled
+python3 <plugin>/scripts/rulings-extract.py --apply    # one message per ruling
+python3 <plugin>/scripts/memory.py knowledge drain     # apply; a human ratifies with status: stable
+python3 <plugin>/scripts/rulings-compile.py            # which rulings have a gate that can fail
+python3 <plugin>/scripts/loop-metrics.py               # verified success, re-asks — with n=
+```
+
+Record a trap with a lane tag (`--tags lane/billing`) and the next tick scoped
+to that lane starts with it in front of the model.
+
+## 9. Optional: the model checker
 
 For any design with two writers, a retry, or a guard followed by a write:
 
@@ -215,7 +235,7 @@ node <plugin>/skills/run-state-model/driver.mjs check <plugin>/skills/run-state-
 The last one prints a counterexample and exits 1 — a real shipped bug, reduced
 to its state machine. The fixed twin exits 0.
 
-## 9. Status and health
+## 10. Status and health
 
 ```
 /loopkit:scan      # open PRs with their real blockers; READY TO MERGE is the only actionable line

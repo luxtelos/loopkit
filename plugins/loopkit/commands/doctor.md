@@ -28,6 +28,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-tools.py" --plugin "${CLAUDE_PLUGIN
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-duplicate-hooks.py" --plugin "${CLAUDE_PLUGIN_ROOT}"
 ```
 
+Knowledge and the loop's numbers (n=0 is an honest answer; a bundle is optional):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memory.py" status --line
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/rulings-compile.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/loop-metrics.py"
+```
+
 Session memory (what the last gate recorded, and what a compaction would carry):
 
 ```bash

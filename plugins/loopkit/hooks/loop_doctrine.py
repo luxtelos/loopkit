@@ -131,6 +131,49 @@ def fatigue_line(n: int) -> str:
     )
 
 
+def lane_of(prompt: str) -> str | None:
+    """The lane a tick is scoped to: --scope <lane> in the prompt, LOOPKIT_LANE,
+    or a lane name from .loopkit/scopes.json appearing as a word."""
+    m = re.search(r"--scope[= ]+([\w-]+)", prompt)
+    if m:
+        return m.group(1).lower()
+    env = os.environ.get("LOOPKIT_LANE")
+    if env:
+        return env.lower()
+    try:
+        root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+        lanes = json.loads((root / ".loopkit" / "scopes.json").read_text(encoding="utf-8"))
+        for lane in lanes:
+            if lane.startswith("_"):
+                continue
+            if re.search(rf"\b{re.escape(lane)}\b", prompt, re.I):
+                return lane.lower()
+    except Exception:
+        pass
+    return None
+
+
+def traps_for(lane: str | None, limit: int = 5) -> str:
+    """Traps recorded for this lane, from the knowledge bundle — never into
+    CLAUDE.md, only into the tick that touches the lane."""
+    if not lane:
+        return ""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from loopkit_memory import load
+        kn = load(os.environ.get("CLAUDE_PROJECT_DIR")).get("knowledge")
+        if not hasattr(kn, "search"):
+            return ""
+        hits = kn.search("", limit=limit, types=("Trap",), lane=lane)
+    except Exception:
+        return ""
+    if not hits:
+        return ""
+    lines = [f"\nTRAPS recorded for lane '{lane}' (read before acting; `memory.py knowledge get <path>` for the full concept):"]
+    lines += [f"- {h['title']} ({h['path']})" for h in hits]
+    return "\n".join(lines)
+
+
 def read_payload() -> tuple[str, object]:
     raw = sys.stdin.read()
     if not raw.strip():
@@ -155,6 +198,7 @@ def main() -> int:
             n = approvals(payload)
             if n >= FATIGUE_N:
                 out += fatigue_line(n)
+            out += traps_for(lane_of(prompt))
             print(out)
     except Exception:
         pass  # never block a prompt

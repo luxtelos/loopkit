@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0-alpha.3 — 2026-09-06 (batch c: OKF and the knowledge layer)
+
+The thesis becomes testable: a project's rulings, traps and invariants as
+typed, drift-checked concepts that a tick reads before acting and a check can
+prove are enforced.
+
+- `loopkit_memory/vendor/` — `okf_bundle.py` and `knowledge_actor.py`
+  vendored verbatim (stdlib, deterministic mailbox actor, exit-code contract)
+  with provenance headers; `loopkit_memory/okf.py` wraps them; a mutable
+  queue is refused as a source at enqueue.
+- `memory.py knowledge init|status|search|get|enqueue|drain|verify|reindex|scan-drift`;
+  `recall` now spans notes AND concepts. `init` seeds ten loop-doctrine
+  concepts citing the project's own constitution and contracts; three carry
+  `enforced_by`.
+- K1 `rulings-extract.py` — RESOLVED inbox sections, ADR decisions, ruled
+  lines → one upsert each (dry run by default). K2 `ticks.py` +
+  `loop-metrics.py` — stage, gate, transition events; verified-success,
+  gate pass rate, re-asks, blocked rows, each with `n=`. K3
+  `rulings-compile.py` — every Invariant/Gate names an artefact that exists;
+  named extra block patterns (`#name`) carry `ruling:` in the BLOCKED line.
+  K4 the tick doctrine injects the lane's Traps. K5 `knowledge` is a
+  loop-assess layer.
+- `protect_governance` guards the bundle once enabled (`KNOWLEDGE_EDIT_OK=1`).
+
 ## 0.2.0-alpha.2 — 2026-09-06 (batch b: memory adapters)
 
 Memory as pluggable adapters instead of RAG, and the recall gate that makes

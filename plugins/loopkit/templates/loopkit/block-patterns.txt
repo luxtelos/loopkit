@@ -3,6 +3,10 @@
 # command. Blank lines and # comments are ignored. A pattern that fails to
 # compile is skipped (the built-ins still apply).
 #
+# Name a pattern with a `#name <name>` line right above it; the name appears in
+# the BLOCKED line and lets a ruling's `enforced_by: [block-pattern: <name>]`
+# be checked by rulings-compile.py.
+#
 # Anchor to a command position with (?:\A|[;&|]\s*|\n\s*) so prose that merely
 # mentions the command does not trip it. Examples (uncomment to use):
 #
@@ -13,4 +17,5 @@
 # (?=[\s\S]*vendor\.example\.com)(?=[\s\S]*PROD_PROJECT_ID_HERE)
 #
 # infrastructure teardown
+#name no-terraform-destroy
 # (?:\A|[;&|]\s*|\n\s*)terraform\s+destroy\b

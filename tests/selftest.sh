@@ -324,6 +324,89 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"ls"},"tool_response"
 [ -z "$err" ] && ok "offload nudge silent on small output" || fail "nudge on small output: $err"
 for ev in require_recall.py offload_nudge.py; do grep -q "$ev" "$P/hooks/hooks.json" && ok "hooks.json wires $ev" || fail "hooks.json lacks $ev"; done
 
+# --- 0.2.0-c: OKF + the knowledge layer -------------------------------------
+echo "== knowledge: init (seed), verify, reindex, idempotent drain"
+MEM="python3 $P/scripts/memory.py"
+out="$($MEM knowledge init --root "$T" 2>&1)"
+grep -q 'bundle now holds 10 concept' <<<"$out" && ok "knowledge init seeds ten concepts" || fail "init: $out"
+[ -f "$T/knowledge/index.md" ] && [ -f "$T/knowledge/log.md" ] && ok "index.md and log.md generated" || fail "generated files missing"
+grep -q '^knowledge/$' "$T/.prettierignore" && ok "bundle added to .prettierignore" || fail "prettierignore"
+expect_rc 0 "verify: seeded bundle is conformant" $MEM knowledge verify --root "$T"
+expect_rc 0 "reindex --check: index bytes are stable" $MEM knowledge reindex --check --root "$T"
+log1="$(shasum "$T/knowledge/log.md")"
+out="$($MEM knowledge init --root "$T" 2>&1)"
+log2="$(shasum "$T/knowledge/log.md")"
+[ "$log1" = "$log2" ] && grep -q 'bundle now holds 10 concept' <<<"$out" && ok "second init is a no-op (idempotency keys, convergent apply)" || fail "second init changed the log"
+out="$($MEM status --no-cache --root "$T")"
+grep -q 'knowledge=okf(10 concepts)' <<<"$out" && ok "status reports the bundle" || fail "status: $out"
+out="$($MEM knowledge search "merge approve" --root "$T")"
+grep -q 'never-merge-never-approve' <<<"$out" && ok "knowledge search finds a concept" || fail "search: $out"
+out="$($MEM knowledge get /loop/the-stop-gate.md --root "$T")"
+grep -q 'type: Gate' <<<"$out" && ok "knowledge get prints the concept" || fail "get: $out"
+out="$($MEM recall "merge" --root "$T")"
+grep -q '^CONCEPTS:' <<<"$out" && grep -q 'never-merge' <<<"$out" && ok "recall spans notes and concepts" || fail "recall+concepts: $out"
+
+echo "== knowledge: guard, queue-source refusal, enqueue+drain a Trap"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "hand edit of the bundle is refused after init" || fail "bundle guard"
+out="$($MEM knowledge enqueue --target /rulings/bad.md --reason "cites a queue" --type Decision --title "bad" --sources inbox/needs-human.md --body "x" --root "$T" 2>&1)"; rc=$?
+grep -q 'refused' <<<"$out" && [ "$rc" = 3 ] && ok "a queue as a source is refused at enqueue (rc=3)" || fail "queue source: rc=$rc $out"
+out="$($MEM knowledge enqueue --target /billing/period-end-trap.md --reason "trap: period end null on free to paid" --type Trap --title "period_end is NULL after a free-to-paid activation" --tags "lane/billing,domain/billing" --sources constitution.md --body "Observed 4 Sep. Control case: paid firms unaffected." --root "$T" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && grep -q 'ENQUEUED rc=0' <<<"$out" && ok "enqueue a Trap with a lane tag" || fail "enqueue trap: rc=$rc $out"
+expect_rc 0 "drain applies it" $MEM knowledge drain --root "$T"
+[ -f "$T/knowledge/billing/period-end-trap.md" ] && grep -q 'type: Trap' "$T/knowledge/billing/period-end-trap.md" && ok "the Trap concept exists with its type" || fail "trap concept missing"
+grep -q 'git-blob:' "$T/knowledge/billing/period-end-trap.md" && ok "source digest captured at apply" || fail "no digest captured"
+
+echo "== knowledge: scoped trap injection in the tick doctrine"
+out="$(printf '{"session_id":"traps-%s","prompt":"/loop work the billing lane --scope billing"}' "$RANDOM" | python3 "$P/hooks/loop_doctrine.py")"
+grep -q "TRAPS recorded for lane 'billing'" <<<"$out" && grep -q 'period_end is NULL' <<<"$out" && ok "doctrine injects the lane's traps" || fail "traps: $out"
+out="$(printf '{"session_id":"traps-%s","prompt":"/loop work the loopkit backlog"}' "$RANDOM" | python3 "$P/hooks/loop_doctrine.py")"
+grep -q 'TRAPS recorded' <<<"$out" && fail "traps injected without a lane" || ok "no lane, no traps"
+out="$(printf '{"session_id":"traps-%s","prompt":"/loop --scope auth"}' "$RANDOM" | python3 "$P/hooks/loop_doctrine.py")"
+grep -q 'TRAPS recorded' <<<"$out" && fail "another lane got billing traps" || ok "another lane gets none of them"
+
+echo "== rulings-compile: coverage"
+out="$(python3 "$P/scripts/rulings-compile.py" --root "$T")"
+grep -q 'RULINGS: 3/3' <<<"$out" && ok "the three seeded Invariant/Gate concepts are enforced (3/3)" || fail "coverage: $out"
+$MEM knowledge enqueue --target /rulings/one-plan.md --reason "one plan per firm" --type Invariant --title "One plan per firm" --sources constitution.md --body "x" --root "$T" >/dev/null 2>&1
+$MEM knowledge drain --root "$T" >/dev/null 2>&1
+out="$(python3 "$P/scripts/rulings-compile.py" --root "$T")"
+grep -q 'RULINGS: 3/4' <<<"$out" && grep -q 'NONE Invariant /rulings/one-plan.md' <<<"$out" && ok "an unenforced Invariant is listed (3/4)" || fail "coverage after: $out"
+expect_rc 1 "--strict fails while a ruling is prose only" python3 "$P/scripts/rulings-compile.py" --root "$T" --strict
+printf '#name one-plan-per-firm\n(?:\\A|[;&|]\\s*|\\n\\s*)stripe\\s+subscriptions\\s+create\\b\n' >> "$T/.loopkit/block-patterns.txt"
+$MEM knowledge enqueue --target /rulings/one-plan.md --reason "now enforced" --type Invariant --title "One plan per firm" --enforced-by "block-pattern:one-plan-per-firm" --sources constitution.md --body "x" --root "$T" >/dev/null 2>&1
+$MEM knowledge drain --root "$T" >/dev/null 2>&1
+expect_rc 0 "--strict passes once the ruling names an existing named pattern" python3 "$P/scripts/rulings-compile.py" --root "$T" --strict
+err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe subscriptions create --customer cus_1"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
+[ "$rc" = 2 ] && grep -q 'ruling: one-plan-per-firm' <<<"$err" && ok "a named pattern blocks and names its ruling" || fail "named pattern: rc=$rc $err"
+
+echo "== rulings-extract (dry run, then apply)"
+printf '\n## RESOLVED 2026-09-01 — Grace-lane reactivation goes through a fresh checkout\n\nOwner ruled: reactivation from grace is a new checkout, never an un-cancel.\n' >> "$T/inbox/needs-human.md"
+printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n' >> "$T/inbox/needs-human.md"
+mkdir -p "$T/docs/adr"; printf '# ADR-001: Postgres-direct for new domains\n\n## Decision\n\nNew domains write to Postgres directly; the BI layer is read-only.\n' > "$T/docs/adr/ADR-001-postgres-direct.md"
+out="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
+grep -q 'Grace-lane reactivation' <<<"$out" && grep -q 'ADR-001' <<<"$out" && grep -q 'dry run' <<<"$out" && ok "extract finds the inbox ruling and the ADR, writes nothing" || fail "extract: $out"
+[ -z "$(ls "$T/state/knowledge-mailbox/inbox" 2>/dev/null)" ] && ok "dry run enqueued nothing" || fail "dry run enqueued"
+out="$(python3 "$P/scripts/rulings-extract.py" --root "$T" --apply)"
+grep -qE 'ENQUEUED ([2-9]|[1-9][0-9])/\1' <<<"$out" && ok "apply enqueues one upsert per ruling (all of them)" || fail "apply: $out"
+grep -q 'Grace-lane reactivation goes through a fresh checkout' <<<"$out" && ok "a RESOLVED heading's title survives its date's dashes" || fail "title: $out"
+dry="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
+grep -q 'Two SHALLs fire on undefined conditions' <<<"$dry" && ok "a struck-through heading with a trailing stamp is a ruling" || fail "struck: $dry"
+grep -q 'Spec v3 SHIPPED: PR open for review' <<<"$dry" && ok "a [superseded]-tagged heading is a ruling, tag and date stripped" || fail "tagged: $dry"
+grep -q 'Still open: the pricing anchor' <<<"$dry" && fail "an open heading was extracted as a ruling" || ok "an open heading is not a ruling"
+expect_rc 0 "drain the rulings" $MEM knowledge drain --root "$T"
+ls "$T"/knowledge/rulings/*.md | grep -q 'grace-lane' && ok "inbox ruling became a concept (no queue cited as source)" || fail "ruling concept missing"
+grep -q 'resource: docs/adr/ADR-001-postgres-direct.md' "$T"/knowledge/rulings/adr-001*.md && ok "ADR ruling cites the ADR file as its source" || fail "ADR source missing"
+expect_rc 0 "bundle still conformant after rulings" $MEM knowledge verify --root "$T"
+
+echo "== ticks ledger and metrics"
+[ -f "$T/state/ticks.jsonl" ] && grep -q '"event": "stage"' "$T/state/ticks.jsonl" && ok "loop-next recorded stage events" || fail "no stage events in ticks.jsonl"
+grep -q '"event": "gate"' "$T/state/ticks.jsonl" && grep -q '"result": "PASS"' "$T/state/ticks.jsonl" && ok "stop gate recorded PASS and FAIL verdicts" || fail "no gate events"
+grep -q '"event": "transition"' "$T/state/ticks.jsonl" && grep -q '"status": "spec-draft"' "$T/state/ticks.jsonl" && ok "triage update recorded the transition" || fail "no transition events"
+out="$(python3 "$P/scripts/loop-metrics.py" --root "$T")"
+grep -q '^  ticks' <<<"$out" && grep -q 'gate_pass_rate' <<<"$out" && grep -q 'n=' <<<"$out" && ok "loop-metrics prints every figure with its n=" || fail "metrics: $out"
+out="$(python3 "$P/scripts/loop-metrics.py" --root "$B" 2>/dev/null || CLAUDE_PROJECT_DIR="$(mktemp -d)" python3 "$P/scripts/loop-metrics.py")"
+grep -q 'n=0' <<<"$out" && ok "metrics on an empty ledger say n=0, never a number" || fail "empty metrics: $out"
+
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.

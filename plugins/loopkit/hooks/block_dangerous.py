@@ -100,17 +100,47 @@ def _read_list(path: Path) -> list[str]:
     return [l.strip() for l in lines if l.strip() and not l.strip().startswith("#")]
 
 
+def _read_named(path: Path) -> list[tuple[str, str]]:
+    """Extras with optional names: a `#name <name>` comment line right above a
+    regex names it, so a block can say which RULING it enforces and
+    rulings-compile.py can prove the ruling has a gate. Unnamed extras are
+    `project-N` in file order."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    out: list[tuple[str, str]] = []
+    pending: str | None = None
+    n = 0
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        m = re.match(r"^#\s*name\s+(\S+)", line)
+        if m:
+            pending = m.group(1)
+            continue
+        if line.startswith("#"):
+            continue
+        n += 1
+        out.append((pending or f"project-{n}", line))
+        pending = None
+    return out
+
+
 def active_patterns(root: Path | None = None) -> list[tuple[str, str]]:
     """Built-ins minus the project's disabled names, plus the project's extras."""
     root = root or project_root()
     disabled = set(_read_list(root / ".loopkit" / "block-disabled.txt"))
     patterns = [(n, p) for n, p in BUILTIN_PATTERNS if n not in disabled]
-    for i, extra in enumerate(_read_list(root / ".loopkit" / "block-patterns.txt")):
+    for name, extra in _read_named(root / ".loopkit" / "block-patterns.txt"):
+        if name in disabled:
+            continue
         try:
             re.compile(extra)
         except re.error:
             continue  # a broken extra pattern must not disable the whole gate
-        patterns.append((f"project-{i + 1}", extra))
+        patterns.append((name, extra))
     return patterns
 
 
@@ -151,8 +181,9 @@ if __name__ == "__main__":
         hit = None  # a crash is an allow; say nothing rather than lie
     if hit:
         # Exit 2 is the ONLY code Claude Code treats as "block this tool call".
+        ruling = "" if hit.startswith("project-") or hit in {n for n, _ in BUILTIN_PATTERNS} else f" ruling: {hit}"
         print(
-            f"BLOCKED [{hit}]: dangerous command pattern detected: {cmd}\n"
+            f"BLOCKED [{hit}]:{ruling} dangerous command pattern detected: {cmd}\n"
             "If this is a false positive, name the pattern in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
             "the command around the guard.",
