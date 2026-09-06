@@ -1,0 +1,9 @@
+out/
+_apalache-out/
+states/
+*.json
+violation*.tla
+counterexample*.tla
+*_TTrace_*.tla
+MC.out
+*.itf.json

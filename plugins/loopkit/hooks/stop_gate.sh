@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# stop_gate.sh — the deterministic gate before "done" is allowed.
+#
+# Wired as a Stop hook. Precheck, tests, lint, typecheck and build must pass; a
+# non-zero exit here REJECTS the stop and the model keeps working. "Runs" is
+# not "right", and a model's own claim that the tests pass is not evidence.
+#
+# Every command is configurable per project, through the environment or
+# <project>/.loopkit/config.env (sourced below). Set a variable to the EMPTY
+# string to skip that step: `${VAR-default}` keeps an explicit empty, only an
+# unset variable takes the default.
+#
+#   LOOP_PRECHECK_CMD       optional, runs first (e.g. a dependency-closure check)
+#   LOOP_TEST_CMD           default: npm test
+#   LOOP_LINT_CMD           default: npm run lint
+#   LOOP_LINT_FALLBACK_CMD  lint only the changed files when the full lint fails
+#                           (default: npx eslint --max-warnings=0); empty = none
+#   LOOP_TYPECHECK_CMD      default: npx tsc --noEmit
+#   LOOP_BUILD_CMD          default: npm run build
+#   LOOP_ENV_WRAPPER        prefix for every command, e.g.
+#                           "doppler run --project p --config c --"
+#   LOOP_CODE_GLOBS         which files count as code (default below)
+#   LOOP_FORCE_GATE=1       run the gate even when no code file changed
+#
+# Tests prefer the regression diff (scripts/test-regressions.sh) over a raw
+# suite run whenever state/known-test-failures.txt exists: a suite that carries
+# known failures can never pass, and a gate that can never pass gets switched
+# off, which is worse than a gate that tolerates a committed baseline.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+cd "$ROOT"
+
+if [[ -f "$ROOT/.loopkit/config.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ROOT/.loopkit/config.env"
+    set +a
+fi
+
+LOOP_PRECHECK_CMD="${LOOP_PRECHECK_CMD-}"
+LOOP_TEST_CMD="${LOOP_TEST_CMD-npm test}"
+LOOP_LINT_CMD="${LOOP_LINT_CMD-npm run lint}"
+LOOP_LINT_FALLBACK_CMD="${LOOP_LINT_FALLBACK_CMD-npx eslint --max-warnings=0}"
+LOOP_TYPECHECK_CMD="${LOOP_TYPECHECK_CMD-npx tsc --noEmit}"
+LOOP_BUILD_CMD="${LOOP_BUILD_CMD-npm run build}"
+LOOP_ENV_WRAPPER="${LOOP_ENV_WRAPPER-}"
+LOOP_CODE_GLOBS="${LOOP_CODE_GLOBS-*.js *.jsx *.ts *.tsx *.mjs *.cjs *.py *.go *.rs *.java *.rb *.kt *.swift}"
+read -r -a CODE_GLOBS <<< "$LOOP_CODE_GLOBS"
+
+# Plain `bash -c`, never `bash -lc`: a login shell re-sources the profile and
+# can reset PATH to a system runtime, silently discarding the caller's — that
+# is how a gate once ran a whole suite on the wrong Node for weeks.
+run_in_env() {
+    local command="$1"
+    if [[ -n "$LOOP_ENV_WRAPPER" ]]; then
+        local -a wrapper
+        read -r -a wrapper <<< "$LOOP_ENV_WRAPPER"
+        "${wrapper[@]}" bash -c "$command"
+        return
+    fi
+    bash -c "$command"
+}
+
+# Tracked-modified OR untracked code files. Harness and plugin config never
+# count. `grep -v` exits 1 when it filters everything, which under pipefail
+# would abort the script — `|| true` makes "no files" a normal empty result.
+collect_changed_code_files() {
+    {
+        git diff --name-only --diff-filter=ACMRTUXB HEAD -- "${CODE_GLOBS[@]}" 2>/dev/null
+        git ls-files --others --exclude-standard -- "${CODE_GLOBS[@]}"
+    } | awk 'NF' | { grep -vE '^(\.claude|\.loopkit)/' || true; } | sort -u
+}
+
+run_lint_fallback() {
+    [[ -n "$LOOP_LINT_FALLBACK_CMD" ]] || return 1
+    local -a changed=()
+    local f
+    while IFS= read -r f; do changed+=("$f"); done < <(collect_changed_code_files)
+    if [[ ${#changed[@]} -eq 0 ]]; then
+        echo "FAIL: lint failed and there are no changed code files for the fallback"
+        return 1
+    fi
+    local quoted=""
+    for f in "${changed[@]}"; do quoted+=" $(printf '%q' "$f")"; done
+    echo ">> Lint fallback on changed files:${quoted}"
+    run_in_env "$LOOP_LINT_FALLBACK_CMD$quoted"
+}
+
+step() {  # <label> <command>
+    local label="$1" command="$2"
+    if [[ -z "$command" ]]; then
+        echo ">> $label: skipped (command set to empty)"
+        return 0
+    fi
+    echo ">> $label: $command"
+    if ! run_in_env "$command"; then
+        echo "FAIL: $label failed"
+        exit 1
+    fi
+}
+
+echo ">> stop_gate: running checks before 'done' is allowed"
+
+# --- Short-circuit on no-op turns -------------------------------------------
+# The gate verifies CODE changes. A turn that only touched state/, docs, specs
+# or the harness has nothing to test, lint, typecheck or build; running the
+# full gate there produces false failures and blocks a clean stop.
+if [[ "${LOOP_FORCE_GATE:-0}" != "1" ]]; then
+    if [[ -z "$(collect_changed_code_files)" ]]; then
+        echo ">> SKIP: no changed code files — nothing to verify (conversational/infra turn)."
+        echo ">> PASS: gate short-circuited. 'done' condition satisfied."
+        exit 0
+    fi
+fi
+# ---------------------------------------------------------------------------
+
+step "Precheck" "$LOOP_PRECHECK_CMD"
+
+echo ">> Testing..."
+REGRESSIONS_SCRIPT="$PLUGIN_ROOT/scripts/test-regressions.sh"
+KNOWN_FAILURES_BASELINE="$ROOT/state/known-test-failures.txt"
+if [[ -f "$REGRESSIONS_SCRIPT" && -f "$KNOWN_FAILURES_BASELINE" ]]; then
+    if ! bash "$REGRESSIONS_SCRIPT"; then
+        echo "FAIL: new test failures vs state/known-test-failures.txt"
+        exit 1
+    fi
+elif [[ -z "$LOOP_TEST_CMD" ]]; then
+    echo ">> Testing: skipped (LOOP_TEST_CMD set to empty)"
+elif ! run_in_env "$LOOP_TEST_CMD"; then
+    echo "FAIL: test suite failed"
+    exit 1
+fi
+
+if [[ -z "$LOOP_LINT_CMD" ]]; then
+    echo ">> Linting: skipped (LOOP_LINT_CMD set to empty)"
+else
+    echo ">> Linting: $LOOP_LINT_CMD"
+    if ! run_in_env "$LOOP_LINT_CMD"; then
+        echo ">> Primary lint failed; trying the fallback on changed files"
+        if ! run_lint_fallback; then
+            echo "FAIL: lint failed"
+            exit 1
+        fi
+    fi
+fi
+
+step "Type checking" "$LOOP_TYPECHECK_CMD"
+step "Building" "$LOOP_BUILD_CMD"
+
+echo ">> PASS: all gates passed. 'done' condition satisfied."
+exit 0

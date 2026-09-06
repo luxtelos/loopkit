@@ -1,0 +1,22 @@
+{
+  "name": "loopkit",
+  "description": "LoopKit — the finishing harness for Claude Code.",
+  "owner": {
+    "name": "Akul",
+    "url": "https://github.com/codecakes"
+  },
+  "metadata": {
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "loopkit",
+      "source": "./plugins/loopkit",
+      "description": "State-file memory, lookup-driven ticks, blocking hooks, a stop gate, an escalation door, a regression diff with a baseline, and a model-checking driver — everything that makes Claude finish work end to end.",
+      "version": "0.1.0",
+      "category": "workflow",
+      "tags": ["loop", "harness", "hooks", "triage", "stop-gate", "model-checking"],
+      "license": "MIT"
+    }
+  ]
+}

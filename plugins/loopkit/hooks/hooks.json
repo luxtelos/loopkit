@@ -1,0 +1,90 @@
+{
+  "$comment": "LoopKit hook wiring. Every command hook is deterministic and fail-open except the three that are meant to block: require_contracts (gate), block_dangerous, protect_governance, and the Stop gate. Exit 2 blocks; anything else allows.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/loop_doctrine.py\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_contracts.py\" gate"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/block_dangerous.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/protect_governance.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/notify_needs_human.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_contracts.py\" mark"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop_gate.sh\"",
+            "timeout": 1800
+          },
+          {
+            "type": "agent",
+            "prompt": "FIRST run `git diff --name-only HEAD` and `git ls-files --others --exclude-standard`, and keep only source-code files (ignore paths under .claude/, .loopkit/, state/, inbox/, docs/ and any Markdown). If there is NO changed code file, this is a conversational/setup turn with nothing to verify — return PASS immediately with the note 'no code change to review'. Otherwise run the loopkit:acceptance-review skill against specs/ for THE CHANGES JUST MADE IN THIS TURN ONLY. SCOPE RULE: verify only work the user's current mandate asked for. Untracked files, triage rows or inbox items created by OTHER sessions are NOT this turn's scope — do NOT demand specs or tests for them and do NOT let their absence block PASS; if you notice such orphaned work, note it as an inbox/ item and move on. NEVER instruct that unrelated work be committed, spec'd or folded into the current branch to satisfy this gate. Verify by acting (execute, run tests, drive the UI if there is one). Return PASS only if every EARS acceptance criterion FOR THIS TURN'S CHANGES holds with evidence; otherwise REJECT with reasons scoped to this turn's changes. $ARGUMENTS",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}

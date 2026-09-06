@@ -1,0 +1,10 @@
+# .loopkit/block-disabled.txt — built-in block_dangerous.py patterns to switch
+# OFF for this project, one name per line. A reviewed change, not a workaround.
+#
+# Built-in names: rm-recursive-force rm-recursive-force-long git-force-push
+# git-push-delete git-reset-hard git-rebase git-filter-branch git-commit-amend
+# sql-drop-table sql-delete-where sql-truncate git-add-tool-cache git-add-force
+# git-add-all gh-pr-merge gh-pr-approve gh-api-merge
+#
+# Disabling gh-pr-merge or gh-pr-approve removes the loop's separation of
+# powers. Do not.

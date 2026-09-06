@@ -1,0 +1,33 @@
+{
+  "skill_name": "loopkit:loop-assess",
+  "evals": [
+    {
+      "id": 0,
+      "name": "green-ci-wrong-behaviour",
+      "prompt": "A teammate flagged this on standup. On the plan-change PR they say they can't upgrade or downgrade as a paid user. They checked the browser network tab and the upgrade response comes back true, and it does land at the payment provider, but when they look in the DB the row is unchanged. Because the DB never updates, the frontend just polls GET /usage forever. Our billing integration suite is green. Can you take this and get it moving?",
+      "expected_output": "Classifies as measurement (decision-adjacent) rather than jumping to a code spec. Questions whether the green suite actually executed, demands a baseline (which environment, exact count, read-back from the DB), names a control case, and surfaces that the real blocker is nobody holding both provider-dashboard and DB access. Does NOT produce EARS criteria or start writing a fix.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "decision-not-code",
+      "prompt": "We ran the free-tier backfill and 13 accounts got seeded fine but 5 are held back. The tier resolver picks the right tier for them, the problem is what status to write. If we write 'active' for an assigned-but-unbilled account it satisfies the FK but then checkout's duplicate guard sees an active subscription and refuses, so the account can never actually pay us. Please sort out the backfill for those 5.",
+      "expected_output": "Classifies as a decision-layer finding and routes to inbox/needs-human.md with the whole context and the cost of BOTH options stated, rather than picking a status and writing the backfill. Checks first whether the owner has already ruled. Does not produce a spec or code.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "instruction-file-audit",
+      "prompt": "our CLAUDE.md has gotten pretty long and honestly i'm not sure the agents are following all of it anymore. can you go through it and tighten it up?",
+      "expected_output": "Enters Mode B. Measures the standing-instruction load with the grep command and reports it against the ~150-200 ceiling. Insists on naming one specific failure before rewriting, changes one thing per version, and names a control case. Prefers deletion over rewording. Does not silently produce a wholesale rewrite.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "already-ruled",
+      "prompt": "The grace-lane reactivation row is still blocked — should I escalate to the owner again for the pricing anchor decision?",
+      "expected_output": "Looks in inbox/needs-human.md, the ticket thread and state/ for an existing ruling BEFORE escalating. If one exists, applies it and moves the row; if not, escalates with the whole context and both options costed. Never re-asks a settled question.",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+
+# Model-checker litter (every engine writes next to the spec)
+out/
+_apalache-out/
+states/
+violation*
+counterexample*
+MC.*
+*_TTrace_*
+*.model.json
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local scratch
+/tmp/

@@ -1,0 +1,72 @@
+# role-change-saga-buggy.fizz — the shipped bug, as a model.
+#
+# This is commit a528111b ("guards must run BEFORE the authoritative write")
+# reduced to its state machine. Expected verdict: VIOLATION.
+#
+# The system: PATCH /api/iam/users changes a user's coarse role. There are
+# TWO stores and only one of them is believed at login:
+#   descope[u]  — Descope's coarse role. Authoritative. Login adopts it.
+#   db[u]       — the firm's role_assignments row.
+# The guard assertNotLastAdmin is supposed to reject a change that would
+# leave the firm with no admin.
+#
+# The bug is pure ordering: the route wrote Descope, THEN ran the guard.
+# The guard fired, the route returned 422 "Cannot remove last admin", and
+# the last admin was removed anyway — at the victim's next login, because
+# by then Descope said accountant and Descope is believed.
+
+---
+deadlock_detection: false
+---
+
+USERS = ["u1", "u2"]
+
+action Init:
+    descope = {"u1": "admin", "u2": "accountant"}
+    db = {"u1": "admin", "u2": "accountant"}
+    last_status = 0
+
+atomic func keeps_an_admin(target, new_role):
+    remaining = 0
+    for u in USERS:
+        r = db[u]
+        if u == target:
+            r = new_role
+        if r == "admin":
+            remaining = remaining + 1
+    return remaining >= 1
+
+# The route as it shipped: authoritative write first, guard second.
+atomic action PatchRole:
+    target = oneof USERS
+    new_role = oneof ["admin", "accountant"]
+
+    descope[target] = new_role          # <-- the authoritative write
+
+    ok = keeps_an_admin(target, new_role)
+    if not ok:
+        last_status = 422               # "Cannot remove last admin"
+        return                          # ...and yet it was removed
+
+    db[target] = new_role
+    last_status = 200
+
+# The victim logs in. Descope is believed, so the DB row is reconciled to it.
+atomic action Login:
+    who = oneof USERS
+    db[who] = descope[who]
+
+always assertion FirmKeepsAnAdmin:
+    for u in USERS:
+        if db[u] == "admin":
+            return True
+    return False
+
+# The rule the route actually broke, stated directly: a rejected request
+# must write nothing. Violates at depth 1 in the buggy model — one step,
+# no Login needed — which is a sharper witness than waiting for the admin
+# count to hit zero.
+always assertion RejectionWritesNothing:
+    if last_status == 422:
+        return descope == db
+    return True
