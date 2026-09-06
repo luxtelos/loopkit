@@ -1,5 +1,77 @@
 # Changelog
 
+## Unreleased
+
+- `hooks/offload_rewrite.py` — PreToolUse on Bash returns
+  `hookSpecificOutput.updatedInput` (hooks reference, "Decision control") for
+  a command matching a line of `.loopkit/offload-patterns.txt`: it runs as
+  `bash <plugin>/scripts/run-capped.sh -- '<original>'`, full output to
+  `.loopkit/scratch/`, head+tail in context, one `offload_rewrite` metrics
+  event. Passive without the file (init lays down a comment-only one); never
+  a permission decision; unchanged when already wrapped, on a heredoc, on a
+  newline, and on any error. The commerce profile adds one pattern (payments
+  CLI `… list`).
+- `scripts/run-capped.sh` — one word after `--` is a shell string and runs
+  under `bash -o pipefail -c`, so the hook's single-quoted form keeps the
+  exit code (`'false | true'` → 1). Several words are still an argv.
+- `scripts/judge.py` — the pairwise judge discipline as a script
+  (`specs/pairwise-judge-verdicts.md`): `claude -p --output-format json`
+  twice per criterion with positions swapped; the two runs disagreeing is
+  `FINAL: TIE confidence 0.5`, agreeing is that verdict with the confidence
+  clamped to [0.5, 1.0]; `--judge` equal to `--generator` exits 3 with no
+  verdict. The prompt is built from judge.md's Rules section at run time —
+  the script carries no rule text. One block per `--criterion` in judge.md's
+  output shape, raw responses under `state/judge/<ts>-<pid>.json`, one
+  `judge` event (final, confidence) in `state/ticks.jsonl`. Selftest pins
+  it with a stub `claude`, as fan-out is pinned; `judge.md` and `/doctor`
+  point at it.
+
+## 0.2.0-alpha.4 — 2026-09-06 (batch d: profiles, fan-out, the override counter)
+
+- `loopkit-init.sh --profile commerce` — templates and checks for a project
+  built on Anthropic's commerce-agents blueprint, never a product: named block
+  patterns (`no-live-keys`, `no-live-mode-flag`, `no-payout-refund-capture-from-shell`,
+  `no-ledger-deletes`), protected `pricing/`/`catalog/`/`policies/`, recall
+  triggers on checkout/refund/pricing code, EARS constraints appended to
+  `constitution.md`, a snapshot-eval template, `check-snapshot.py` (end state,
+  never path), and the `commerce-review` skill with its six-line checklist.
+  Marker-guarded; a second run is a no-op.
+- `scripts/fanout.sh` — one headless `claude -p` per brief, each in its own
+  worktree, tools and turns scoped, one JSON result per brief, worktrees
+  removed, nothing merged. `templates/brief.md` is the shape.
+- The stop gate counts consecutive blocks per session: the seventh says the
+  eighth will be overridden by Claude Code and records
+  `gate_override_imminent`; a PASS resets. Stdin is read once, bounded.
+- `docs/research/watchlist.md` — ads, ACP, AP2, GEO and the DeepSeek
+  subagent packages: what is published (nothing, or ad-free), what is claimed,
+  when to look again. Research only, by owner ruling.
+- Deferred, stated plainly: a `claude -p` judge runner and PreToolUse
+  `updatedInput` offload need live semantics not yet verified here.
+
+## 0.2.0-alpha.3 — 2026-09-06 (batch c: OKF and the knowledge layer)
+
+The thesis becomes testable: a project's rulings, traps and invariants as
+typed, drift-checked concepts that a tick reads before acting and a check can
+prove are enforced.
+
+- `loopkit_memory/vendor/` — `okf_bundle.py` and `knowledge_actor.py`
+  vendored verbatim (stdlib, deterministic mailbox actor, exit-code contract)
+  with provenance headers; `loopkit_memory/okf.py` wraps them; a mutable
+  queue is refused as a source at enqueue.
+- `memory.py knowledge init|status|search|get|enqueue|drain|verify|reindex|scan-drift`;
+  `recall` now spans notes AND concepts. `init` seeds ten loop-doctrine
+  concepts citing the project's own constitution and contracts; three carry
+  `enforced_by`.
+- K1 `rulings-extract.py` — RESOLVED inbox sections, ADR decisions, ruled
+  lines → one upsert each (dry run by default). K2 `ticks.py` +
+  `loop-metrics.py` — stage, gate, transition events; verified-success,
+  gate pass rate, re-asks, blocked rows, each with `n=`. K3
+  `rulings-compile.py` — every Invariant/Gate names an artefact that exists;
+  named extra block patterns (`#name`) carry `ruling:` in the BLOCKED line.
+  K4 the tick doctrine injects the lane's Traps. K5 `knowledge` is a
+  loop-assess layer.
+- `protect_governance` guards the bundle once enabled (`KNOWLEDGE_EDIT_OK=1`).
+
 ## 0.2.0-alpha.2 — 2026-09-06 (batch b: memory adapters)
 
 Memory as pluggable adapters instead of RAG, and the recall gate that makes

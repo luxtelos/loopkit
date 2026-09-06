@@ -263,6 +263,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _record_transition(state: Path, source: str, status: str | None) -> None:
+    """Append to state/ticks.jsonl beside the state file. Never raises."""
+    if not status:
+        return
+    try:
+        import importlib.util
+        here = Path(__file__).resolve().parent
+        spec = importlib.util.spec_from_file_location("ticks", here / "ticks.py")
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        root = state.resolve().parent.parent if state.resolve().parent.name == "state" else state.resolve().parent
+        mod.append(root, "transition", source=source, status=status)
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -286,6 +301,9 @@ def main() -> int:
             return 0
 
         if args.command == "update":
+
+
+            _record_transition(Path(args.state), args.source, args.status)
             update_row(
                 state_path,
                 source=args.source,

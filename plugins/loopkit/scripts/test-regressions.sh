@@ -37,7 +37,12 @@ cd "$ROOT"
 if [[ -f "$ROOT/.loopkit/config.env" ]]; then set -a; . "$ROOT/.loopkit/config.env"; set +a; fi
 
 BASELINE="${LOOP_TEST_BASELINE:-$ROOT/state/known-test-failures.txt}"
-LOOP_TEST_JSON_CMD="${LOOP_TEST_JSON_CMD-npx vitest run --reporter=json --outputFile={report}}"
+# The default lives in its own variable: a `}` inside a ${VAR-default}
+# closes the expansion at the first brace, so any SET value got a literal
+# `}` appended (and the default only survived because `{report` + `}`
+# happened to reassemble). Found by the placeholder pin.
+DEFAULT_JSON_CMD='npx vitest run --reporter=json --outputFile={report}'
+LOOP_TEST_JSON_CMD="${LOOP_TEST_JSON_CMD-$DEFAULT_JSON_CMD}"
 LOOP_ENV_WRAPPER="${LOOP_ENV_WRAPPER-}"
 LOOP_MIN_NODE="${LOOP_MIN_NODE-}"
 
@@ -91,7 +96,11 @@ else
         # Honour TMPDIR explicitly (BSD mktemp -t ignores it) and keep the X's
         # trailing (BSD mktemp does not substitute infix X's).
         JSON_REPORT="$(mktemp "${TMPDIR:-/tmp}/test-report.json.XXXXXX")"
-        cmd="${LOOP_TEST_JSON_CMD//\{report\}/$(printf '%q' "$JSON_REPORT")}"
+        # The placeholder lives in a variable: an escaped brace inside the
+        # pattern of a ${var//pat/rep} expansion closes the expansion early,
+        # and the report path came out with a trailing `}` for weeks.
+        placeholder='{report}'
+        cmd="${LOOP_TEST_JSON_CMD//"$placeholder"/$(printf '%q' "$JSON_REPORT")}"
         echo ">> Running the suite once (JSON report: $JSON_REPORT)"
         echo ">> $cmd"
         # The runner exits non-zero when any test fails — expected; the diff decides.

@@ -28,11 +28,25 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-tools.py" --plugin "${CLAUDE_PLUGIN
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/check-duplicate-hooks.py" --plugin "${CLAUDE_PLUGIN_ROOT}"
 ```
 
+Knowledge and the loop's numbers (n=0 is an honest answer; a bundle is optional):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memory.py" status --line
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/rulings-compile.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/loop-metrics.py"
+```
+
 Session memory (what the last gate recorded, and what a compaction would carry):
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/progress.py" last --n 3
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/progress.py" files-modified --limit 8
+```
+
+The judge runner reads its six rules from judge.md at run time (no `claude` call here; six numbered lines is ok):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/judge.py" --print-rules | grep -c '^[1-6]\. '
 ```
 
 ```bash

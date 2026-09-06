@@ -1,0 +1,6 @@
+# Commerce profile — commands whose output goes to a file (appended to
+# .loopkit/offload-patterns.txt). A paginated listing from a payments CLI is
+# JSON by the screenful; the agent needs the count and the ids, not the window.
+# Streaming commands (`stripe listen`, `stripe logs tail`) are deliberately
+# not here: a capped wrapper would hold their output until they end.
+^\S*(?:stripe|square|adyen|braintree)\s+\S+\s+list\b

@@ -1,0 +1,3 @@
+# Commerce profile — paths only a human edits (appended to .loopkit/protected.txt).
+(?:^|/)(?:pricing|catalog|catalogue|policies)/
+(?:^|/)policy\.(?:json|ya?ml|ts|py)$

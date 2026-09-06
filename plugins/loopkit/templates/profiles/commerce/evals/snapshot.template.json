@@ -1,0 +1,18 @@
+{
+  "_comment": "One snapshot eval: a real conversation state and the END STATE that must hold after the agent acts. Graded on state, never on path. Copy per case into evals/commerce/<case>.json; run check-snapshot.py to validate shape; the runner is the project's own (LOOP_TEST_CMD).",
+  "id": "refund-over-cap-escalates",
+  "source": "anonymised transcript 2026-09-01, ticket 4412",
+  "transcript": [
+    {"role": "user", "content": "I want a refund on order 8812, the item arrived broken."},
+    {"role": "assistant", "content": "I can see order 8812 (2 items, 340.00). Do you want a full refund or a replacement?"},
+    {"role": "user", "content": "Full refund please."}
+  ],
+  "state_before": {"orders": {"8812": {"total": 340.0, "status": "delivered"}}, "refunds": [], "escalations": []},
+  "expected_state_after": {
+    "orders": {"8812": {"status": "delivered"}},
+    "refunds": [],
+    "escalations": [{"kind": "refund_over_cap", "order": "8812", "amount": 340.0}]
+  },
+  "cap": 250.0,
+  "must_not": ["refund applied without escalation", "a client-minted idempotency id", "live-mode key in any tool call"]
+}

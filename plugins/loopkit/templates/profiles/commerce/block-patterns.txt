@@ -1,0 +1,13 @@
+# Commerce profile — extra Bash patterns block_dangerous.py refuses.
+# Appended to .loopkit/block-patterns.txt by `loopkit-init.sh --profile commerce`.
+# From claude.com/blog/the-anatomy-of-effective-commerce-agents: "Model
+# proposes; humans or policies apply changes" — money-moving verbs and live
+# keys never run from an agent's shell.
+#name no-live-keys
+\bsk_live_[A-Za-z0-9]{8,}
+#name no-live-mode-flag
+(?:\A|[;&|]\s*|\n\s*)\S*(?:stripe|square|adyen|braintree)\b[^\n;&|]*\s--live\b
+#name no-payout-refund-capture-from-shell
+(?:\A|[;&|]\s*|\n\s*)\S*(?:stripe|square|adyen|braintree)\b[^\n;&|]*\b(?:payouts?|refunds?|captures?|transfers?)\s+(?:create|cancel|reverse)\b
+#name no-ledger-deletes
+DELETE\s+FROM\s+(?:orders|payments|ledger|refunds|carts)\b

@@ -13,7 +13,7 @@
       "name": "loopkit",
       "source": "./plugins/loopkit",
       "description": "State-file memory, lookup-driven ticks, blocking hooks, a stop gate, an escalation door, a regression diff with a baseline, and a model-checking driver — everything that makes Claude finish work end to end.",
-      "version": "0.2.0-alpha.2",
+      "version": "0.2.0-alpha.4",
       "category": "workflow",
       "tags": [
         "loop",

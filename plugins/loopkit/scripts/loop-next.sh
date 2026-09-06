@@ -79,6 +79,7 @@ else                          S="discover";   A="no actionable rows. Run morning
 fi
 
 echo "STAGE: $S"
+python3 "$HERE/ticks.py" append --root "$ROOT" --event stage --k "stage=$S" --k "scope=${SCOPE:-}" >/dev/null 2>&1 || true
 if [ "$S" != "discover" ]; then
   T="$(first_of "$S")"
   echo "TARGET: ${T:0:110}"
@@ -88,6 +89,16 @@ if [ "$S" != "discover" ]; then
   printf '%s' "$SUMMARY" | awk -F'\t' -v s="target:$S" '$1==s{printf "TARGETS: %s  [source: %s]\n", substr($2,1,100), $3}'
 fi
 echo "ACTION: $A"
+# Sleep only when something OUTSIDE the loop must move first. A tick that ends
+# with rows still actionable continues immediately; a wakeup timer is for a PR
+# in review, a CI run or a human ruling — never for work the loop could do now.
+if [ "$S" != "discover" ]; then
+  echo "NEXT: CONTINUE — after this stage there is still work here; run the next tick NOW. Do not schedule a wakeup; nothing external is being waited on."
+elif [ "${N_PR:-0}" -gt 0 ] || [ -n "${N_BLOCKED:-}" ]; then
+  echo "NEXT: WAIT — nothing here can move without an outside event (PR review / CI / a human ruling on ${N_BLOCKED:-0} blocked row(s)). A wakeup is appropriate: 30 min working hours, 60 otherwise."
+else
+  echo "NEXT: IDLE — no rows and nothing in flight. Run morning-triage now; a wakeup here would sleep on an empty queue."
+fi
 echo "RULE: advance exactly ONE stage this tick — for EVERY row listed under TARGETS,"
 echo "      in parallel worktrees — then update each row via"
 echo "      python3 $HERE/triage_state.py update --state $STATE --source <row source> --status <s>, and stop."
