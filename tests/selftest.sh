@@ -457,6 +457,32 @@ grep -q -- '--max-turns 3 --allowedTools Read,Grep' "$T/state/fanout/selftest/tw
 [ -z "$(git -C "$T" worktree list | grep fanout-selftest || true)" ] && ok "fan-out worktrees removed" || fail "worktrees left behind"
 grep -q 'nothing was merged' <<<"$out" && ok "fan-out says it merged nothing" || fail "fanout merge line"
 
+# --- criterion 33: prompt bytes per tick, against a real ceiling ------------
+# The brief is the only free-text instruction a Run carries, so the bytes on a
+# brief's stdin ARE that tick's prompt budget. Criterion 33 named this check
+# before it existed: until 2026-09-07 the block above asserted only that
+# `brief_bytes` was PRESENT, never that it was under anything, so the spec
+# cited a ceiling no command applied. It is still a PROXY — a byte count
+# cannot tell prose from a serialised Concept, so it catches growth and misses
+# a smuggled instruction that stays under the cap — but a proxy that can fail.
+BRIEF_CEILING=8192
+brief_bytes_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["brief_bytes"])' "$1"; }
+over=0
+for r in "$T"/state/fanout/selftest/*.json; do
+  b="$(brief_bytes_of "$r")"
+  [ "$b" -le "$BRIEF_CEILING" ] || { over=$((over+1)); echo "   over: $(basename "$r") = $b bytes"; }
+done
+[ "$over" -eq 0 ] && ok "every brief is under the ${BRIEF_CEILING}-byte prompt ceiling (criterion 33)" || fail "$over brief(s) over the ${BRIEF_CEILING}-byte ceiling"
+
+# The control case, measured through the SAME path. Without it the assertion
+# above compares two ~40-byte briefs against 8192 and would pass however
+# broken the comparison was — a gate that cannot fail is not a gate.
+mkdir -p "$T/briefs-over"
+python3 -c 'import sys; sys.stdout.write("# oversized brief\n\n" + "x" * 9000 + "\n")' > "$T/briefs-over/big.md"
+(cd "$T" && PATH="$T/bin:$PATH" bash "$P/scripts/fanout.sh" --briefs "$T/briefs-over" --run-id ceiling --max-turns 1 --allowed-tools "Read") >/dev/null 2>&1
+big="$(brief_bytes_of "$T/state/fanout/ceiling/big.json")"
+[ "$big" -gt "$BRIEF_CEILING" ] && ok "the ceiling can fail: a ${big}-byte brief is measured as over ${BRIEF_CEILING}" || fail "control: oversized brief measured ${big}, not over ${BRIEF_CEILING}"
+
 echo "== judge with a stub claude (specs/pairwise-judge-verdicts.md)"
 J="$P/scripts/judge.py"; JD="$T/judge"; mkdir -p "$JD/bin"
 printf 'alpha: the fix that reads the file\n' > "$JD/a.txt"

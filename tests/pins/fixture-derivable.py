@@ -21,13 +21,23 @@ reimplementing it — `okf_bundle.trust_tier` and
 `knowledge_actor.validate_message` — so a fixture that disagrees with the
 runtime fails here rather than in a reviewer's head.
 
-WHAT IT DOES NOT CHECK. `messages` content is not derivable from `input`: what
-an agent proposes depends on the Provider, whose script the fixture does not
-carry. For `messages` this pin asserts only what the spec DOES determine —
-that every expected Message is one `validate_message` accepts. That limit is
-stated in spec/fixtures/README.md rule 6 rather than left for a reader to
-discover, because fixture 05 shipped asserting a Message the runtime was
-required to dead-letter.
+WHAT IT DOES NOT CHECK. TWO keys are not derivable from `input`, not one.
+
+`messages` content is not derivable: what an agent proposes depends on the
+Provider, whose script the fixture does not carry. For `messages` this pin
+asserts only what the spec DOES determine — that every expected Message is one
+`validate_message` accepts. That limit was stated from the start, because
+fixture 05 shipped asserting a Message the runtime was required to dead-letter.
+
+`targets` is not derivable either, and until 2026-09-07 this pin hid that: it
+carried a `targets_of()` that recomputed the key from a hand-written reading of
+a noun the specification never defines — no shape, no membership rule, no
+ordering, no cap. It agreed with the fixtures because both were written from
+the same unstated assumption, so the pin read as covering derivability and did
+not. That is the precise defect class this file exists to close, so the
+reimplementation is gone; see `targets_problems` for what is asserted instead
+and for the four sub-rules the spec still owes. Both limits are now named in
+spec/fixtures/README.md rule 6 rather than left for a reader to discover.
 
 usage: python3 tests/pins/fixture-derivable.py
 exit 0 = every fixture derives; exit 1 = at least one disagreement.
@@ -85,14 +95,63 @@ def decide(counts: dict) -> tuple[str, str]:
     return "discover", "IDLE"
 
 
-def targets_of(rows: list[dict], stage: str) -> list[dict]:
-    if stage == "discover":
-        return []
-    return [
-        {"stage": stage, "finding": r.get("finding", ""), "source": r.get("source", "")}
-        for r in rows
-        if str(r.get("status", "")).strip() == stage
-    ]
+def targets_problems(rows: list[dict], stage: str, targets: list[dict]) -> list[str]:
+    """`targets` is NOT derivable from the specification as written — see the
+    header and spec/fixtures/README.md rule 6. This function therefore asserts
+    only the properties the spec DOES state, and deliberately asserts nothing
+    about which rows qualify, in what order, or how many.
+
+    Stated, and checked here:
+      - criterion 5: a `pr-open` row is counted, never served — absent from `targets`.
+      - criterion 6: a `blocked` row is counted, never served — absent likewise.
+      - criterion 9: identity is `source`; one source is one row, so no two
+        targets may share one.
+      - §Edge cases: Stage `discover` serves no work, so `targets` is empty.
+      - a target names a real Queue row, and carries that row's own `finding`.
+
+    NOT stated, and NOT checked — this is the gap, not an oversight:
+      - MEMBERSHIP. `loop_next_pick.py` emits a `target:<stage>` line for every
+        one of the four work stages; `loop-next.sh` then awk-filters to the
+        selected stage alone. Both are defensible readings of one undefined
+        noun and they disagree: on fixture 01's queue the picker emits four
+        targets and the fixture asserts one. Reproduce with
+        `python3 -c "import json;print(json.dumps(json.load(open('spec/fixtures/01-stage-precedence.json'))['input']['queue']))" | python3 plugins/loopkit/scripts/loop_next_pick.py`
+      - ORDERING. File order unscoped, but `PRIORITY_RANK` order inside a lane.
+      - THE CAP. `loop_next_pick.MAX_FANOUT` is 8 and no fixture reaches it.
+      - LANE FILTERING. The picker's row scope is a substring match over terms
+        from `<project>/.loopkit/scopes.json`, a file no fixture carries, so a
+        scoped target set cannot be computed from `input` at all.
+
+    Until a Nouns row defines those four, a pin that computed `targets` would
+    be encoding one reading of an undefined noun and reporting it as
+    derivation. That is what this function did until 2026-09-07, and it is the
+    exact defect class this pin exists to close. The proposed normative wording
+    is in inbox/needs-human.md.
+    """
+    problems: list[str] = []
+    by_source = {str(r.get("source", "")): r for r in rows}
+    if stage == "discover" and targets:
+        problems.append(f"Stage is discover but {len(targets)} target(s) are served (§Edge cases)")
+    seen: set[str] = set()
+    for t in targets:
+        src = str(t.get("source", ""))
+        if src in seen:
+            problems.append(f"two targets share source {src!r} — identity is `source` (criterion 9)")
+        seen.add(src)
+        row = by_source.get(src)
+        if row is None:
+            problems.append(f"target {src!r} is not a Queue row")
+            continue
+        st = str(row.get("status", "")).strip()
+        if st == "pr-open":
+            problems.append(f"target {src!r} is a pr-open row — counted, never served (criterion 5)")
+        if st == "blocked":
+            problems.append(f"target {src!r} is a blocked row — counted, never served (criterion 6)")
+        if t.get("finding", "") != row.get("finding", ""):
+            problems.append(
+                f"target {src!r} says finding {t.get('finding')!r}, the Queue row says {row.get('finding')!r}"
+            )
+    return problems
 
 
 def steps_of(journal: list[dict]) -> tuple[dict, set]:
@@ -208,7 +267,14 @@ def main() -> int:
         if "counts" in exp:
             check(name, "counts", counts, exp["counts"])
         if "targets" in exp:
-            check(name, "targets", targets_of(rows, stage), exp["targets"])
+            probs = targets_problems(rows, stage, exp["targets"])
+            if probs:
+                fails.append(name)
+                for p in probs:
+                    print(f"  FAIL {name}: targets — {p}")
+            else:
+                print(f"  ok   {name}: targets satisfies criteria 5/6/9 "
+                      f"(membership, ordering and cap are NOT derivable — README rule 6)")
         if "events" in exp:
             check(name, "events", events_delta(run, inp["journal"], stage), exp["events"])
         if "provider_calls" in exp:

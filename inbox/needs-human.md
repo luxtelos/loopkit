@@ -130,3 +130,69 @@ This needs your ruling because both options cost something.
 There is a middle option: require the review only for changes under `specs/`,
 `hooks/` and `.github/`, and let everything else merge on the gate alone. That
 matches where today's defects actually were.
+
+## Proposed spec wording the loop could not apply itself (2026-09-07)
+
+Three gaps found by the PR #15 review are fixes to `specs/loopkit-runtime.md`.
+The loop could not make them. `protect_governance.py` guards `specs/` on Write,
+Edit and Bash, and its escape hatch reads `GOVERNANCE_EDIT_OK` from the **hook's
+own process environment** — so neither an inline `GOVERNANCE_EDIT_OK=1 cmd`
+prefix nor an `export` inside the command reaches it. The hook that fires is the
+installed plugin cache (`~/.claude/plugins/cache/loopkit/loopkit/0.2.1`), which
+predates the `INLINE_OVERRIDE` fix now on `main`. Two ways to unblock: reinstall
+the plugin from `main`, or export `GOVERNANCE_EDIT_OK=1` in the environment that
+launches the session. The guard behaved correctly; it is the documented hatch
+that does not work the documented way.
+
+The wording below is proposed, not applied. Everything outside `specs/` — the
+derivability pin, the fixtures README, and the criterion 33 ceiling — landed on
+`fix/spec-undefined-nouns`.
+
+**1 — `targets` has no definition (blocks the PR #15 verdict).** Asserted in
+fixtures 01, 04 and 05, defined nowhere. Add a Nouns row:
+
+> | **Targets** | The Queue rows a tick serves at the Stage it selected: every deduplicated row whose `status` equals the Stage, in Queue file order, capped at `loop_next_pick.MAX_FANOUT` (8). Empty when the Stage is `discover`. A target carries `stage`, `finding` and `source`; identity is `source`, so no two targets share one (criterion 9), and a `pr-open` or `blocked` row is never a target (criteria 5, 6). WHEN the Run is scoped to a lane, membership is restricted to rows whose `finding` or `source` contains one of that lane's terms in `<project>/.loopkit/scopes.json`, ordered by `loop_next_pick.PRIORITY_RANK` then file order; a lane matching zero rows falls back to the unscoped set. The cap is a dispatch limit, not a filter — Counts still reports the full Stage. | `loop_next_pick.pick` `target:` lines, filtered to the Stage by `loop-next.sh` |
+
+Two decisions are yours, because the shipped code answers them both ways:
+
+- **Membership.** `loop_next_pick.py` emits a `target:<stage>` line for *all
+  four* work stages; `loop-next.sh` awk-filters to the selected stage alone. On
+  fixture 01's queue the picker emits four targets and the fixture asserts one.
+  The row above takes the `loop-next.sh` reading, because that is the observable
+  contract and no fixture then changes. Taking the other reading means editing
+  three fixtures.
+- **Lane filtering is not computable from a fixture at all.** The picker's scope
+  terms come from `.loopkit/scopes.json`, which no fixture carries. Either add a
+  `input.policy.scope_terms` field to the fixture schema, or state that scoped
+  runs are out of the conformance contract.
+
+**2 — `result.status` is never enumerated.** Add after the §Journal semantics
+table:
+
+> `status` on a `result` Event is exactly one value: `ok`. Every other outcome is
+> a different Event KIND, not a different status — a Provider failure journals
+> `provider_error` and no `result` at all (criterion 24), and budget exhaustion
+> journals `budget_exhausted` and stops (criterion 20). A journaled `result`
+> therefore means the side effect completed; there is no failed `result`. An
+> outcome that is neither must add a value here or a row to the table above.
+
+Derived from the code, not invented: `ticks.py` takes arbitrary `--k key=value`
+and constrains nothing, `specs/loopkit-runtime.model.fizz` carries `result` as a
+0/1 flag with no vocabulary, and `ok` is the only value any fixture uses.
+
+**3 — criterion 33 is now TRUE as written and needs no edit.** It cited
+`tests/selftest.sh` asserting prompt bytes against a ceiling; that assertion did
+not exist — the suite only checked that `brief_bytes` was *present*. Rather than
+delete the claim, the check was built (8192 bytes per brief, with a control case
+that measures an oversized brief through the same path). Optional refinement
+only: name the ceiling value in the criterion so a reader need not open the
+suite.
+
+**4 — REQUIRED follow-up, introduced by this branch.** §Control case item 2 says
+the pin "recomputes `stage`, `next`, `counts`, `targets`, `events`,
+`provider_calls`, `enforceable` and `trust_tiers`". After this branch that is
+false for `targets`: the pin checks criteria 5/6/9 and §Edge cases against it and
+deliberately does not compute it. Strike `targets` from that list and add a
+sentence naming it beside `messages` as the second key the pin cannot derive.
+This inconsistency is the unavoidable cost of fixing the pin without being able
+to touch the spec, and it is a plain falsehood until item 1 lands.
