@@ -32,8 +32,8 @@ paper's one lesson. Sources in the README.
 
 ## 0.1.0 — 2026-09-06
 
-First public cut, extracted from a production accounting-OS repo and stripped
-of everything that named it.
+First public cut, extracted from a production financial OS systems and stripped
+of everything but core usage.
 
 - Hooks: `block_dangerous` (destructive floor + merge/approve/stage-all refusal,
   per-project extras and disables), `protect_governance` (absolute-path guard on
