@@ -98,6 +98,7 @@ plugins/loopkit/
   hooks/precompact.sh              five-section snapshot to .loopkit/session/ before every compaction; SessionStart resume|compact reads it back
   hooks/count_approvals.py         counts permission prompts, never decides one; the doctrine names approval fatigue past 30
   hooks/offload_nudge.py           a non-blocking line when a Bash result exceeds 8 KB, pointing at run-capped.sh
+  hooks/offload_rewrite.py         PreToolUse updatedInput: a Bash command matching .loopkit/offload-patterns.txt runs through run-capped.sh; passive without the file
   loopkit_memory/                  the memory registry (.loopkit/memory.json) and adapters: graph (codebase-memory CLI → grep),
                                    memory (mempalace CLI → notes on disk), knowledge (OKF, 0.2.0-c)
   scripts/loop-next.sh             which ONE stage is due (+ loop_next_pick.py: lanes, priority, blocked rows, fan-out)
@@ -117,7 +118,7 @@ plugins/loopkit/
   scripts/ticks.py                 the append-only event ledger those metrics read
   scripts/memory.py                status | recall | remember | invalidate | wakeup | graph …; --format concise by default
   scripts/progress.py              Files Modified from git; the append-only progress log; the compaction snapshot
-  scripts/run-capped.sh            run a command, full output to .loopkit/scratch/, head+tail in context
+  scripts/run-capped.sh            run a command (argv, or one shell string under pipefail), full output to .loopkit/scratch/, head+tail in context
   scripts/check-claude-md.py       the CLAUDE.md budget: standing instructions, one emphasised line, duplicates, derivable lines
   scripts/check-skills.py          frontmatter, Gotchas, run-vs-read verbs on every SKILL.md
   scripts/check-tools.py           no row no server, absolute paths, secret-looking literals, server count

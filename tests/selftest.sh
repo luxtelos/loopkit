@@ -478,12 +478,67 @@ grep -q 'consecutive block 1)' "$T/state/progress.md" && ok "the count restarted
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD LOOP_TEST_JSON_CMD
 [ -f "$REPO/docs/research/watchlist.md" ] && grep -q 'ad-free' "$REPO/docs/research/watchlist.md" && ok "research watchlist states what is published" || fail "watchlist"
 
+echo "== offload rewrite (PreToolUse updatedInput)"
+O="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-offload.XXXXXX")"
+mkdir -p "$O/.loopkit"
+rw() {  # <command> → the hook's stdout (updatedInput JSON, or nothing); its stderr in $O/rw.err
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" \
+    | CLAUDE_PROJECT_DIR="$O" python3 "$P/hooks/offload_rewrite.py" 2>"$O/rw.err"
+}
+newcmd() { python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["updatedInput"]["command"])'; }
+out="$(rw 'git status')"; [ -z "$out" ] && ok "absent pattern file: git status passes through unchanged" || fail "absent file rewrote: $out"
+n="$(grep -cvE '^[[:space:]]*(#|$)' "$P/templates/loopkit/offload-patterns.txt" || true)"
+[ "$n" = 0 ] && ok "the shipped template is comments only" || fail "template has $n active lines"
+cp "$P/templates/loopkit/offload-patterns.txt" "$O/.loopkit/offload-patterns.txt"
+out="$(rw 'git diff --stat')"; [ -z "$out" ] && ok "comment-only file: git diff --stat passes through unchanged" || fail "comment-only file rewrote: $out"
+printf '# noisy things\n(unclosed\n^printf\\b\n^false\\b\n^seq\\b\n' > "$O/.loopkit/offload-patterns.txt"
+rt="printf '%s|%s|%s\\n' \"it's\" '\"q\"' \"\$USER\" | tr a-z A-Z"
+raw="$(cd "$O" && bash -c "$rt")"
+grep -qF "IT'S|\"Q\"|" <<<"$raw" && ok "round-trip fixture carries ' \" \$ and |" || fail "fixture: $raw"
+out="$(rw "$rt")"; [ -n "$out" ] && ok "a matching command gets updatedInput" || fail "no updatedInput for a matching command"
+new="$(newcmd <<<"$out")"
+grep -qE "^bash '?[^ ]*run-capped\.sh'? -- '" <<<"$new" && ok "rewrite is bash <plugin>/scripts/run-capped.sh -- '<original>'" || fail "rewrite shape: $new"
+wrapped="$(cd "$O" && bash -c "$new")"
+[ "$(sed '$d' <<<"$wrapped")" = "$raw" ] && ok "wrapped stdout equals the raw run byte-for-byte" || fail "round-trip differs: raw=[$raw] wrapped=[$wrapped]"
+grep -q 'run-capped: exit 0' <<<"$wrapped" && ok "wrapped run reports its exit line" || fail "no exit line: $wrapped"
+out="$(rw "$new")"; [ -z "$out" ] && ok "an already-wrapped command is left unchanged" || fail "re-wrapped: $out"
+out="$(rw 'printf %s <<EOF')"; [ -z "$out" ] && ok "a heredoc command is left unchanged" || fail "heredoc rewritten: $out"
+out="$(rw $'printf a\nprintf b')"; [ -z "$out" ] && ok "a multi-line command is left unchanged" || fail "newline rewritten: $out"
+out="$(rw '')"; [ -z "$out" ] && ok "an empty command is left unchanged" || fail "empty rewritten: $out"
+new="$(rw 'false | true' | newcmd)"
+( cd "$O" && bash -c "$new" >/dev/null 2>&1 ); rc=$?; [ "$rc" = 1 ] && ok "wrapped 'false | true' exits 1 (pipefail kept)" || fail "wrapped pipeline rc=$rc"
+out="$(rw 'seq 1 3')"; errs="$(grep -c 'invalid pattern' "$O/rw.err" || true)"
+[ -n "$out" ] && [ "$errs" = 1 ] && ok "an invalid regex line is skipped with one stderr line; a later line still matches" || fail "invalid line: out=[$out] stderr=$(cat "$O/rw.err")"
+before="$( { [ -f "$O/.loopkit/metrics.jsonl" ] && grep -c offload_rewrite "$O/.loopkit/metrics.jsonl"; } || echo 0)"
+out="$(rw 'seq 1 5')"
+after="$(grep -c offload_rewrite "$O/.loopkit/metrics.jsonl" || true)"
+[ "$after" = $((before + 1)) ] && ok "one offload_rewrite event per rewrite in metrics.jsonl ($before -> $after)" || fail "metrics: $before -> $after"
+out="$(rw 'git status')"; [ -z "$out" ] && ok "control: git status still passes through with patterns loaded" || fail "control rewrote git status: $out"
+python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/offload-patterns.txt"
+timing="$(CLAUDE_PROJECT_DIR="$O" python3 -c '
+import json, subprocess, sys, time
+payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "seq 1 3"}})
+t = time.time(); r = subprocess.run([sys.executable, sys.argv[1]], input=payload, capture_output=True, text=True)
+print(int((time.time() - t) * 1000), "hit" if r.stdout else "miss")' "$P/hooks/offload_rewrite.py")"
+set -- $timing
+[ "$1" -lt 200 ] && [ "$2" = hit ] && ok "50-line pattern file: ${1} ms, last line matched" || fail "timing: $timing"
+bd="$(grep -n 'block_dangerous.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
+orw="$(grep -n 'offload_rewrite.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
+[ -n "$orw" ] && [ "$orw" -gt "$bd" ] && ok "hooks.json wires offload_rewrite.py after block_dangerous.py" || fail "hooks.json order: block=$bd offload=$orw"
+grep -q 'per-project choice' "$T/.loopkit/offload-patterns.txt" && ok "init laid down the offload-patterns template" || fail "init: offload-patterns.txt"
+[ "$(grep -c 'loopkit-profile:commerce:offload-patterns.txt' "$T/.loopkit/offload-patterns.txt")" = 1 ] && ok "commerce profile appended its offload pattern exactly once" || fail "profile offload marker"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe customers list --limit 3"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/offload_rewrite.py")"
+grep -q 'run-capped.sh' <<<"$out" && ok "under the commerce profile a payments listing runs capped" || fail "profile pattern: $out"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/offload_rewrite.py")"
+[ -z "$out" ] && ok "under the commerce profile git status is untouched" || fail "profile rewrote git status: $out"
+find "$O" -delete
+
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.
-leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
+leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
 [ -z "$leaks" ] && ok "no project-specific tokens anywhere in the repo" || { fail "project tokens in: $leaks"; }
-orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
+orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
 [ -z "$orgs" ] && ok "the only org reference is luxtelos/loopkit" || { fail "other org references: $orgs"; }
 
 unset CLAUDE_PROJECT_DIR
