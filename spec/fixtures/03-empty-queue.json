@@ -1,0 +1,17 @@
+{
+  "name": "03-empty-queue",
+  "description": "No rows at all and nothing in flight. Stage is `discover` and the decision is IDLE — run discovery now. A wakeup here would sleep on an empty queue, which is the failure this case pins.",
+  "input": {
+    "queue": [],
+    "policy": { "concepts": [] },
+    "journal": []
+  },
+  "expected": {
+    "stage": "discover",
+    "next": "IDLE",
+    "counts": { "pr-open": 0, "fixing": 0, "spec-ready": 0, "spec-draft": 0, "new": 0, "blocked": 0 },
+    "targets": [],
+    "events": [ { "event": "stage", "stage": "discover", "scope": "" } ],
+    "messages": []
+  }
+}
