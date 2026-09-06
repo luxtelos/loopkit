@@ -7,7 +7,7 @@
 #   specs/                       (empty; the spec-writer skill fills it)
 #   constitution.md FILES.md TOOLS.md COMMANDS.md docs/MUTATION_POLICY.md
 #   .loopkit/{scopes.json,citations.json,block-patterns.txt,block-disabled.txt,protected.txt,config.env.example}
-#   .gitignore line for .loopkit/config.env
+#   .gitignore / .prettierignore lines, each written ONCE and then left alone
 #   a "LoopKit standing rules" block appended to CLAUDE.md (marker-guarded)
 #
 # usage: loopkit-init.sh [--project DIR] [--dry-run] [--profile commerce]
@@ -77,27 +77,61 @@ put loopkit/recall-triggers.txt .loopkit/recall-triggers.txt
 put loopkit/offload-patterns.txt .loopkit/offload-patterns.txt
 put loopkit/config.env.example .loopkit/config.env.example
 
-# .gitignore: the one file under .loopkit/ that may hold a webhook URL.
-if [ -f .gitignore ] && grep -qxF '.loopkit/config.env' .gitignore; then
-  say KEPT ".gitignore (.loopkit/config.env already ignored)"
-elif [ "$DRY" = 1 ]; then
-  say APPEND ".gitignore: .loopkit/config.env (dry run)"
-else
-  printf '\n# LoopKit: may hold a webhook URL\n.loopkit/config.env\n' >> .gitignore
-  say APPENDED ".gitignore: .loopkit/config.env"
-fi
+# ensure_ignore <file> <line> <why> — write an ignore line once, then never again.
+#
+# The old check was "is the line absent?", which cannot tell a project that has
+# never seen the line from one that removed it on purpose. So init re-added it
+# on every run and silently reversed the project's decision. This repository is
+# the proof: its own .loopkit/config.env holds no webhook and no secret, it is
+# tracked deliberately, and init put the ignore line back on 2026-09-06.
+#
+# The check is now "has init already spoken about this line?", recorded by a
+# marker comment written beside the line:
+#
+#   marker present            -> whatever the file says now is the project's
+#                                decision. Init keeps its hands off, for good.
+#   marker absent, line there -> an older install, or a project that added the
+#                                line itself. Adopt it: write the marker so a
+#                                LATER removal sticks. One write, then stable.
+#   both absent               -> a project that has never seen this line.
+#                                Write marker and line.
+#
+# TO OPT OUT: delete the line, KEEP the marker comment. Nothing in the plugin
+# needs editing. Documented in docs/ADOPTION.md and docs/GETTING-STARTED.md.
+ensure_ignore() {
+  local file="$1" line="$2" why="$3"
+  local marker="# loopkit:decided $line"
+  local note="$marker — init wrote this line once and will not re-add it. To opt out, delete the line and keep this comment."
+  if [ -f "$file" ] && grep -qF "$marker" "$file"; then
+    if grep -qxF "$line" "$file"; then
+      say KEPT "$file ($line, already decided)"
+    else
+      say KEPT "$file ($line removed by the project on purpose — marker present)"
+    fi
+  elif [ -f "$file" ] && grep -qxF "$line" "$file"; then
+    if [ "$DRY" = 1 ]; then
+      say MARK "$file: decision marker for $line (dry run)"
+    else
+      printf '\n%s\n' "$note" >> "$file"
+      say MARKED "$file ($line was already there; recorded so a later removal sticks)"
+    fi
+  elif [ "$DRY" = 1 ]; then
+    say APPEND "$file: $line (dry run)"
+  else
+    printf '\n# LoopKit: %s\n%s\n%s\n' "$why" "$note" "$line" >> "$file"
+    say APPENDED "$file: $line"
+  fi
+}
 
-# .prettierignore: a formatter must never rewrite the queue. Prettier strips
-# the spaces around inline code in a table cell, which changes the `source`
-# key, which makes every bridged row a duplicate on the next run.
-if [ -f .prettierignore ] && grep -qxF 'state/triage.md' .prettierignore; then
-  say KEPT ".prettierignore (state/triage.md already listed)"
-elif [ "$DRY" = 1 ]; then
-  say APPEND ".prettierignore: state/triage.md (dry run)"
-else
-  printf '# LoopKit: the queue is written by triage_state.py, never reformatted\nstate/triage.md\n' >> .prettierignore
-  say APPENDED ".prettierignore: state/triage.md"
-fi
+# .loopkit/config.env is the one file under .loopkit/ that MAY hold a webhook
+# URL. May, not does — a project whose gate config carries no secret is right
+# to track it, and that is why this is a decision and not a rule.
+ensure_ignore .gitignore '.loopkit/config.env' 'may hold a webhook URL'
+
+# A formatter must never rewrite the queue. Prettier strips the spaces around
+# inline code in a table cell, which changes the `source` key, which makes
+# every bridged row a duplicate on the next run.
+ensure_ignore .prettierignore 'state/triage.md' 'the queue is written by triage_state.py, never reformatted'
 
 # CLAUDE.md: append the standing-rules block once, marker-guarded.
 if [ -f CLAUDE.md ] && grep -q 'loopkit:begin' CLAUDE.md; then

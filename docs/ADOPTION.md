@@ -34,6 +34,15 @@ files, and wants the plugin to own them from now on.
 
 ## Gotchas
 
+- **Your `.gitignore` / `.prettierignore` decisions survive init, once init
+  has seen them.** Init writes `.loopkit/config.env` and `state/triage.md` one
+  time each, with a `# loopkit:decided <line>` marker beside them. If the line
+  is already in your file when you first init, init adds only the marker
+  (`MARKED`), and from then on the file is yours: delete the line, keep the
+  marker, and later runs print `KEPT`. Delete both and init reads it as a file
+  that has never seen the line, and adds it back. Adopters coming from an older
+  install get the marker on their next init — that one run writes a comment
+  line, and nothing after it does.
 - Two `CLAUDE.md` files load in a git worktree — the parent's and the
   worktree's. If the parent already carries the LoopKit block, init in the
   worktree prints `KEPT` for it only when the marker is present in the

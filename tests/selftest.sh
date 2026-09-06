@@ -52,6 +52,24 @@ expect_rc 0 "init (first run)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 expect_rc 0 "init (second run, idempotent)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 n="$(grep -c 'loopkit:begin' "$T/CLAUDE.md")"; [ "$n" = 1 ] && ok "CLAUDE.md block appended exactly once" || fail "CLAUDE.md block count=$n"
 grep -qxF '.loopkit/config.env' "$T/.gitignore" && ok ".gitignore ignores config.env" || fail ".gitignore"
+
+# An ignore line init added once is init's LAST word on it. A project that
+# deletes the line and keeps the marker has decided; the old check ("is the
+# line absent?") could not tell that from a project that had never seen it, so
+# init reversed the decision on every run — including on this repo, whose
+# .loopkit/config.env is tracked on purpose.
+echo "== init writes each ignore line once, then respects the project"
+grep -qF 'loopkit:decided .loopkit/config.env' "$T/.gitignore" && ok "init leaves a decision marker in .gitignore" || fail "no decision marker in .gitignore"
+grep -qF 'loopkit:decided state/triage.md' "$T/.prettierignore" && ok "init leaves a decision marker in .prettierignore" || fail "no decision marker in .prettierignore"
+for pair in ".gitignore:.loopkit/config.env" ".prettierignore:state/triage.md"; do
+  ig_f="$T/${pair%%:*}"; ig_l="${pair#*:}"
+  grep -vxF "$ig_l" "$ig_f" > "$ig_f.tmp" || true; mv "$ig_f.tmp" "$ig_f"
+  bash "$P/scripts/loopkit-init.sh" --project "$T" >/dev/null 2>&1
+  if grep -qxF "$ig_l" "$ig_f"; then fail "init re-added $ig_l after the project removed it"; else ok "init respects a removed $ig_l (marker present)"; fi
+  grep -vF "loopkit:decided $ig_l" "$ig_f" > "$ig_f.tmp" || true; mv "$ig_f.tmp" "$ig_f"
+  bash "$P/scripts/loopkit-init.sh" --project "$T" >/dev/null 2>&1
+  if grep -qxF "$ig_l" "$ig_f"; then ok "init re-adds $ig_l when no decision is on record"; else fail "init did not add $ig_l to a file carrying no marker"; fi
+done
 for f in constitution.md FILES.md TOOLS.md COMMANDS.md state/triage.md inbox/needs-human.md .loopkit/scopes.json; do
   [ -f "$T/$f" ] && ok "created $f" || fail "missing $f"
 done
@@ -117,6 +135,32 @@ printf '# CLAUDE.md\nSee `app.ts:1` and `app.ts:9`.\n' > "$T/CLAUDE.md"
 expect_rc 1 "citations: a line past EOF fails" python3 "$P/scripts/check-citations.py" --root "$T"
 printf '# CLAUDE.md\nSee `app.ts:1`.\n' > "$T/CLAUDE.md"
 expect_rc 0 "citations: a real line passes" python3 "$P/scripts/check-citations.py" --root "$T"
+
+# A citation checker that finds nothing must not print PASS. It also must not
+# fail a project that legitimately cites no line numbers — so the verdict word
+# changes and the exit code is the project's decision. And the scan has to
+# reach where docs actually live: this repo's own run said "Checked 0
+# citation(s) across 7 file(s) ... PASS" while docs/ and specs/ sat outside
+# the scanned set.
+echo "== citations: a run that verifies nothing says so"
+CT="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-cite.XXXXXX")"
+printf '# CLAUDE.md\nno citation in here at all\n' > "$CT/CLAUDE.md"
+cite_out="$(python3 "$P/scripts/check-citations.py" --root "$CT" 2>&1)"; cite_rc=$?
+case "$cite_out" in *EMPTY*) ok "zero citations reports EMPTY" ;; *) fail "zero citations did not report EMPTY: $cite_out" ;; esac
+case "$cite_out" in *PASS*) fail "zero citations still printed PASS" ;; *) ok "zero citations never prints PASS" ;; esac
+[ "$cite_rc" = 0 ] && ok "EMPTY exits 0 by default (a citation-free project is legitimate)" || fail "EMPTY exited $cite_rc by default"
+expect_rc 1 "citations: --fail-on-empty turns EMPTY red" python3 "$P/scripts/check-citations.py" --root "$CT" --fail-on-empty
+mkdir -p "$CT/.loopkit"
+printf '{"allow_empty": false}\n' > "$CT/.loopkit/citations.json"
+expect_rc 1 "citations: allow_empty=false turns EMPTY red" python3 "$P/scripts/check-citations.py" --root "$CT"
+printf '{}\n' > "$CT/.loopkit/citations.json"
+printf 'x\n' > "$CT/app.py"
+mkdir -p "$CT/docs" "$CT/specs"
+printf 'see `app.py:9`\n' > "$CT/docs/thing.md"
+expect_rc 1 "citations: the default scan reaches docs/" python3 "$P/scripts/check-citations.py" --root "$CT"
+printf 'nothing cited\n' > "$CT/docs/thing.md"
+printf 'see `app.py:9`\n' > "$CT/specs/thing.md"
+expect_rc 1 "citations: the default scan reaches specs/" python3 "$P/scripts/check-citations.py" --root "$CT"
 
 # doctrine prints absolute script paths
 out="$(echo '{"prompt":"/loop"}' | python3 "$P/hooks/loop_doctrine.py")"
@@ -676,14 +720,27 @@ fi
 echo "== M1 runtime spec: every model assertion can fail"
 if [ -f "$REPO/tests/pins/model-invariants-live.sh" ]; then
   mi_out="$(bash "$REPO/tests/pins/model-invariants-live.sh" 2>&1)"
-  if [ $? = 0 ]; then
-    ok "every assertion in loopkit-runtime.model.fizz is live under its mutation"
-  else
+  mi_rc=$?
+  if [ "$mi_rc" != 0 ]; then
     fail "a model assertion is vacuous: $(printf '%s' "$mi_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+  elif printf '%s' "$mi_out" | grep -q 'skip model checkers not installed'; then
+    # rc=0 here means "could not check", not "checked and fine" — so say which.
+    # CI installs the engines and fails when this line appears; a laptop
+    # without them gets a warning instead of a false green.
+    ok "model invariants SKIPPED — engines absent, the runtime model is UNVERIFIED on this machine (CI installs them)"
+  else
+    ok "every assertion in loopkit-runtime.model.fizz is live under its mutation"
   fi
 else
   fail "tests/pins/model-invariants-live.sh is missing"
 fi
+
+# NOTE: the pin that asserts CI installs the model checkers lives with the
+# workflow change it checks, and no credential in this environment can push a
+# workflow file (inbox/needs-human.md, 2026-09-07). Both are in
+# docs/ci-model-engines.patch, to be applied by someone whose token carries the
+# `workflow` scope. Until then the model invariants are proved on macOS only,
+# and README.md says so rather than implying CI covers them.
 
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command

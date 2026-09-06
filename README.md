@@ -23,7 +23,7 @@ that transfers.
 | Things that need a human get guessed                 | `inbox/needs-human.md` with a required shape: whole context, both options costed. Edits ping a webhook. Rows can sit `blocked`, counted but never polled. |
 | Findings become code whether or not code was the fix | `loop-assess` classifies first — measurement, code, tool, spec, process, architecture, prompt, decision — and only `code` reaches the spec-writer.        |
 | A design has two writers or a guard-then-write       | `run-state-model` — FizzBee, Quint/Apalache and TLA+ behind one driver with one honest exit-code contract (PASS / VIOLATION / ERROR / UNPROVEN).           |
-| `file:line` citations rot                            | `check-citations.py` — structural check on every citation, regex pins on the load-bearing ones.                                                            |
+| `file:line` citations rot                            | `check-citations.py` — structural check on every citation, regex pins on the load-bearing ones; a run that finds no citation reports EMPTY, never a green PASS.                                                            |
 
 ## Install
 
@@ -110,7 +110,7 @@ plugins/loopkit/
   scripts/triage_state.py          the queue, escaped pipes and all; never hand-edit the table
   scripts/inbox_to_triage.py       prose findings → rows, create-only, dry run by default
   scripts/test-regressions.sh      one run diffed against state/known-test-failures.txt
-  scripts/check-citations.py       file:line citations that still point where they claim
+  scripts/check-citations.py       file:line citations that still point where they claim; EMPTY (never PASS) when it finds none
   scripts/morning-triage.sh        headless discovery run, audit-logged
   scripts/loopkit-init.sh          lay the files into a project, idempotently; --profile commerce
   scripts/fanout.sh                one claude -p per brief, own worktree, scoped tools/turns, JSON results, nothing merged
@@ -248,6 +248,13 @@ round trip, the regression diff passes and fails when it should, the stop gate
 short-circuits and blocks when it should, citations past EOF fail, and a grep
 proves no project-specific token leaked into the plugin. Ends with
 `claude plugin validate` when the CLI is on PATH.
+
+The model-checker engines are optional locally: without them the runtime
+model's invariant pin skips and says so, and the suite still passes. CI is not
+allowed that luxury. `.github/workflows/selftest.yml` installs the three
+engines (cached on the versions pinned in `install.sh`) and fails the build if
+the pin reports a skip, so "green" on `ubuntu-latest` means the model's
+assertions were each mutated and each went red — not that nobody looked.
 
 ## On ECC and other plugins
 
