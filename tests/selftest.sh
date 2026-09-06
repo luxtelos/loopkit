@@ -314,7 +314,7 @@ import json, sys, pathlib
 p = pathlib.Path(sys.argv[1]) / ".loopkit" / "memory.json"
 d = json.loads(p.read_text()); d["knowledge"]["enabled"] = True; p.write_text(json.dumps(d))
 PYX
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "knowledge/ is guarded when enabled" || fail "knowledge guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | env -u GOVERNANCE_EDIT_OK python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "knowledge/ is guarded when enabled" || fail "knowledge guard"
 printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | KNOWLEDGE_EDIT_OK=1 python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 0 ] && ok "KNOWLEDGE_EDIT_OK=1 is the door" || fail "knowledge override"
 python3 - "$T" <<'PYX'
 import json, sys, pathlib
@@ -356,8 +356,12 @@ grep -q 'type: Gate' <<<"$out" && ok "knowledge get prints the concept" || fail 
 out="$($MEM recall "merge" --root "$T")"
 grep -q '^CONCEPTS:' <<<"$out" && grep -q 'never-merge' <<<"$out" && ok "recall spans notes and concepts" || fail "recall+concepts: $out"
 
+# Every probe below that expects a BLOCK runs under `env -u GOVERNANCE_EDIT_OK`.
+# A suite run from a shell carrying the override otherwise reports success while
+# measuring an open door — which it did on 2026-09-07, turning twelve blocked-write
+# assertions green at once.
 echo "== knowledge: guard, queue-source refusal, enqueue+drain a Trap"
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "hand edit of the bundle is refused after init" || fail "bundle guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | env -u GOVERNANCE_EDIT_OK python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "hand edit of the bundle is refused after init" || fail "bundle guard"
 out="$($MEM knowledge enqueue --target /rulings/bad.md --reason "cites a queue" --type Decision --title "bad" --sources inbox/needs-human.md --body "x" --root "$T" 2>&1)"; rc=$?
 grep -q 'refused' <<<"$out" && [ "$rc" = 3 ] && ok "a queue as a source is refused at enqueue (rc=3)" || fail "queue source: rc=$rc $out"
 out="$($MEM knowledge enqueue --target /billing/period-end-trap.md --reason "trap: period end null on free to paid" --type Trap --title "period_end is NULL after a free-to-paid activation" --tags "lane/billing,domain/billing" --sources constitution.md --body "Observed 4 Sep. Control case: paid firms unaffected." --root "$T" 2>&1)"; rc=$?
@@ -431,7 +435,7 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo sk_live_abcdefg
 [ "$rc" = 2 ] && grep -q 'ruling: no-live-keys' <<<"$err" && ok "a live key literal is refused" || fail "live key: rc=$rc"
 err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe customers list --limit 3"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
 [ "$rc" = 0 ] && ok "a read-only test-mode call passes" || fail "read-only call blocked: $err"
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/pricing/plans.json","content":"{}"}}' "$T" | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "pricing/ is protected under the profile" || fail "pricing guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/pricing/plans.json","content":"{}"}}' "$T" | env -u GOVERNANCE_EDIT_OK CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "pricing/ is protected under the profile" || fail "pricing guard"
 expect_rc 0 "check-snapshot: the template passes" python3 "$P/scripts/check-snapshot.py" --root "$T" --strict
 printf '{"id":"bad","transcript":[{"role":"user","content":"x"}],"state_before":{},"expected_state_after":{"steps":["call refund"]},"cap":1}' > "$T/evals/commerce/bad.json"
 out="$(python3 "$P/scripts/check-snapshot.py" --root "$T")"

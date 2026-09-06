@@ -16,9 +16,14 @@ H="${1:?usage: gov-cases.sh <hook>}"
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-govcases.XXXXXX")"
 mkdir -p "$ROOT/specs"
 
+# `env -u GOVERNANCE_EDIT_OK` on every probe. Without it, running the suite from
+# a shell that legitimately carries the override turns every blocked-write case
+# green — writes-leaked=10 and the whole section reports success while measuring
+# an open door. Observed 2026-09-07 while overriding the guard to edit a spec in
+# the same command that ran the tests.
 probe() {
   python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" \
-    | CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1
+    | env -u GOVERNANCE_EDIT_OK CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1
   echo $?
 }
 

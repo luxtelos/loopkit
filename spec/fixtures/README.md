@@ -76,8 +76,11 @@ Each file is one JSON object:
    behaviour change that must be caught.
 5. **An empty `expected.messages` means no message may be enqueued**, not that
    messages are unchecked.
-6. **TWO keys are not derivable from `input` alone: `messages` and `targets`.**
-   This rule said "the one key" until 2026-09-07 and was false when it said it.
+6. **ONE key is not derivable from `input` alone: `messages` content.**
+   This rule said "the one key", then briefly "TWO keys" when `targets` was
+   found undefined, and is back to one now that spec §Targets states the rule
+   and `derive_targets` implements it. The history is left visible because a
+   rule that has been wrong twice earns a reader's suspicion.
 
    **`messages` content.** What an agent proposes depends on the Provider, and
    the stub Provider's script is not carried in the fixture. So

@@ -83,6 +83,23 @@ required.
 | `intent` | before a side effect | `run_id`, `step`, `idempotency_key` |
 | `result` | after a side effect | `run_id`, `step`, `idempotency_key`, `status` |
 
+A result Event's `status` is one of exactly four values. No code produces a
+result Event yet — the Runner is M2 — so this vocabulary is defined HERE and the
+implementation follows it, rather than the other way round. That direction is
+stated because the rest of this document derives its nouns from existing code,
+and a reader is entitled to know which way each definition points.
+
+| `status` | Meaning | Replay behaviour |
+| --- | --- | --- |
+| `ok` | the side effect completed and its result is journaled | never re-attempted |
+| `failed` | the side effect ran and returned an error the runtime understands | never re-attempted; the Run surfaces the error |
+| `refused` | a gate or policy blocked the side effect before it ran | never re-attempted; no side effect occurred |
+| `abandoned` | the Run stopped between `intent` and `result` | re-attempted on resume, under the same `idempotency_key` |
+
+`abandoned` is never written by the step itself. It is what a resume infers from
+an `intent` with no matching `result`, which is why it is the only value that
+permits a retry.
+
 `scope` on a `stage` Event is the Run's lane, and the empty string when the Run
 is unscoped. It is not derived from the Queue or the Policy; it is an input,
 carried in a fixture's `input.run.lane`.
@@ -205,6 +222,46 @@ that is stated rather than hidden.
    `triage_state.find_row` already assumes. Check `[today]`:
    `python3 plugins/loopkit/scripts/triage_state.py upsert` twice with one
    `--source` prints `created` then `updated` and leaves one row.
+
+### Targets
+
+`targets` is the dispatch list for the tick. Until 2026-09-07 it was asserted by
+three fixtures and defined nowhere, and the derivability pin supplied a
+definition of its own — which made the pin read as covering derivability while
+it covered its author's guess.
+
+Two readings existed in the code and they disagree. `loop_next_pick.pick()`
+emits a `target:<stage>` line for **every** work stage; `loop-next.sh` then
+filters that stream to the served Stage alone. The filtered form is what a tick
+consumes and what every fixture asserts, so the filtered form is the contract.
+The picker's fuller stream is an internal transport, not the noun.
+
+Definition:
+
+- A **target** is a triple `(stage, finding, source)` where `stage` is the
+  served Stage.
+- `targets` contains one triple for each Queue row whose `status` equals the
+  served Stage, and nothing else. A row at any other status contributes
+  nothing, including a row at another WORK stage.
+- WHEN the Stage is `discover`, `targets` is empty: `discover` serves no work.
+- Ordering: for an unscoped Run, Queue order. For a scoped Run, by priority
+  (`critical, high, medium, low`, then anything unrecognised), stable within a
+  priority, which preserves Queue order among equals.
+- At most `MAX_FANOUT` (8) triples. The cap is a dispatch limit, not a filter:
+  `counts` still reports the full tally, so a stage of twenty rows shows `20` in
+  `counts` and eight in `targets`.
+- Identity is `source`, so a duplicated `source` contributes one triple
+  (criterion 9).
+- A scoped Run's lane membership is a substring match over terms from the
+  project's lane configuration. That file is NOT part of a fixture's `input`, so
+  a scoped `targets` is derivable only when the Run carries its lane terms
+  explicitly. Every fixture today is unscoped.
+
+10. `targets` SHALL be exactly the list above, in exactly that order. Check
+    `[today]`: `python3 tests/pins/fixture-derivable.py` derives `targets` from
+    this rule and compares it to each fixture. Check `[M2]`:
+    `spec/fixtures/01-stage-precedence.json`, whose Queue holds a row at every
+    status, so both the inclusions and the exclusions are exercised.
 
 ### Journal before act, and replay
 
