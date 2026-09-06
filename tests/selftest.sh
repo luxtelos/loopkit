@@ -457,6 +457,75 @@ grep -q -- '--max-turns 3 --allowedTools Read,Grep' "$T/state/fanout/selftest/tw
 [ -z "$(git -C "$T" worktree list | grep fanout-selftest || true)" ] && ok "fan-out worktrees removed" || fail "worktrees left behind"
 grep -q 'nothing was merged' <<<"$out" && ok "fan-out says it merged nothing" || fail "fanout merge line"
 
+echo "== judge with a stub claude (specs/pairwise-judge-verdicts.md)"
+J="$P/scripts/judge.py"; JD="$T/judge"; mkdir -p "$JD/bin"
+printf 'alpha: the fix that reads the file\n' > "$JD/a.txt"
+printf 'beta: the fix that streams the file\n' > "$JD/b.txt"
+: > "$JD/empty.txt"
+# stub: count calls, capture the prompt, answer per $JD/mode. `beta` prefers
+# whichever position holds candidate B; `first` prefers position 1 (pure
+# position bias); `noverdict` answers JSON with no VERDICT line; `fail` exits 1.
+cat > "$JD/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+D="$(cd "$(dirname "$0")/.." && pwd)"
+prompt="$(cat)"
+echo call >> "$D/calls"
+printf '%s\n' "$prompt" > "$D/prompt.txt"
+mode="$(cat "$D/mode")"
+first="${prompt#*CANDIDATE FIRST}"; first="${first%%CANDIDATE SECOND*}"
+case "$mode" in
+  first)  v=FIRST; c=0.9 ;;
+  beta)   case "$first" in *beta*) v=FIRST ;; *) v=SECOND ;; esac; c=0.9 ;;
+  beta17) case "$first" in *beta*) v=FIRST ;; *) v=SECOND ;; esac; c=1.7 ;;
+  noverdict) printf '{"type":"result","result":"I cannot decide."}\n'; exit 0 ;;
+  fail) echo boom >&2; exit 1 ;;
+esac
+printf '{"type":"result","result":"FIRST: held - ran it\\nSECOND: not held - ran it\\nJUSTIFICATION: one reached the state\\nVERDICT: %s\\nCONFIDENCE: %s"}\n' "$v" "$c"
+STUB
+chmod +x "$JD/bin/claude"
+judge_run() {  # <mode> <args...>; sets out/rc/calls, resets the call counter
+  echo "$1" > "$JD/mode"; shift; rm -f "$JD/calls"
+  out="$(PATH="$JD/bin:$PATH" python3 "$J" --root "$T" "$@" 2>&1)"; rc=$?
+  calls=0; [ -f "$JD/calls" ] && calls="$(wc -l < "$JD/calls" | tr -d ' ')"
+}
+ticks_before="$(grep -c '"event": "judge"' "$T/state/ticks.jsonl" 2>/dev/null || true)"; ticks_before="${ticks_before:-0}"
+judge_run first --criterion "WHEN x THEN y" --a "$JD/a.txt" --b "$JD/b.txt"
+[ "$rc" = 0 ] && [ "$calls" = 2 ] && ok "judge calls claude exactly twice per criterion" || fail "judge calls=$calls rc=$rc: $out"
+grep -q 'FINAL: TIE confidence 0.5' <<<"$out" && ok "position-biased judge → FINAL: TIE confidence 0.5" || fail "position bias: $out"
+grep -q 'VERDICT (A-vs-B): A   VERDICT (B-vs-A): B' <<<"$out" && ok "both position verdicts printed in judge.md's shape" || fail "verdict shape: $out"
+jl="$(grep -n '^JUSTIFICATION:' <<<"$out" | cut -d: -f1)"; vl="$(grep -n '^VERDICT (A-vs-B)' <<<"$out" | cut -d: -f1)"
+[ -n "$jl" ] && [ -n "$vl" ] && [ "$jl" -lt "$vl" ] && ok "justification precedes the verdict lines" || fail "line order: $out"
+grep -q '^CRITERION: WHEN x THEN y$' <<<"$out" && grep -q '^A: held' <<<"$out" && grep -q '^B: not held' <<<"$out" && ok "block carries CRITERION / A / B lines" || fail "block head: $out"
+ticks_after="$(grep -c '"event": "judge"' "$T/state/ticks.jsonl" || true)"
+[ "$((ticks_after - ticks_before))" = 1 ] && ok "one judge event appended to the ticks ledger" || fail "ticks judge events: $ticks_before → $ticks_after"
+grep -q '"event": "judge", "final": "TIE", "confidence": "0.5"' "$T/state/ticks.jsonl" && ok "the event carries final and confidence" || fail "event fields: $(tail -1 "$T/state/ticks.jsonl")"
+[ "$(grep -c 'do not prefer the longer' "$JD/prompt.txt")" = 1 ] && ok "the six rules reach the model from judge.md" || fail "rule missing from prompt"
+[ "$(grep -c 'do not prefer the longer' "$J")" = 0 ] && ok "the rules are not in judge.py's source" || fail "rules embedded in judge.py"
+judge_run beta --criterion "WHEN x THEN y" --a "$JD/a.txt" --b "$JD/b.txt" --judge opus --generator sonnet
+grep -q 'FINAL: B confidence 0.9' <<<"$out" && ok "agreeing judge → FINAL: B with its confidence" || fail "always-B: $out"
+judge_run beta17 --criterion "WHEN x THEN y" --a "$JD/a.txt" --b "$JD/b.txt"
+grep -q 'FINAL: B confidence 1.0' <<<"$out" && ok "confidence 1.7 clamps to 1.0" || fail "clamp: $out"
+judge_run beta --criterion "c1" --criterion "c2" --a "$JD/a.txt" --b "$JD/b.txt"
+[ "$calls" = 4 ] && [ "$(grep -c '^CRITERION:' <<<"$out")" = 2 ] && ok "N=2 criteria → 2 blocks, 4 calls" || fail "N=2: calls=$calls $out"
+judge_run beta --criterion c --a "$JD/a.txt" --b "$JD/b.txt" --judge opus --generator Opus
+[ "$rc" = 3 ] && ! grep -q 'FINAL' <<<"$out" && [ "$calls" = 0 ] && ok "judge == generator → exit 3, no FINAL, no call" || fail "judge==generator: rc=$rc $out"
+judge_run beta --criterion c --a "$JD/empty.txt" --b "$JD/b.txt"
+[ "$rc" = 2 ] && ! grep -q 'FINAL' <<<"$out" && ok "empty candidate → exit 2, no FINAL" || fail "empty candidate: rc=$rc $out"
+judge_run beta --criterion c --a "$JD/nope.txt" --b "$JD/b.txt"
+[ "$rc" = 2 ] && ok "missing candidate path → exit 2" || fail "missing path: rc=$rc"
+judge_run noverdict --criterion c --a "$JD/a.txt" --b "$JD/b.txt"
+[ "$rc" = 2 ] && ! grep -q 'FINAL' <<<"$out" && ok "JSON without a verdict → exit 2, no FINAL" || fail "no verdict: rc=$rc $out"
+judge_run fail --criterion c --a "$JD/a.txt" --b "$JD/b.txt"
+[ "$rc" = 2 ] && ! grep -q 'FINAL' <<<"$out" && ok "claude non-zero → exit 2, no FINAL" || fail "claude fail: rc=$rc $out"
+rawf="$(sed -n 's/.*raw responses in \(.*\.json\).*/\1/p' <<<"$out")"
+[ -n "$rawf" ] && [ -f "$rawf" ] && grep -q '"stderr": "boom' "$rawf" && ok "raw response saved under state/judge/ for inspection" || fail "raw file: $rawf"
+PY="$(command -v python3)"; mkdir -p "$JD/nobin"
+out="$(PATH="$JD/nobin" "$PY" "$J" --root "$T" --criterion c --a "$JD/a.txt" --b "$JD/b.txt" 2>&1)"; rc=$?
+[ "$rc" = 2 ] && ! grep -q 'FINAL' <<<"$out" && ok "claude absent from PATH → exit 2, no FINAL" || fail "claude absent: rc=$rc $out"
+[ "$(ls "$T/state/judge" | wc -l | tr -d ' ')" -ge 9 ] && ok "every run left its own state/judge/<ts>-<pid>.json" || fail "judge raw files: $(ls "$T/state/judge")"
+ticks_end="$(grep -c '"event": "judge"' "$T/state/ticks.jsonl" || true)"
+[ "$((ticks_end - ticks_before))" = 4 ] && ok "only completed runs append a judge event (4 of 10)" || fail "ticks judge events at end: $ticks_before → $ticks_end"
+
 echo "== stop gate: the eighth block is an override, so the seventh says so"
 export LOOP_TEST_CMD="false" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="" LOOP_TEST_JSON_CMD="false"
 SG='{"session_id":"stopblocks-selftest-'$$'","hook_event_name":"Stop"}'
@@ -481,9 +550,9 @@ unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD LOOP_TEST_JS
 # The repo this came from is never named anywhere in this project (owner rule,
 # 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
 # `luxtelos/loopkit` is the one org reference allowed.
-leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
+leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
 [ -z "$leaks" ] && ok "no project-specific tokens anywhere in the repo" || { fail "project tokens in: $leaks"; }
-orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
+orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
 [ -z "$orgs" ] && ok "the only org reference is luxtelos/loopkit" || { fail "other org references: $orgs"; }
 
 unset CLAUDE_PROJECT_DIR
