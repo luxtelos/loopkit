@@ -86,3 +86,15 @@ Each line = one test case.
 - Skip the model when the design has two writers, a retry, or a guard followed
   by a write. That shape is what `loopkit:run-state-model` exists for; the trace
   it produces is evidence you hand this skill, and the criteria cite it.
+
+## Gotchas
+
+- `specs/` is guarded; a write without `GOVERNANCE_EDIT_OK=1` is blocked. That
+  is the point — a ratified spec change is visible in the transcript.
+- Never overwrite an existing spec; append a dated section. The old criteria
+  are what a merged PR was reviewed against.
+- An invented threshold ("<5s") that nobody agreed to becomes a number
+  everyone builds against. Route the question to `inbox/` instead.
+- Slugs come from the outcome, not the ticket number; tickets move.
+- Every EARS line must name the command that would check it. If you cannot,
+  it is prose wearing an EARS costume.

@@ -69,6 +69,7 @@ put loopkit/citations.json     .loopkit/citations.json
 put loopkit/block-patterns.txt .loopkit/block-patterns.txt
 put loopkit/block-disabled.txt .loopkit/block-disabled.txt
 put loopkit/protected.txt      .loopkit/protected.txt
+put loopkit/test-globs.txt     .loopkit/test-globs.txt
 put loopkit/config.env.example .loopkit/config.env.example
 
 # .gitignore: the one file under .loopkit/ that may hold a webhook URL.

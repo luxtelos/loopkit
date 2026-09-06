@@ -19,6 +19,12 @@ This hook closes it. On any prompt that looks like a loop tick, it prints the
 doctrine; a UserPromptSubmit hook's stdout is added to the model's context. The
 user types `/loop work the backlog` and gets the full discipline anyway.
 
+It also carries the oversight paper's one-liner (Mitchell, Ghosh, Passi 2026,
+arXiv 2608.23642): once a session has passed LOOPKIT_APPROVAL_FATIGUE_N
+permission prompts (default 30), a tick gets one extra line saying so, because
+past that point an "allow" is a reflex and the escalation door is the honest
+route. The count comes from count_approvals.py; nothing here decides anything.
+
 WHAT IT DELIBERATELY DOES NOT DO
 
 It never blocks a prompt — always exit 0. A doctrine injector that can stop the
@@ -31,12 +37,16 @@ guard gets switched off.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+FATIGUE_N = int(os.environ.get("LOOPKIT_APPROVAL_FATIGUE_N", "30") or 30)
 
 # Fires on: an explicit /loop invocation, a named loop-tick run, or the
 # backlog-work phrasing that the loop-tick skill's own description advertises.
@@ -93,27 +103,59 @@ def looks_like_tick(prompt: str) -> bool:
     return any(re.search(p, prompt, re.I) for p in TICK_SIGNALS)
 
 
-def read_prompt() -> str:
+def session_key(payload: object) -> str:
+    candidates = []
+    if isinstance(payload, dict):
+        candidates += [payload.get("session_id"), payload.get("transcript_path")]
+    candidates += [os.environ.get("CLAUDE_SESSION_ID"), str(os.getppid())]
+    for c in candidates:
+        if c:
+            return hashlib.sha256(str(c).encode()).hexdigest()[:16]
+    return "unknown"
+
+
+def approvals(payload: object) -> int:
+    """How many permission prompts count_approvals.py has seen this session."""
+    try:
+        p = Path(tempfile.gettempdir()) / f"loopkit-approvals-{session_key(payload)}" / "count"
+        return int(p.read_text().strip() or 0) if p.exists() else 0
+    except Exception:
+        return 0
+
+
+def fatigue_line(n: int) -> str:
+    return (
+        f"\nAPPROVAL FATIGUE: {n} permission prompts this session (threshold {FATIGUE_N}). "
+        "Past this point an 'allow' is a reflex, not oversight (Mitchell, Ghosh & Passi 2026). "
+        "Anything that needs a human now goes through inbox/needs-human.md with both options costed — not another click."
+    )
+
+
+def read_payload() -> tuple[str, object]:
     raw = sys.stdin.read()
     if not raw.strip():
-        return ""
+        return "", None
     try:
         payload = json.loads(raw)
     except (ValueError, TypeError):
         # Never guess structure. If the envelope changes shape, scanning the raw
         # text still finds `/loop`, and a false positive here costs a few lines
         # of context while a false negative costs the whole discipline.
-        return raw
+        return raw, None
     if isinstance(payload, dict):
-        return str(payload.get("prompt") or payload.get("user_prompt") or raw)
-    return raw
+        return str(payload.get("prompt") or payload.get("user_prompt") or raw), payload
+    return raw, payload
 
 
 def main() -> int:
     try:
-        prompt = read_prompt()
+        prompt, payload = read_payload()
         if prompt and looks_like_tick(prompt):
-            print(doctrine())
+            out = doctrine()
+            n = approvals(payload)
+            if n >= FATIGUE_N:
+                out += fatigue_line(n)
+            print(out)
     except Exception:
         pass  # never block a prompt
     return 0
