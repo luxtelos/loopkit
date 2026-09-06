@@ -1,0 +1,16 @@
+# .loopkit/block-patterns.txt — extra Bash patterns block_dangerous.py refuses.
+# One Python regex per line, matched case-insensitively against the whole
+# command. Blank lines and # comments are ignored. A pattern that fails to
+# compile is skipped (the built-ins still apply).
+#
+# Anchor to a command position with (?:\A|[;&|]\s*|\n\s*) so prose that merely
+# mentions the command does not trip it. Examples (uncomment to use):
+#
+# a secrets-manager write aimed at the production config
+# doppler\s+(secrets\s+(set|delete|upload)|configs?\s+(update|delete|unset))[^\n]*(\s-c\s*prd\b|--config[=\s]+prd\b)
+#
+# any shell call carrying a production project id to a vendor API
+# (?=[\s\S]*vendor\.example\.com)(?=[\s\S]*PROD_PROJECT_ID_HERE)
+#
+# infrastructure teardown
+# (?:\A|[;&|]\s*|\n\s*)terraform\s+destroy\b

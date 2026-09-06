@@ -1,0 +1,8 @@
+# known-test-failures.txt — the pre-existing failure baseline
+# Regenerate with: test-regressions.sh --update-baseline
+# Goal: shrink this file to zero (fix-or-retire sweep, tracked in state/triage.md).
+# Format: '<file> :: <full test name>' or '<file> :: *' (whole file known-bad).
+#
+# Every entry here is a debt with a name. When the regression script reports a
+# baseline entry as FIXED, delete the line in the same PR — a baseline that only
+# grows is a suite nobody trusts.

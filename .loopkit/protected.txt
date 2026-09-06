@@ -1,0 +1,6 @@
+# .loopkit/protected.txt — extra paths protect_governance.py guards, one Python
+# regex per line, matched against the normalised ABSOLUTE path. constitution.md
+# and specs/ are always protected. Edits need GOVERNANCE_EDIT_OK=1.
+#
+# (?:^|/)docs/adr/
+# (?:^|/)db/migrations/

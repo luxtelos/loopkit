@@ -1,0 +1,5 @@
+{
+  "_comment": "Named lanes for loop-scan.py --scope and loop-next.sh --scope. A lane is a list of lowercase terms matched against labels and branch names (strong), titles (weak), and triage rows (finding + source). Delete this key or the examples; add your own.",
+  "billing": ["billing", "payment", "stripe", "invoice", "subscription", "checkout"],
+  "auth": ["auth", "login", "role", "rbac", "invite", "tenant"]
+}

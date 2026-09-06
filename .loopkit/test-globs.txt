@@ -1,0 +1,13 @@
+# .loopkit/test-globs.txt — which paths protect_tests.py treats as tests.
+# One glob per line (fnmatch, relative to the project root). Blank lines and
+# # comments are ignored. Delete this file to use the built-in defaults.
+tests/**
+test/**
+spec/**
+__tests__/**
+**/*.test.*
+**/*.spec.*
+**/test_*.py
+**/*_test.py
+**/*_test.go
+**/*Test.java
