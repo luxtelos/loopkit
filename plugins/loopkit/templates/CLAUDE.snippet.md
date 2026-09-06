@@ -21,5 +21,9 @@
   script, runbook, memory) in the same session. Signs, not chats.
 - Read `FILES.md`, `TOOLS.md` and `COMMANDS.md` before any work; a gate blocks
   work tools until you do.
+- When compacting, preserve five sections in this order: Session Intent,
+  Files Modified (from `git status`, not memory), Decisions Made, Current
+  State, Next Steps. The plugin writes the deterministic parts to
+  `.loopkit/session/<id>/precompact.md` before every compaction; read it back.
 
 <!-- loopkit:end -->

@@ -196,6 +196,20 @@ collapses the separation of powers the constitution exists to protect.
 It also never approves its own downstream work. Whatever it routes, a different
 agent implements and a third judges.
 
+## Gotchas
+
+- The first thing to check is whether the owner already ruled. Re-escalating a
+  settled question is the most expensive noise there is.
+- A passing check that could not have failed is not evidence: env-gated suites,
+  quoted globs, `| tail`. Ask what the signal would look like if the code were
+  broken.
+- Only `code` continues to the spec-writer. A `decision` that becomes a spec
+  encodes a guess into the product.
+- The control case is mandatory. A fix without one cannot be told from a
+  regression later.
+- Mode B counts only auto-loaded files against the ceiling; the contracts and
+  constitution are pointer-only and do not count.
+
 ## Reference files
 
 - `references/failure-table.md` — symptom → layer, with real cases. Read it

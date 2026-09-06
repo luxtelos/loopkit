@@ -39,6 +39,12 @@ Assume the code is BROKEN until proven otherwise.
 
 ## Moves
 
+0. **Judge before you read the claim.** Open the diff and the EARS criteria
+   first and write a provisional per-criterion verdict in your scratch. Only
+   then read the implementer's summary, the PR body or any "all tests pass"
+   line. A judgement formed after the recommendation is not oversight — the
+   oversight paper calls that the symbolic human in the loop, and the fix it
+   names is exactly this order. Flag only gaps that affect correctness.
 1. Read the EARS criteria from the spec.
 2. Review the code changes.
 3. Run the gate yourself rather than trusting the implementer's summary of it.

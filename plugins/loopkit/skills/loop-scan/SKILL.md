@@ -66,3 +66,16 @@ The scan changes nothing — it is a read. To act on what it found:
   costed
 
 Do not merge anything from a scan. The loop never merges.
+
+## Gotchas
+
+- `PRS: could not read` is an auth or network failure, not zero PRs. Fix
+  `gh auth status` before reporting anything.
+- `green` is "nothing reported failure". A conflicting PR skips the CI job
+  entirely and still shows a tick.
+- `approved` and `READY TO MERGE` are different questions; only the second is
+  safe to act on unread.
+- A title that mentions the lane ranks WEAK; only a label or branch name ranks
+  STRONG. Do not promote a mention into the lane by hand.
+- Without `LOOPKIT_REPO` or a `gh`-authenticated clone the scan prints only
+  the local backlog; that is not "no PRs".

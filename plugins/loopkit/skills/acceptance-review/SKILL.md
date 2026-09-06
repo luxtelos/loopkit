@@ -68,6 +68,24 @@ without re-reading every line.
 - EARS: "WHEN the loop refreshes vendor data, the system SHALL call the vendor's info endpoint."
 - Action: trigger the refresh in the vendor's sandbox, verify the call in its logs.
 
+## Comparing two candidates
+
+When the verdict is A-versus-B rather than held/not-held, read
+`references/judge.md`: justification before score, pairwise run twice with
+positions swapped (TIE on disagreement), the judge never the generator.
+
+## Gotchas
+
+- BLOCKED is not PASS. One `unverifiable` criterion with nothing failed is
+  BLOCKED, and rounding it up is the whole failure class this skill exists
+  for.
+- A number without its environment is not a finding. Name the machine, the
+  schema, and prove counts with `count(*)`, never an estimate.
+- Form the per-criterion verdict from the diff and the criteria BEFORE reading
+  the implementer's summary; the order is the review.
+- The Stop hook runs this skill on THIS TURN's changes only. Orphaned work from
+  other sessions is an inbox note, never a reason to block.
+
 ## Never
 
 - Approve something that "should work"; prove it works.

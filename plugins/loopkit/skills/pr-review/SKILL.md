@@ -19,9 +19,11 @@ and the plugin's `block_dangerous.py` refuses `gh pr merge` and
 
 ## Algorithm
 
-1. `gh pr view <n>` — read title, body, linked issues, CI status. If a spec
-   exists for the linked issue in `specs/`, it is the acceptance contract;
-   review against it, not against the PR description.
+1. `gh pr view <n> --json number,headRefName,files` and `gh pr diff <n>` — the
+   diff and the linked spec in `specs/` first. Form your provisional verdict
+   per criterion BEFORE reading the PR body or any summary the author wrote;
+   then read them. The spec is the acceptance contract; the description is a
+   claim. Flag only gaps that affect correctness.
 2. Check out into an isolated worktree, never the main tree:
    `git worktree add .worktrees/pr-<n> && cd .worktrees/pr-<n> && gh pr checkout <n>`
 3. Run tests AND lint. Record actual output, not a summary of it. Prefer the
@@ -51,3 +53,15 @@ and the plugin's `block_dangerous.py` refuses `gh pr merge` and
 - Merge, approve, or push to the PR branch uninvited.
 - Review in the main working tree.
 - Claim PASS without running tests + lint in the PR's worktree.
+
+## Gotchas
+
+- `gh pr merge` and `gh pr review --approve` are refused by the plugin's
+  `block_dangerous.py` for every agent; do not look for another spelling.
+- A green CI rollup means nothing REPORTED failure. Steps inside a job fail
+  fast, so later steps may never have run. Read the job.
+- Reading the PR body first anchors you on the author's framing. Diff and
+  criteria first, body second — the order is the review.
+- The worktree resolves `node_modules` from the parent checkout; a dependency
+  added on the PR branch is missing until you install inside the worktree.
+

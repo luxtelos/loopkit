@@ -26,6 +26,10 @@
 # suite run whenever state/known-test-failures.txt exists: a suite that carries
 # known failures can never pass, and a gate that can never pass gets switched
 # off, which is worse than a gate that tolerates a committed baseline.
+#
+# Every verdict is appended to state/progress.md through scripts/progress.py
+# (fail-open) so the next session, and the next compaction, start from a
+# record rather than a recollection.
 
 set -euo pipefail
 
@@ -50,6 +54,18 @@ LOOP_BUILD_CMD="${LOOP_BUILD_CMD-npm run build}"
 LOOP_ENV_WRAPPER="${LOOP_ENV_WRAPPER-}"
 LOOP_CODE_GLOBS="${LOOP_CODE_GLOBS-*.js *.jsx *.ts *.tsx *.mjs *.cjs *.py *.go *.rs *.java *.rb *.kt *.swift}"
 read -r -a CODE_GLOBS <<< "$LOOP_CODE_GLOBS"
+
+# The progress log is memory, not a control: a failure to write it never
+# changes the verdict.
+note() {
+    python3 "$PLUGIN_ROOT/scripts/progress.py" append --root "$ROOT" --text "$1" >/dev/null 2>&1 || true
+}
+
+fail() {  # <message> — record, print, reject the stop
+    note "gate FAIL: $1"
+    echo "FAIL: $1"
+    exit 1
+}
 
 # Plain `bash -c`, never `bash -lc`: a login shell re-sources the profile and
 # can reset PATH to a system runtime, silently discarding the caller's — that
@@ -98,8 +114,7 @@ step() {  # <label> <command>
     fi
     echo ">> $label: $command"
     if ! run_in_env "$command"; then
-        echo "FAIL: $label failed"
-        exit 1
+        fail "$label failed"
     fi
 }
 
@@ -125,14 +140,12 @@ REGRESSIONS_SCRIPT="$PLUGIN_ROOT/scripts/test-regressions.sh"
 KNOWN_FAILURES_BASELINE="$ROOT/state/known-test-failures.txt"
 if [[ -f "$REGRESSIONS_SCRIPT" && -f "$KNOWN_FAILURES_BASELINE" ]]; then
     if ! bash "$REGRESSIONS_SCRIPT"; then
-        echo "FAIL: new test failures vs state/known-test-failures.txt"
-        exit 1
+        fail "new test failures vs state/known-test-failures.txt"
     fi
 elif [[ -z "$LOOP_TEST_CMD" ]]; then
     echo ">> Testing: skipped (LOOP_TEST_CMD set to empty)"
 elif ! run_in_env "$LOOP_TEST_CMD"; then
-    echo "FAIL: test suite failed"
-    exit 1
+    fail "test suite failed"
 fi
 
 if [[ -z "$LOOP_LINT_CMD" ]]; then
@@ -142,8 +155,7 @@ else
     if ! run_in_env "$LOOP_LINT_CMD"; then
         echo ">> Primary lint failed; trying the fallback on changed files"
         if ! run_lint_fallback; then
-            echo "FAIL: lint failed"
-            exit 1
+            fail "lint failed"
         fi
     fi
 fi
@@ -151,5 +163,6 @@ fi
 step "Type checking" "$LOOP_TYPECHECK_CMD"
 step "Building" "$LOOP_BUILD_CMD"
 
+note "gate PASS"
 echo ">> PASS: all gates passed. 'done' condition satisfied."
 exit 0

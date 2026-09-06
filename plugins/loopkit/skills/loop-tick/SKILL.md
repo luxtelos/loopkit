@@ -146,3 +146,18 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/loop-scan.py"
 ```
 
 `READY TO MERGE` is the only line to act on without opening anything.
+
+## Gotchas
+
+- `triage_state.py update` keys on `--source`, not `--finding`. Two rows with
+  the same source overwrite each other; give every row a distinct source.
+- Never pipe `loop-next.sh` (or any gate) through `grep -q`, `tail` or `head`
+  under `pipefail`: the reader exits early, the script takes SIGPIPE, and the
+  pipeline reports failure — or, piped through `tail`, reports `tail`'s
+  success. Capture to a variable, then read it.
+- `TARGETS:` is capped at 8 rows per stage; the `BACKLOG:` counts are not. A
+  stage with 20 rows takes three ticks, not one.
+- A `blocked` row is never served and never polled. If a row is waiting on a
+  human, set it to `blocked`, not `pr-open`, or every tick spends a poll on it.
+- A scoped tick that prints `STAGE: discover` may still have work outside the
+  lane — read the `unscoped new=N` note before calling the loop idle.

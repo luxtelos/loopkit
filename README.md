@@ -114,6 +114,26 @@ Every hook is fail-open except the four meant to block. Every script exits 0
 and prints a `VERDICT:`/`STAGE:` line you read, except the gates, whose exit
 code is the point. A crash in a hook is an allow, so nothing here raises.
 
+## Anthropic's practices, as checks
+
+Everything below is a published Anthropic practice turned into a hook, a
+script or a template — a check that can fail, not a sentence in a prompt.
+
+| Practice (source) | What LoopKit does |
+| --- | --- |
+| "It is unacceptable to remove or edit tests" — [effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) | `protect_tests.py`: a test file's test count may not drop; `rm`/`mv` of a test path is refused; `state/features.json` may only have `passes` flipped. `TEST_EDIT_OK=1` is the visible door. |
+| Session bootstrap: git log + progress file; compaction must keep the file list — [best practices](https://code.claude.com/docs/en/best-practices), same harness post | `progress.py` (Files Modified from git, append-only `state/progress.md` written by the stop gate), `precompact.sh` (five-section snapshot before every compaction), SessionStart on `resume\|compact` prints them back. |
+| CLAUDE.md: short, one emphasised line, nothing derivable from code — [best practices](https://code.claude.com/docs/en/best-practices); guidance over rules — [new rules of context engineering](https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models) | `check-claude-md.py`: standing-instruction count against the ~150–200 ceiling, emphasis count, duplicates across the contracts, `npm run` lines that restate `package.json`. |
+| Skills: frontmatter for selection, Gotchas as the highest-signal section, explicit run-vs-read — [agent skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills), [how we use skills](https://claude.com/blog/lessons-from-building-claude-code-how-we-use-skills) | `check-skills.py`; every LoopKit skill carries `## Gotchas`. |
+| Tools: a high bar per tool, no overlap, absolute paths, nothing inline — [writing tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents), [seeing like an agent](https://claude.com/blog/seeing-like-an-agent) | `check-tools.py`: no row no server, relative commands, secret-looking literals (reported by key, never value), server count. `check-duplicate-hooks.py` for hooks a project wires twice. |
+| Reviewer sees the diff and the criteria, flags only correctness gaps — [best practices](https://code.claude.com/docs/en/best-practices); "oversight degrades the overseer", judge before the recommendation — Mitchell, Ghosh & Passi 2026, [arXiv 2608.23642](https://arxiv.org/abs/2608.23642) | Reviewer, pr-review and the Stop agent form the per-criterion verdict from the diff BEFORE reading the implementer's summary. |
+| Approval fatigue makes the human symbolic — same paper | `count_approvals.py` counts permission prompts (never decides one); past 30, the tick doctrine says so and routes decisions to the inbox. |
+| Judges: pairwise twice with swapped positions, justification before score, judge ≠ generator — [multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) | `skills/acceptance-review/references/judge.md`. |
+| Every subagent brief: objective, output format, tool guidance, boundaries — same post | `templates/brief.md`. |
+
+`/loopkit:doctor` runs the four checks. None of them fails the doctor; they
+print what they found, and `--strict` fails a CI job.
+
 ## Adding your own skills, tools and agents
 
 Yes — the plugin is designed so a project brings its own. The loop's interface

@@ -92,3 +92,17 @@ section reads the same whether the check ran clean or never ran at all.
 - Close findings (leave that to the loop).
 - Comment on issues or PRs unless the project has an idempotent script for it —
   a hand-written status comment is written twice the next morning.
+
+## Gotchas
+
+- Never hand-edit the table. A finding containing `|` is escaped on write and
+  unescaped on read by `triage_state.py`; a hand edit breaks the row silently
+  and the loop re-files it forever.
+- Two `Priority N` labels on one issue is a human disagreement; take the most
+  severe and say so in Warnings, never average.
+- The inbox bridge only files `##` headings whose text is not stamped
+  RESOLVED/CLOSED/SUPERSEDED (uppercase) or struck through. A closure stamp in
+  the body, not the heading, does not count.
+- Prettier rewrites table cells (strips spaces around inline code), which
+  changes the `source` key. `init` adds `state/triage.md` to `.prettierignore`;
+  keep it there.

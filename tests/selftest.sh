@@ -113,9 +113,100 @@ expect_rc 0 "citations: a real line passes" python3 "$P/scripts/check-citations.
 out="$(echo '{"prompt":"/loop"}' | python3 "$P/hooks/loop_doctrine.py")"
 grep -q "$P/scripts/loop-next.sh" <<<"$out" && ok "doctrine carries absolute paths" || fail "doctrine paths"
 
-# no project-specific tokens leaked into the plugin
-leaks="$(grep -rnEl --exclude-dir=__pycache__ --exclude='*.pyc' 'balancia|luxtelos|/Volumes/evm|dev_multi_iam|codecakes/adaptive' "$P" 2>/dev/null || true)"
-[ -z "$leaks" ] && ok "no project-specific tokens in the plugin" || { fail "project tokens in: $leaks"; }
+# --- 0.2.0-a: the practice floor -------------------------------------------
+echo "== protect_tests (a test count may never drop)"
+mkdir -p "$T/tests" "$T/src"
+printf 'it("a", () => {});\nit("b", () => {});\n' > "$T/tests/x.test.ts"
+pt() {  # <want> <label> <json>
+  local want="$1" label="$2" json="$3"
+  printf '%s' "$json" | python3 "$P/hooks/protect_tests.py" >/dev/null 2>&1; local got=$?
+  [ "$got" = "$want" ] && ok "$label (rc=$got)" || fail "$label (rc=$got, want $want)"
+}
+pt 2 "Edit removing a test is blocked" '{"tool_name":"Edit","tool_input":{"file_path":"'"$T"'/tests/x.test.ts","old_string":"it(\"a\", () => {});\nit(\"b\", () => {});","new_string":"it(\"a\", () => {});"}}'
+pt 0 "Edit adding a test passes" '{"tool_name":"Edit","tool_input":{"file_path":"'"$T"'/tests/x.test.ts","old_string":"it(\"b\", () => {});","new_string":"it(\"b\", () => {});\nit(\"c\", () => {});"}}'
+pt 0 "Edit renaming a test passes (same count)" '{"tool_name":"Edit","tool_input":{"file_path":"'"$T"'/tests/x.test.ts","old_string":"it(\"a\"","new_string":"it(\"alpha\""}}'
+pt 2 "Write with fewer tests is blocked" '{"tool_name":"Write","tool_input":{"file_path":"'"$T"'/tests/x.test.ts","content":"it(\"only\", () => {});"}}'
+pt 0 "Write to a non-test file passes" '{"tool_name":"Write","tool_input":{"file_path":"'"$T"'/src/a.ts","content":"x"}}'
+pt 2 "rm of a test path is blocked" '{"tool_name":"Bash","tool_input":{"command":"rm tests/x.test.ts"}}'
+pt 2 "git rm of a test path is blocked" '{"tool_name":"Bash","tool_input":{"command":"cd x && git rm -q tests/x.test.ts"}}'
+pt 0 "rm of a source path passes" '{"tool_name":"Bash","tool_input":{"command":"rm src/a.ts"}}'
+pt 0 "prose mentioning rm tests passes" '{"tool_name":"Bash","tool_input":{"command":"echo \"never rm tests/\""}}'
+printf '{"features":[{"id":"f1","name":"login","passes":false},{"id":"f2","name":"billing","passes":false}]}' > "$T/state/features.json"
+pt 0 "features.json: flipping passes is allowed" '{"tool_name":"Write","tool_input":{"file_path":"'"$T"'/state/features.json","content":"{\"features\":[{\"id\":\"f1\",\"name\":\"login\",\"passes\":true},{\"id\":\"f2\",\"name\":\"billing\",\"passes\":false}]}"}}'
+pt 2 "features.json: renaming a feature is blocked" '{"tool_name":"Write","tool_input":{"file_path":"'"$T"'/state/features.json","content":"{\"features\":[{\"id\":\"f1\",\"name\":\"signin\",\"passes\":true},{\"id\":\"f2\",\"name\":\"billing\",\"passes\":false}]}"}}'
+pt 2 "features.json: dropping a feature is blocked" '{"tool_name":"Write","tool_input":{"file_path":"'"$T"'/state/features.json","content":"{\"features\":[{\"id\":\"f1\",\"name\":\"login\",\"passes\":true}]}"}}'
+TEST_EDIT_OK=1 pt 0 "TEST_EDIT_OK=1 is the visible door" '{"tool_name":"Bash","tool_input":{"command":"rm tests/x.test.ts"}}'
+printf '{nope' | python3 "$P/hooks/protect_tests.py" >/dev/null 2>&1; [ $? = 0 ] && ok "protect_tests: junk input allows" || fail "protect_tests must fail open"
+
+echo "== progress, precompact, resume"
+out="$(python3 "$P/scripts/progress.py" files-modified --root "$T")"
+grep -q '^app.ts$' <<<"$out" && ok "files-modified lists app.ts" || fail "files-modified: $out"
+python3 "$P/scripts/progress.py" append --root "$T" --text "selftest event" >/dev/null
+grep -q 'selftest event' "$T/state/progress.md" && ok "progress.md appended" || fail "progress append"
+grep -q 'gate PASS' "$T/state/progress.md" && ok "stop gate recorded its PASS in progress.md" || fail "gate PASS not recorded"
+echo '{"session_id":"selftest-compact","trigger":"manual"}' | bash "$P/hooks/precompact.sh"; [ $? = 0 ] && ok "precompact exits 0" || fail "precompact rc"
+snap="$(ls "$T"/.loopkit/session/*/precompact.md 2>/dev/null | head -1)"
+[ -n "$snap" ] && grep -q '^## Files Modified' "$snap" && grep -q 'app.ts' "$snap" && ok "precompact snapshot has Files Modified from git" || fail "precompact snapshot: $snap"
+for sec in "Session Intent" "Decisions Made" "Current State" "Next Steps"; do grep -q "^## $sec" "$snap" && ok "snapshot section: $sec" || fail "snapshot missing $sec"; done
+out="$(bash "$P/hooks/session_start.sh" resume)"
+grep -q 'LOOPKIT RESUME' <<<"$out" && grep -q 'app.ts' <<<"$out" && ok "session_start resume prints Files Modified" || fail "resume: $out"
+
+echo "== linters on fixtures"
+F="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-lint.XXXXXX")"
+printf '# CLAUDE.md\n- NEVER do a\n- ALWAYS do b\n- IMPORTANT: c\n- run the tests with npm run test before claiming done\n- this exact standing rule is duplicated between two files on purpose\n' > "$F/CLAUDE.md"
+printf '# constitution\n- this exact standing rule is duplicated between two files on purpose\n' > "$F/constitution.md"
+printf '{"scripts":{"test":"vitest"}}' > "$F/package.json"
+out="$(python3 "$P/scripts/check-claude-md.py" --root "$F")"
+grep -q 'emphasised lines' <<<"$out" && ok "check-claude-md flags multiple emphasised lines" || fail "emphasis: $out"
+grep -q 'restates a rule already in constitution.md' <<<"$out" && ok "check-claude-md flags the duplicate" || fail "duplicate: $out"
+grep -q 'restates a package.json script' <<<"$out" && ok "check-claude-md flags the derivable line" || fail "derivable: $out"
+expect_rc 1 "check-claude-md --strict fails on the duplicate" python3 "$P/scripts/check-claude-md.py" --root "$F" --strict
+printf '# CLAUDE.md\n- one rule\n' > "$F/CLAUDE.md"; rm -f "$F/constitution.md"
+expect_rc 0 "check-claude-md --strict passes a clean file" python3 "$P/scripts/check-claude-md.py" --root "$F" --strict
+expect_rc 0 "check-skills --strict passes the plugin's own skills" python3 "$P/scripts/check-skills.py" --root "$F" --plugin "$P" --strict
+mkdir -p "$F/.claude/skills/bad"; printf '# no frontmatter\n' > "$F/.claude/skills/bad/SKILL.md"
+expect_rc 1 "check-skills --strict fails a skill without frontmatter/Gotchas" python3 "$P/scripts/check-skills.py" --root "$F" --strict
+printf '{"mcpServers":{"ghost":{"command":"./bin/server","args":["--token","ghp_0123456789abcdefghijklmnopqrstuv"]}}}' > "$F/.mcp.json"
+printf '# TOOLS.md\n' > "$F/TOOLS.md"
+out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
+grep -q 'no row in TOOLS.md' <<<"$out" && ok "check-tools: server without a row" || fail "tools row: $out"
+grep -q 'relative path' <<<"$out" && ok "check-tools: relative command" || fail "tools relative: $out"
+grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'ghp_0123' <<<"$out" && ok "check-tools: secret flagged by key, value never printed" || fail "tools secret: $out"
+expect_rc 1 "check-tools --strict fails" python3 "$P/scripts/check-tools.py" --root "$F" --strict
+mkdir -p "$F/.claude"; printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 .claude/hooks/block_dangerous.py"}]}]}}' > "$F/.claude/settings.json"
+out="$(python3 "$P/scripts/check-duplicate-hooks.py" --root "$F" --plugin "$P")"
+grep -q 'DUPLICATE: .claude/settings.json wires block_dangerous.py' <<<"$out" && ok "check-duplicate-hooks finds the project copy" || fail "dup hooks: $out"
+find "$F" -delete
+
+echo "== approval fatigue"
+# The id is computed ONCE: `'…'$$'…'` inside a "$(…)" substitution expands to
+# an empty PID on macOS bash 3.2, so building it inline on both sides hashed
+# two different sessions and the pin failed on the test's own quoting.
+FSID="selftest-fatigue-$$-$RANDOM"
+FRESH="selftest-fresh-$$-$RANDOM"
+for i in $(seq 1 31); do printf '{"session_id":"%s","tool_name":"Bash","tool_input":{}}' "$FSID" | python3 "$P/hooks/count_approvals.py"; done
+out="$(printf '{"session_id":"%s","prompt":"/loop"}' "$FSID" | python3 "$P/hooks/loop_doctrine.py")"
+grep -q 'APPROVAL FATIGUE: 31' <<<"$out" && ok "doctrine names approval fatigue past the threshold" || fail "fatigue line missing: $out"
+out="$(printf '{"session_id":"%s","prompt":"/loop"}' "$FRESH" | python3 "$P/hooks/loop_doctrine.py")"
+grep -q 'APPROVAL FATIGUE' <<<"$out" && fail "fatigue line on a fresh session" || ok "no fatigue line on a fresh session"
+out="$(printf '{"session_id":"%s","tool_name":"Bash","tool_input":{}}' "$FSID" | python3 "$P/hooks/count_approvals.py")"
+[ -z "$out" ] && ok "count_approvals prints nothing (never decides a permission)" || fail "count_approvals printed: $out"
+
+echo "== hook wiring"
+for ev in PreCompact PermissionRequest; do
+  python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']; sys.exit(0 if sys.argv[2] in h else 1)" "$P/hooks/hooks.json" "$ev" && ok "hooks.json wires $ev" || fail "hooks.json lacks $ev"
+done
+python3 -c "import json,sys; h=json.load(open(sys.argv[1]))['hooks']['SessionStart']; sys.exit(0 if any(e.get('matcher')=='resume|compact' for e in h) else 1)" "$P/hooks/hooks.json" && ok "SessionStart resume|compact matcher present" || fail "SessionStart matcher"
+grep -q 'protect_tests.py' "$P/hooks/hooks.json" && ok "protect_tests wired" || fail "protect_tests not wired"
+[ -f "$T/.loopkit/test-globs.txt" ] && ok "init laid down .loopkit/test-globs.txt" || fail "test-globs.txt missing after init"
+
+# The repo this came from is never named anywhere in this project (owner rule,
+# 2026-09-06) — README, docs, tests and plugin alike. The plugin's own
+# `luxtelos/loopkit` is the one org reference allowed.
+leaks="$(grep -rnEil --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude='*.pyc' --exclude=selftest.sh 'balancia|balencia|/Volumes/evm|dev_multi_iam|codecakes/adaptive|adaptive-unified|accountingos' "$REPO" 2>/dev/null || true)"
+[ -z "$leaks" ] && ok "no project-specific tokens anywhere in the repo" || { fail "project tokens in: $leaks"; }
+orgs="$(grep -rnE --exclude-dir=__pycache__ --exclude-dir=.git --exclude-dir=worktrees --exclude=selftest.sh 'luxtelos' "$REPO" 2>/dev/null | grep -v 'luxtelos/loopkit' || true)"
+[ -z "$orgs" ] && ok "the only org reference is luxtelos/loopkit" || { fail "other org references: $orgs"; }
 
 unset CLAUDE_PROJECT_DIR
 find "$T" -delete
