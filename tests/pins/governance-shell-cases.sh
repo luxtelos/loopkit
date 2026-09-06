@@ -64,9 +64,24 @@ done
 [ "$rfail" = 0 ] && echo "  all ${#reads[@]} read shapes allowed"
 
 echo "OVERRIDE (want rc=0)"
-ovr="$(python3 -c 'import json; print(json.dumps({"tool_name":"Bash","tool_input":{"command":"cat > specs/x.md"}}))' \
-  | GOVERNANCE_EDIT_OK=1 CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1; echo $?)"
-[ "$ovr" = 0 ] && echo "  ratified override still opens the door" || echo "  OVERRIDE BROKEN rc=$ovr"
+# Two doors, and they are NOT the same door. The env var is set for the hook's
+# own process. The inline prefix lives in the command string and reaches the hook
+# only if it parses it -- that is the half that was broken, and testing only the
+# env var is why the first version of this pin could not have caught it.
+# Control for the controls: with neither door open this command must be REFUSED.
+# Without this line the two probes below can both report success while the hook
+# is simply not matching the path -- which is exactly what happened on the first
+# version of this section.
+mk() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
+# the same literal the writes list uses, so the probe really hits a protected path
+WRITE_CMD="cat > specs/x.md"
+env_ovr="$(mk "$WRITE_CMD" | GOVERNANCE_EDIT_OK=1 CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1; echo $?)"
+inline_ovr="$(mk "GOVERNANCE_EDIT_OK=1 $WRITE_CMD" | env -u GOVERNANCE_EDIT_OK CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1; echo $?)"
+ovr=0
+no_door="$(mk "$WRITE_CMD" | env -u GOVERNANCE_EDIT_OK CLAUDE_PROJECT_DIR="$ROOT" python3 "$H" >/dev/null 2>&1; echo $?)"
+if [ "$no_door" = 2 ]; then echo "  control: the write is refused with no door open"; else ovr=1; echo "  CONTROL BROKEN rc=$no_door -- the override probes below prove nothing"; fi
+if [ "$env_ovr" = 0 ]; then echo "  env var opens the door"; else ovr=1; echo "  ENV OVERRIDE BROKEN rc=$env_ovr"; fi
+if [ "$inline_ovr" = 0 ]; then echo "  inline prefix opens the door"; else ovr=1; echo "  INLINE OVERRIDE BROKEN rc=$inline_ovr"; fi
 
 echo "SUMMARY writes-leaked=$wfail reads-false-blocked=$rfail"
 [ "$wfail" = 0 ] && [ "$rfail" = 0 ] && [ "$ovr" = 0 ]

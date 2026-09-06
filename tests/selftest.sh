@@ -719,6 +719,14 @@ gov_out="$(bash "$REPO/tests/pins/governance-shell-cases.sh" "$P/hooks/protect_g
 printf '%s\n' "$gov_out" | grep -E '^  (LEAK|FALSE BLOCK|OVERRIDE BROKEN)' || true
 [ "$gov_rc" = 0 ] && ok "every write shape blocked, every read shape allowed, override reachable inline" \
   || fail "governance shell cases: $(printf '%s' "$gov_out" | tail -1)"
+# And the cases must be able to FAIL. Each half of the guard is broken in turn
+# and the pin must say so — the first version of the override case passed
+# whatever the hook did, because its probe never hit a protected path.
+red_out="$(bash "$REPO/tests/pins/governance-prove-red.sh" "$REPO" 2>&1)"
+red_n="$(printf '%s' "$red_out" | grep -c 'RED, as required' || true)"
+notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
+[ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
+  || fail "governance mutations: $red_n/3 red, $notred not red"
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
