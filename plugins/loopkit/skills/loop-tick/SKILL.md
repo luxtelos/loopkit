@@ -124,6 +124,12 @@ its implementer is not pacing itself, it is idling (owner correction,
 - `loop-watch.sh` escalates after 24 unchanged ticks. A watch that quiet has
   stopped producing information — chase the human or stop the loop.
 
+The question "what am I waiting on?" is answered for you: `loop-next.sh` ends
+every tick with `NEXT: CONTINUE` (rows still actionable — next tick now, no
+wakeup), `NEXT: WAIT` (only a PR review, CI or a human ruling can move things
+— the one case for a wakeup) or `NEXT: IDLE` (run morning-triage now). Read
+the line; do not re-derive it.
+
 ## Invoking it
 
 **From the skill picker: choose `loopkit:loop-tick`. No arguments, nothing to
