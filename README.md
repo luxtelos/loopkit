@@ -92,7 +92,14 @@ plugins/loopkit/
   hooks/require_contracts.py       read FILES/TOOLS/COMMANDS before any work tool; passive until init
   hooks/loop_doctrine.py           injects the tick discipline when a prompt looks like a tick; never blocks
   hooks/notify_needs_human.py      webhook on inbox edits (Slack/Discord/generic); fail-open
-  hooks/stop_gate.sh               precheck → regression diff → lint (+fallback) → typecheck → build
+  hooks/stop_gate.sh               precheck → regression diff → lint (+fallback) → typecheck → build; writes state/progress.md
+  hooks/protect_tests.py           a test file's test count may not drop; rm/mv of test paths refused; features.json only flips passes
+  hooks/require_recall.py          a storage-invariant write is blocked until memory was consulted this session (rules: .loopkit/recall-triggers.txt)
+  hooks/precompact.sh              five-section snapshot to .loopkit/session/ before every compaction; SessionStart resume|compact reads it back
+  hooks/count_approvals.py         counts permission prompts, never decides one; the doctrine names approval fatigue past 30
+  hooks/offload_nudge.py           a non-blocking line when a Bash result exceeds 8 KB, pointing at run-capped.sh
+  loopkit_memory/                  the memory registry (.loopkit/memory.json) and adapters: graph (codebase-memory CLI → grep),
+                                   memory (mempalace CLI → notes on disk), knowledge (OKF, 0.2.0-c)
   scripts/loop-next.sh             which ONE stage is due (+ loop_next_pick.py: lanes, priority, blocked rows, fan-out)
   scripts/loop-scan.py             two API calls: PRs with real blockers, loop-owned issues, local backlog
   scripts/loop-watch.sh            cheap per-PR poll with a per-PR baseline
@@ -102,17 +109,44 @@ plugins/loopkit/
   scripts/check-citations.py       file:line citations that still point where they claim
   scripts/morning-triage.sh        headless discovery run, audit-logged
   scripts/loopkit-init.sh          lay the files into a project, idempotently
-  skills/                          loop-tick, loop-scan, loop-assess (+references), morning-triage,
-                                   spec-writer, acceptance-review, pr-review, run-state-model (+driver, installer, fixtures)
+  scripts/memory.py                status | recall | remember | invalidate | wakeup | graph …; --format concise by default
+  scripts/progress.py              Files Modified from git; the append-only progress log; the compaction snapshot
+  scripts/run-capped.sh            run a command, full output to .loopkit/scratch/, head+tail in context
+  scripts/check-claude-md.py       the CLAUDE.md budget: standing instructions, one emphasised line, duplicates, derivable lines
+  scripts/check-skills.py          frontmatter, Gotchas, run-vs-read verbs on every SKILL.md
+  scripts/check-tools.py           no row no server, absolute paths, secret-looking literals, server count
+  scripts/check-duplicate-hooks.py project hooks that duplicate plugin hooks (both fire)
+  skills/                          loop-tick, loop-scan, loop-assess (+references), morning-triage, memory (+protocol),
+                                   spec-writer, acceptance-review (+judge), pr-review, run-state-model (+driver, installer, fixtures)
   agents/                          planner, implementer, reviewer
   commands/                        init, tick, scan, watch, doctor
   templates/                       what init copies: constitution, contracts, mutation policy, queue, baseline, inbox, CLAUDE.md block, .loopkit/
 tests/selftest.sh                  every unit test + an end-to-end pass in a scratch repo
 ```
 
-Every hook is fail-open except the four meant to block. Every script exits 0
+Every hook is fail-open except the six meant to block (contracts, dangerous commands, governance, tests, recall, the stop gate). Every script exits 0
 and prints a `VERDICT:`/`STAGE:` line you read, except the gates, whose exit
 code is the point. A crash in a hook is an allow, so nothing here raises.
+
+## Memory without RAG
+
+`.loopkit/memory.json` names three adapters and every gate asks the registry,
+never a server:
+
+| Kind | Primary | Fallback | What it answers |
+| --- | --- | --- | --- |
+| graph | `codebase-memory-mcp cli` (structural index) | `grep`, same output shape | callers, callees, snippets, impact of a diff |
+| memory | `mempalace` CLI (recall, wake-up); note-then-`mine` for writes | notes under `state/memory/` | "has this bitten us before"; `remember`; `invalidate` (never delete) |
+| knowledge | OKF bundle — typed, drift-checked concepts (0.2.0-c) | — | rulings, traps, invariants, gates |
+
+`memory.py` prints `ADAPTER: <kind>=<name> [available|DEGRADED: <reason>]` on
+every call; DEGRADED says how to fix it. `--format concise` (default) caps
+output at 30 lines and files the rest under `.loopkit/scratch/`.
+
+The gate that makes it matter: `require_recall.py` blocks a migration, a
+`UNIQUE`/`PRIMARY KEY`/`CHECK` in code, or a shell write into a migrations
+directory until memory was consulted this session — because a fact recorded
+in June cannot defend itself in July if nothing reads it.
 
 ## Anthropic's practices, as checks
 

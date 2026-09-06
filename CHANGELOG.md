@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.2.0-alpha.2 — 2026-09-06 (batch b: memory adapters)
+
+Memory as pluggable adapters instead of RAG, and the recall gate that makes
+them matter.
+
+- `loopkit_memory/` — a registry read from `.loopkit/memory.json` with three
+  adapter kinds: graph (codebase-memory CLI, grep fallback), memory (mempalace
+  CLI for recall/wake-up, note-then-mine for remember, files fallback),
+  knowledge (OKF, arrives in alpha.3). Every adapter answers `available()`
+  with a reason; every output begins `ADAPTER: <kind>=<name> [available|DEGRADED: …]`.
+  In a git worktree the `.venv` and palace resolve from the main checkout.
+- `scripts/memory.py` — `status | recall | remember | invalidate | wakeup |
+  graph find/callers/callees/snippet/impact`, `--format concise` (30 lines,
+  rest to `.loopkit/scratch/`) by default.
+- `hooks/require_recall.py` — the recall gate, ported: a storage-invariant
+  write (migration path, invariant SQL in code, a shell write into a
+  migrations directory) is blocked until memory was consulted this session.
+  Rules in `.loopkit/recall-triggers.txt`; what counts as recall comes from the
+  registry, never a server name; audited outage escape for content-rule writes.
+  Passive without `memory.json`.
+- Session start prints the `MEMORY:` line; `protect_governance` guards the
+  knowledge bundle when enabled; `init` lays down `memory.json` and
+  `recall-triggers.txt`.
+- `scripts/run-capped.sh` + `hooks/offload_nudge.py` — big tool output to a
+  file with head/tail in context; a non-blocking nudge (and a metrics line)
+  when a Bash result exceeds 8 KB.
+- `skills/memory` — the protocol, with Gotchas.
+
 ## 0.2.0-alpha.1 — 2026-09-06 (batch a: the practice floor)
 
 Anthropic's published practices as checks and hooks, plus the oversight

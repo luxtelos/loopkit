@@ -35,5 +35,9 @@ if [ ! -d "$ROOT/.loopkit" ]; then
   exit 0
 fi
 
+if [ -f "$ROOT/.loopkit/memory.json" ]; then
+  mem="$(timeout 12 python3 "$PLUGIN_ROOT/scripts/memory.py" status --line --root "$ROOT" 2>/dev/null || true)"
+  [ -n "$mem" ] && echo "$mem — recall: python3 \"$PLUGIN_ROOT/scripts/memory.py\" recall \"<query>\""
+fi
 echo "LOOPKIT: read FILES.md (memory routing), TOOLS.md (tool diet), COMMANDS.md (how work fires) before any work — a gate blocks work tools until you do. Scripts live at $PLUGIN_ROOT/scripts; the next stage is a lookup: bash \"$PLUGIN_ROOT/scripts/loop-next.sh\""
 exit 0

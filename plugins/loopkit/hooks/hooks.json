@@ -1,5 +1,5 @@
 {
-  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, protect_governance, protect_tests, and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission — exit 0 with no output is the normal prompt.",
+  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, protect_governance, protect_tests, require_recall (gate), and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission — exit 0 with no output is the normal prompt.",
   "hooks": {
     "SessionStart": [
       {
@@ -66,6 +66,15 @@
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/protect_tests.py\""
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_recall.py\" gate"
+          }
+        ]
       }
     ],
     "PermissionRequest": [
@@ -95,6 +104,24 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_contracts.py\" mark"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_recall.py\" mark"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/offload_nudge.py\""
           }
         ]
       }

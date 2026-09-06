@@ -1,0 +1,19 @@
+{
+  "_comment": "LoopKit memory registry. Delete a section to disable that kind; delete the file to make every memory gate passive. Adapters shell out to CLIs and degrade to grep/files when the tool is missing — the session-start line says which.",
+  "graph": {
+    "adapter": "codebase-memory",
+    "project": null,
+    "fallback": "grep"
+  },
+  "memory": {
+    "adapter": "mempalace",
+    "palace": ".mempalace/palace",
+    "notes_dir": "state/memory",
+    "fallback": "files"
+  },
+  "knowledge": {
+    "adapter": "okf",
+    "bundle": "knowledge",
+    "enabled": false
+  }
+}
