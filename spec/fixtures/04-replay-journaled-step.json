@@ -1,0 +1,28 @@
+{
+  "name": "04-replay-journaled-step",
+  "description": "A Run is resumed and its journal already carries BOTH the intent and the result for step 1. Replay must answer step 1 from the journal: provider_calls stays 0 and no duplicate event is appended. Step 2's intent is journaled but its result is not — that step is NOT complete, so re-calling the provider for it is correct, and the conditional write on the effect keeps the side effect at one application.",
+  "input": {
+    "queue": [
+      { "finding": "judge runner", "source": "gh#104", "priority": "high", "spec": "specs/pairwise-judge-verdicts.md", "status": "fixing" }
+    ],
+    "policy": { "concepts": [] },
+    "journal": [
+      { "at": "2026-09-07T00:00:00+00:00", "event": "stage", "stage": "fixing", "scope": "" },
+      { "at": "2026-09-07T00:00:01+00:00", "event": "intent", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa" },
+      { "at": "2026-09-07T00:00:02+00:00", "event": "result", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa", "status": "ok" },
+      { "at": "2026-09-07T00:00:03+00:00", "event": "intent", "run_id": "run-0001", "step": "2", "idempotency_key": "k-bbb" }
+    ]
+  },
+  "expected": {
+    "stage": "fixing",
+    "next": "CONTINUE",
+    "counts": { "pr-open": 0, "fixing": 1, "spec-ready": 0, "spec-draft": 0, "new": 0, "blocked": 0 },
+    "targets": [ { "stage": "fixing", "finding": "judge runner", "source": "gh#104" } ],
+    "provider_calls": { "1": 0, "2": 1 },
+    "events": [
+      { "event": "stage", "stage": "fixing", "scope": "" },
+      { "event": "result", "run_id": "run-0001", "step": "2", "idempotency_key": "k-bbb", "status": "ok" }
+    ],
+    "messages": []
+  }
+}

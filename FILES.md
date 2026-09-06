@@ -9,6 +9,8 @@
 | Path                            | What it is                                                                                          | Committed?                 |
 | ------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------- |
 | `specs/`                        | Source of truth (EARS criteria). Written via the spec-writer skill; guarded by `protect_governance` | yes                        |
+| `docs/adr/`                     | Architecture decision records, numbered. One load-bearing decision each; an epic ships its ADRs before code | yes                        |
+| `spec/fixtures/`                | Cross-SDK conformance fixtures: `(queue, policy, journal)` in, `(stage, next, events, messages)` out        | yes                        |
 | `state/`                        | The loop's working memory: `triage.md`, `known-test-failures.txt`, dated run records and audits     | yes, every run             |
 | `inbox/needs-human.md`          | Escalation door — work that needs a human waits here. Edits ping the configured webhook             | yes                        |
 | `constitution.md`               | Non-negotiables, one EARS line each. Guarded                                                        | yes                        |
@@ -25,6 +27,9 @@
 | Run findings, audits, assessments           | `state/<date>-<topic>.md`                             |
 | Anything needing a human decision           | `inbox/needs-human.md` (whole context, both options)  |
 | Requirements and acceptance criteria        | `specs/<feature>.md`                                  |
+| Why a design decision went that way         | `docs/adr/NNNN-<slug>.md`                             |
+| Behaviour every SDK must reproduce          | `spec/fixtures/*.json` (the contract, not a test)     |
+
 | Known-failing tests                         | `state/known-test-failures.txt`                       |
 | User prefs, feedback, cross-session gotchas | Claude auto-memory                                    |
 | Code structure (callers, callees, chains)   | derived — query the code, never author it             |

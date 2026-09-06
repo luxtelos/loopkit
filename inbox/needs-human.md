@@ -36,3 +36,59 @@ Rows M2–M6 in state/triage.md sit at `blocked` only because each depends on th
 previous milestone's PR merging (M1 spec first — the owner's paper-trail rule).
 No decision is pending: the plan was approved 2026-09-07 with one ruling folded
 in (SQLite, no Postgres). Flip each row to `new` when its predecessor merges.
+
+## Runtime spec M1 — four contract decisions the spec cannot infer (2026-09-07)
+
+Blocks: `specs/loopkit-runtime.md` criteria 20, 21, 30 and 18; milestone M2
+(`loopkit-core`). The spec is drafted and its gates are green, but these four
+change observable behaviour for the same input, so an implementer would have to
+guess. Each is a cost trade, not a lookup — no recommendation is attached.
+
+**Q1 — budget exhaustion: resumable or terminal? (criterion 20)**
+When a Run's budget runs out mid-step, the runtime journals `budget_exhausted`
+and stops. What happens next is undecided.
+- *Resumable* (stop cleanly; raising the budget and re-running the same `run_id`
+  continues where it stopped). Cost: a Run can sit half-finished indefinitely
+  holding its lease; "the Run failed" and "the Run is paused" look identical to
+  a caller who does not read the journal; a runaway Run is resurrected by anyone
+  who raises the budget, so the budget stops being a hard stop.
+- *Terminal* (mark failed; a new `run_id` is required). Cost: all work already
+  journaled is discarded on a budget that was merely set too low — the common
+  case — and the caller pays for every completed step again. Also awkward with
+  Q2: a token budget is only knowable after the call that exceeds it.
+
+**Q2 — budget unit: calls, tokens, or seconds? (criterion 21)**
+- *Provider calls.* Cheap, exact, checkable before the call. Cost: a call is not
+  a unit of cost — one 200k-token call and one 200-token call count the same, so
+  the budget does not bound spend, which is what a budget is usually for.
+- *Tokens from `usage`.* Bounds actual spend. Cost: only knowable AFTER the call
+  returns, so "check before each call" becomes "check against the previous
+  call's total" and a single large call can overshoot by any amount. Also
+  requires every Provider to report `usage` honestly; the spec already has to
+  say `0` rather than `null` for providers that report nothing, and a provider
+  reporting 0 has an unlimited budget.
+- *Wall-clock seconds.* Simple, provider-independent, bounds the thing an
+  operator actually waits on. Cost: not reproducible — the same Run costs a
+  different budget on a slow network, so fixtures cannot pin it and CI is flaky
+  by construction.
+
+**Q3 — the Store `list` contract: total list or iterator? (criterion 30)**
+- *Total ordered list.* Simplest contract; the fixtures can compare one value.
+  Cost: an S3 bucket paginates at 1000 keys, so the implementation must loop
+  internally, and a journal of 10^6 events is materialised in memory before the
+  caller sees the first key. A store that quietly truncates at the first page is
+  the bug pre-mortem row 4 warns about, and it looks exactly like "no more work".
+- *Explicit iterator / cursor.* Bounded memory, honest about pagination. Cost: a
+  second concept in a contract whose whole justification (ADR-0003) is that it is
+  four small methods; every SDK must implement lazy iteration identically, and
+  the fixtures get harder to express because the expected value is a stream.
+
+**Q4 — dead-letter destination for a malformed Message (criterion 18)**
+- *The mailbox's own `dead-letter/` directory* (what `knowledge_actor.py` does
+  today, with its own escalation path). Cost: two escalation surfaces exist and a
+  human watching `inbox/needs-human.md` never sees it; a Run can dead-letter
+  every message it writes and still report success.
+- *`inbox/needs-human.md`* (one door for everything needing a person). Cost:
+  changes existing actor behaviour that is already tested and already exits 6 to
+  signal it; mixes machine-generated envelope failures into a file written for
+  humans to read, and a noisy Run could bury a real ruling request.
