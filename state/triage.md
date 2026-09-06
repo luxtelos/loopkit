@@ -24,8 +24,9 @@ read, and a hand edit breaks that.
 | M4 projections + protocols: knowledge project --schema, A2A agent card, AG-UI emitter behind a flag | docs/research/runtime-plan.md §M4 | medium |  | blocked |
 | M5 loopkit-js from the conformance fixtures (packages/js) | docs/research/runtime-plan.md §M5 | low |  | blocked |
 | M6 bench: prompt-driven vs policy-driven on one task set, ledger metrics | docs/research/runtime-plan.md §M6 | low |  | blocked |
-| M1 spec review FAIL: scoping field is fiction (scopes/scope/tags vs okf.py's lane\|scope\|domain prefix), fixture 05 message lacks required enqueued_at, criterion 1 run_start contradicts all four fixtures, fixture 04 events ambiguous, counts undefined | PR #8 review §spec-defects | high |  | new |
-| Model checker: EffectAtMostOnce is VACUOUS (deleting the convergence guard still passes; Commit's result==0 guard makes redelivery unreachable) and criterion 27's lease-guard claim is false | PR #8 review §vacuous-invariant | high |  | new |
+| M1 spec review FAIL: scoping field is fiction (scopes/scope/tags vs okf.py's lane\|scope\|domain prefix), fixture 05 message lacks required enqueued_at, criterion 1 run_start contradicts all four fixtures, fixture 04 events ambiguous, counts undefined | PR #8 review §spec-defects | high |  | fixing |
+| Model checker: EffectAtMostOnce is VACUOUS (deleting the convergence guard still passes; Commit's result==0 guard makes redelivery unreachable) and criterion 27's lease-guard claim is false | PR #8 review §vacuous-invariant | high |  | fixing |
 | Criterion 33 cites a prompt-bytes-per-tick ceiling that does not exist anywhere in the repo — an unpinned proxy presented as a check | PR #8 review §phantom-proxy | high |  | new |
 | protect_governance had no Bash matcher; shell writes into specs/ bypassed it entirely | PR #8 review §hook-gap | critical |  | done |
 | selftest called an undefined section() helper; three 'command not found' lines per run on both platforms | linux-validation 2026-09-07 | low |  | done |
+| Release v0.2.1 cut from main; marketplace clone refreshed to v0.2.1 (installed cache still 0.1.0 / 0.2.0-alpha.1 until /plugin install runs) | release §0.2.1 | medium |  | done |
