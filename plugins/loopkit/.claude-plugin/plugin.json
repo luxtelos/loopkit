@@ -1,7 +1,7 @@
 {
   "name": "loopkit",
   "displayName": "LoopKit",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0",
   "description": "A finishing harness for Claude Code: a state file as memory, stage picking as a lookup, hooks that actually block, a stop gate that runs the tests, separated powers between the agent that writes and the one that judges, and an escalation door for what needs a human. Built from a production repo, stripped of it.",
   "author": {
     "name": "Akul",

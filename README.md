@@ -32,6 +32,9 @@ that transfers.
 /plugin install loopkit@loopkit
 ```
 
+Where this is going: **[ROADMAP.md](ROADMAP.md)** — the milestones, the
+position they take, and the claim that would falsify them.
+
 First time? **[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)** walks
 through install (GitHub or a local folder), init, configuring the gate,
 seeding the test baseline, finding work and running the first tick — with
@@ -98,6 +101,7 @@ plugins/loopkit/
   hooks/precompact.sh              five-section snapshot to .loopkit/session/ before every compaction; SessionStart resume|compact reads it back
   hooks/count_approvals.py         counts permission prompts, never decides one; the doctrine names approval fatigue past 30
   hooks/offload_nudge.py           a non-blocking line when a Bash result exceeds 8 KB, pointing at run-capped.sh
+  hooks/offload_rewrite.py         PreToolUse updatedInput: a Bash command matching .loopkit/offload-patterns.txt runs through run-capped.sh; passive without the file
   loopkit_memory/                  the memory registry (.loopkit/memory.json) and adapters: graph (codebase-memory CLI → grep),
                                    memory (mempalace CLI → notes on disk), knowledge (OKF, 0.2.0-c)
   scripts/loop-next.sh             which ONE stage is due (+ loop_next_pick.py: lanes, priority, blocked rows, fan-out)
@@ -108,10 +112,17 @@ plugins/loopkit/
   scripts/test-regressions.sh      one run diffed against state/known-test-failures.txt
   scripts/check-citations.py       file:line citations that still point where they claim
   scripts/morning-triage.sh        headless discovery run, audit-logged
-  scripts/loopkit-init.sh          lay the files into a project, idempotently
+  scripts/loopkit-init.sh          lay the files into a project, idempotently; --profile commerce
+  scripts/fanout.sh                one claude -p per brief, own worktree, scoped tools/turns, JSON results, nothing merged
+  scripts/judge.py                 pairwise judge: claude -p twice per criterion with positions swapped, disagreement → TIE 0.5, judge ≠ generator
+  scripts/check-snapshot.py        snapshot evals: shape, end-state-only, no live keys
+  scripts/rulings-extract.py       rulings hiding in the inbox, ADRs, specs → concept messages (dry run by default)
+  scripts/rulings-compile.py       every Invariant/Gate names an artefact that exists; --strict
+  scripts/loop-metrics.py          verified success, gate pass rate, re-asks, blocked rows — each with n=
+  scripts/ticks.py                 the append-only event ledger those metrics read
   scripts/memory.py                status | recall | remember | invalidate | wakeup | graph …; --format concise by default
   scripts/progress.py              Files Modified from git; the append-only progress log; the compaction snapshot
-  scripts/run-capped.sh            run a command, full output to .loopkit/scratch/, head+tail in context
+  scripts/run-capped.sh            run a command (argv, or one shell string under pipefail), full output to .loopkit/scratch/, head+tail in context
   scripts/check-claude-md.py       the CLAUDE.md budget: standing instructions, one emphasised line, duplicates, derivable lines
   scripts/check-skills.py          frontmatter, Gotchas, run-vs-read verbs on every SKILL.md
   scripts/check-tools.py           no row no server, absolute paths, secret-looking literals, server count
@@ -137,7 +148,7 @@ never a server:
 | --- | --- | --- | --- |
 | graph | `codebase-memory-mcp cli` (structural index) | `grep`, same output shape | callers, callees, snippets, impact of a diff |
 | memory | `mempalace` CLI (recall, wake-up); note-then-`mine` for writes | notes under `state/memory/` | "has this bitten us before"; `remember`; `invalidate` (never delete) |
-| knowledge | OKF bundle — typed, drift-checked concepts (0.2.0-c) | — | rulings, traps, invariants, gates |
+| knowledge | OKF bundle — typed, drift-checked concepts, a deterministic mailbox actor | — | rulings, traps, invariants, gates; `enforced_by` proves a ruling has a gate |
 
 `memory.py` prints `ADAPTER: <kind>=<name> [available|DEGRADED: <reason>]` on
 every call; DEGRADED says how to fix it. `--format concise` (default) caps
@@ -167,6 +178,29 @@ script or a template — a check that can fail, not a sentence in a prompt.
 
 `/loopkit:doctor` runs the four checks. None of them fails the doctor; they
 print what they found, and `--strict` fails a CI job.
+
+## Profiles
+
+A profile is templates and checks for a kind of project — never code that
+runs in it. `loopkit-init.sh --profile commerce` appends, marker-guarded,
+the constraints Anthropic published for commerce agents
+([anatomy of effective commerce agents](https://claude.com/blog/the-anatomy-of-effective-commerce-agents)):
+named block patterns that refuse live keys, live-mode flags and money-moving
+verbs from an agent's shell (each block names its ruling), protected pricing
+and policy paths, recall triggers on checkout and refund code, EARS lines in
+`constitution.md`, a snapshot-eval template graded on end state with
+`check-snapshot.py`, and the `commerce-review` skill. It claims nothing about
+payment protocols Anthropic has not published on; those sit in
+[docs/research/watchlist.md](docs/research/watchlist.md).
+
+## Fan-out
+
+`scripts/fanout.sh --briefs DIR` runs one headless `claude -p` per brief
+(`templates/brief.md`: objective, output schema, tool guidance, boundaries),
+each in its own worktree with tools and turns scoped, and leaves one JSON
+result per brief under `state/fanout/`. It merges nothing. Use it when the
+rows at a stage are independent and the cost — about fifteen times a single
+session — is worth it.
 
 ## Adding your own skills, tools and agents
 

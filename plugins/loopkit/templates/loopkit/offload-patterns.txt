@@ -1,0 +1,22 @@
+# .loopkit/offload-patterns.txt — Bash commands whose output belongs in a file.
+# One Python regex per line, matched with re.search against the whole command
+# (case-sensitive). Blank lines and # comments are ignored; a line that fails
+# to compile is skipped with one stderr line and the others still apply.
+#
+# When a command matches, hooks/offload_rewrite.py (PreToolUse, Bash) rewrites it to
+#   bash <plugin>/scripts/run-capped.sh -- '<your command>'
+# so the full output lands in .loopkit/scratch/ and only head+tail reach the
+# context window. The command is never rewritten when it already starts with
+# that wrapper, contains a heredoc (<<) or spans more than one line.
+#
+# This file ships with comments only: which commands are noisy is a
+# per-project choice. Examples (uncomment to use):
+#
+# a full test run
+# ^(npm|pnpm|yarn)\s+(run\s+)?test\b
+# ^(pytest|vitest|jest|go\s+test|cargo\s+test)\b
+#
+# whole-repo greps and logs
+# ^(rg|grep)\s+-r
+# ^git\s+log\b
+# \bdocker\s+(compose\s+)?logs\b

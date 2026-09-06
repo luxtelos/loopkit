@@ -106,12 +106,29 @@ resolve to `inbox` or a non-code layer without any implementation at all.
 
 ## Cadence and stopping
 
-- 30 minutes during working hours, 60 minutes otherwise. Idle ticks more
-  frequent than the work justifies are pure overhead.
+**Never sleep on work.** At the end of a tick ask one question: _what am I
+waiting ON?_ If the answer is an external process — CI, a human ruling, a PR
+review, a deploy, a background agent — arm a wakeup or a Monitor sized to that
+process. If the answer is "nothing, the next stage is mine", run the next tick
+NOW, in the same turn. A pipeline that naps for 30 minutes between a spec and
+its implementer is not pacing itself, it is idling (owner correction,
+2026-09-06: "don't sleep unless waiting on some process").
+
+- A wakeup's delay is the process's time, not a clock: a CI run gets its
+  duration, a human gets 20–30 minutes, an agent gets a long fallback because
+  its completion is the real signal.
+- Stop the loop, rather than sleep it, when every row in the lane is `blocked`,
+  `inbox`, or `pr-open` under a quiet watch — then say so.
 - `noop: false` only when the tick advanced a row or produced an artifact.
   Unrelated work in the same turn does not make the tick non-noop.
 - `loop-watch.sh` escalates after 24 unchanged ticks. A watch that quiet has
   stopped producing information — chase the human or stop the loop.
+
+The question "what am I waiting on?" is answered for you: `loop-next.sh` ends
+every tick with `NEXT: CONTINUE` (rows still actionable — next tick now, no
+wakeup), `NEXT: WAIT` (only a PR review, CI or a human ruling can move things
+— the one case for a wakeup) or `NEXT: IDLE` (run morning-triage now). Read
+the line; do not re-derive it.
 
 ## Invoking it
 
@@ -161,3 +178,5 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/loop-scan.py"
   human, set it to `blocked`, not `pr-open`, or every tick spends a poll on it.
 - A scoped tick that prints `STAGE: discover` may still have work outside the
   lane — read the `unscoped new=N` note before calling the loop idle.
+- A `NEXT: CONTINUE` followed by a ScheduleWakeup is the bug this rule exists
+  for. The wakeup is for waiting, and CONTINUE means nobody is waiting.

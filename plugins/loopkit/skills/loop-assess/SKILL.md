@@ -91,10 +91,16 @@ symptoms to a layer, and names the reflex to resist for each one. The layers:
 | `architecture` | One pass cannot satisfy the constraint          | Generate → Evaluate → Repair, or a new loop stage     |
 | `prompt`       | An instruction file caused it                   | Mode B                                                |
 | `decision`     | Nobody has ruled; the loop is guessing          | `inbox/needs-human.md`, with the cost of both options |
+| `knowledge`    | Somebody already ruled, or a trap already bit — the fix is a concept, not code | `memory.py knowledge enqueue` (Decision / Trap / Invariant), then close the row |
 
 Only `code` continues to `spec-writer`. Everything else is misfiled if it
 becomes a spec, and misfiled work is how a repo grows guard clauses that nobody
 can later explain.
+
+When `memory.py recall` (which searches notes AND the knowledge bundle)
+returns the ruling or the trap, the finding is `knowledge`: record it (or
+link the existing concept to the row's source), give an Invariant or Gate its
+`enforced_by`, and close the row. Recurrence within 30 days is the metric.
 
 ### A3. Write the assessment down
 
@@ -134,6 +140,8 @@ run from re-adding the guard clause this one removed.
 
 - `code` → `loopkit:spec-writer`, carrying the control case into the EARS
   criteria so the regression alarm is part of acceptance, not an afterthought.
+- `knowledge` → `memory.py knowledge enqueue --type Decision|Trap|Invariant …`
+  then `drain`; the row goes to `done` with the concept path as its spec.
 - `decision` → `inbox/needs-human.md`. State the cost of **both** options, and
   give the whole context in the escalation itself — the facts, the figures, the
   files — so the owner can decide from the escalation alone without a lookup. A

@@ -202,7 +202,27 @@ When the agent tries to say "done" after changing code, the Stop hook runs
 your gate — precheck, regression diff, lint, typecheck, build — and then an
 acceptance review against `specs/`. Red blocks the stop. That is the point.
 
-## 8. Optional: the model checker
+## 8. Optional: the knowledge layer
+
+```
+python3 <plugin>/scripts/memory.py knowledge init
+```
+
+Enables the bundle and seeds ten concepts about the loop itself (three of
+them Gates and an Invariant with `enforced_by`). Then:
+
+```bash
+python3 <plugin>/scripts/rulings-extract.py            # dry run: what your inbox, ADRs and specs already ruled
+python3 <plugin>/scripts/rulings-extract.py --apply    # one message per ruling
+python3 <plugin>/scripts/memory.py knowledge drain     # apply; a human ratifies with status: stable
+python3 <plugin>/scripts/rulings-compile.py            # which rulings have a gate that can fail
+python3 <plugin>/scripts/loop-metrics.py               # verified success, re-asks — with n=
+```
+
+Record a trap with a lane tag (`--tags lane/billing`) and the next tick scoped
+to that lane starts with it in front of the model.
+
+## 9. Optional: the model checker
 
 For any design with two writers, a retry, or a guard followed by a write:
 
@@ -215,7 +235,7 @@ node <plugin>/skills/run-state-model/driver.mjs check <plugin>/skills/run-state-
 The last one prints a counterexample and exits 1 — a real shipped bug, reduced
 to its state machine. The fixed twin exits 0.
 
-## 9. Status and health
+## 10. Status and health
 
 ```
 /loopkit:scan      # open PRs with their real blockers; READY TO MERGE is the only actionable line
@@ -252,3 +272,55 @@ if you ran step 8.
 
 - **macOS** (bash 3.2, the default shell) — the development platform; every script is written for it.
 - **Linux** — `tests/selftest.sh` passes on `node:22-bookworm` (Debian 12: Python 3.11, Node 22, bash 5.2). `.github/workflows/selftest.yml` runs it on `ubuntu-latest` for every push and pull request. The CI job runs the selftest only; `install.sh`'s Linux branch is not exercised by it.
+
+## Updating LoopKit in a project that uses it
+
+An installed plugin does not follow the repository. Two things stand between a
+merge here and a project that has LoopKit installed, and both are worth knowing
+before you rely on a fix reaching anyone.
+
+**1. The marketplace is a git clone, and it is not refreshed automatically.**
+Adding the marketplace clones this repository to
+`~/.claude/plugins/marketplaces/<name>` and records it in `settings.json` under
+`extraKnownMarketplaces`. That clone stays at whatever commit it was cloned at
+until it is updated:
+
+```bash
+claude
+# then, inside the session:
+/plugin marketplace update loopkit
+/plugin install loopkit@loopkit
+```
+
+The clone tracks this repository's **default branch**. Work that sits on a
+feature branch reaches nobody, however many pull requests report as merged
+against it. `git merge-base --is-ancestor <branch> main` is the only honest
+check.
+
+**2. The cache is keyed by version string.** An installed copy lives at
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>`. If the manifest
+version has not changed, that directory already exists and the old copy keeps
+being used, even after the marketplace clone is refreshed. So a consumer-visible
+change that does not bump `plugins/loopkit/.claude-plugin/plugin.json` and
+`.claude-plugin/marketplace.json` is invisible in practice.
+
+`tools/release.sh` refuses to tag when the manifests disagree with the version
+being released, which is the enforcement of that rule rather than a reminder
+about it.
+
+### The release sequence, in order
+
+1. Merge to the default branch. Confirm with `git merge-base --is-ancestor`.
+2. Bump both manifests to the new version, in the same pull request as the
+   change if it is user-visible.
+3. Write the `CHANGELOG.md` section. The release notes are read from it.
+4. `bash tools/release.sh <version>` — it refuses on a dirty tracked tree, a
+   missing changelog section, an existing tag, or a manifest that disagrees.
+5. Consumers run `/plugin marketplace update <name>` and reinstall.
+
+### Pinning instead of following
+
+A project that wants a known-good version rather than the newest can point its
+marketplace entry at a tag or a fork. Nothing here forces an upgrade, and a
+plugin that changes hook behaviour is exactly the kind of dependency worth
+pinning until its changelog has been read.

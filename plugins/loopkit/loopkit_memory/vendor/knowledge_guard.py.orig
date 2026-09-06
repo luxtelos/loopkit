@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""PreToolUse hook: refuse hand-edits to knowledge/. The bundle is actor-owned.
+
+Dummies 101 version: `knowledge/` is the ratified knowledge base. If anyone can
+edit it directly, two things stop being true — the change history in `log.md`
+stops being complete, and `reindex --check` starts failing on files a human
+"just tidied". So every change goes through the mailbox, and this hook is what
+makes that stick instead of being a rule somebody has to remember.
+
+Refusing beats advising: `require_contracts.py` proved that in this repo. One
+refusal at the moment of the mistake is worth any amount of documentation.
+
+Bypass: the actor sets KNOWLEDGE_ACTOR_RUNNING=1 on itself, so its own writes
+pass straight through.
+
+Exit 2 = block (the harness shows stderr to the agent). Exit 0 = allow. This
+hook fails OPEN on anything unexpected: a knowledge base is not worth wedging a
+session over.
+"""
+
+import json
+import os
+import re
+import sys
+
+BUNDLE = "knowledge/"
+
+# Bash writes aimed into the bundle. Redirections (`>`, `>>`) are matched
+# unanchored because those metacharacters almost never appear in prose. The
+# write VERBS are anchored to command position — start of line, or just after
+# `;` `|` `&` `$(` — so a commit message or an echo that merely MENTIONS
+# `cp knowledge/...` is not blocked. That distinction is copied deliberately
+# from require_recall_before_invariant.py, which learned it the hard way.
+BASH_BUNDLE_WRITE = re.compile(
+    r"(>>?\s*[^\n;|&]*\bknowledge/[^\n;|&]*\.md"
+    r"|(?:^|[;|&]\s*|\$\(\s*)(?:tee\s+(?:-a\s+)?|(?:cp|mv|install|rm|sed)\s+[^\n;|&]*?)"
+    r"[^\n;|&]*\bknowledge/[^\n;|&]*\.md)",
+    re.I | re.M,
+)
+
+MESSAGE = """BLOCKED — knowledge/ is owned by the knowledge actor, not by hand.
+
+  target: {target}
+
+Every change to the bundle goes through the mailbox, so that log.md stays a
+complete history and reindex --check keeps passing:
+
+  python3 scripts/knowledge_actor.py enqueue \\
+      --op upsert --target {suggest} \\
+      --by "<actor>" --reason "<one line>" \\
+      --payload-json '{{"frontmatter": {{"type": "Doctrine", "title": "..."}}}}' \\
+      --body-file <draft.md>
+  python3 scripts/knowledge_actor.py drain
+
+Ops: upsert | deprecate | verify | link | stale | delete.
+index.md and log.md are generated — never edit or message them; run
+`knowledge_actor.py reindex` instead.
+
+See FILES.md ("The knowledge bundle") and COMMANDS.md ("The knowledge actor").
+"""
+
+
+def main() -> int:
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0  # never break the session on malformed input
+
+    # The actor's own writes. Checked first and cheaply.
+    if os.environ.get("KNOWLEDGE_ACTOR_RUNNING") == "1":
+        return 0
+
+    tool = payload.get("tool_name")
+    tool_input = payload.get("tool_input") or {}
+
+    if tool == "Bash":
+        command = str(tool_input.get("command", ""))
+        # The actor invoked through the shell is still the actor.
+        if "knowledge_actor.py" in command or "bin/knowledge" in command:
+            return 0
+        if not BASH_BUNDLE_WRITE.search(command):
+            return 0
+        target = "(Bash write into knowledge/)"
+        suggest = "/<section>/<concept>.md"
+    elif tool in ("Write", "Edit", "MultiEdit"):
+        path = str(tool_input.get("file_path", ""))
+        normalised = path.replace("\\", "/")
+        if BUNDLE not in normalised and not normalised.startswith("knowledge/"):
+            return 0
+        target = path
+        # Offer the bundle-absolute form of whatever they were aiming at.
+        tail = normalised.split(BUNDLE, 1)[-1] if BUNDLE in normalised else normalised
+        suggest = "/" + tail.lstrip("/")
+    else:
+        return 0
+
+    print(MESSAGE.format(target=target, suggest=suggest), file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
