@@ -1,16 +1,24 @@
 {
   "name": "04-replay-journaled-step",
-  "description": "A Run is resumed and its journal already carries BOTH the intent and the result for step 1. Replay must answer step 1 from the journal: provider_calls stays 0 and no duplicate event is appended. Step 2's intent is journaled but its result is not — that step is NOT complete, so re-calling the provider for it is correct, and the conditional write on the effect keeps the side effect at one application.",
+  "description": "A Run is resumed and its journal already carries BOTH the intent and the result for step 1. Replay must answer step 1 from the journal: provider_calls stays 0 and no Event is appended for it. Step 2's intent is journaled but its result is not — that step is NOT complete, so re-calling the provider for it is correct, and the conditional write on the effect keeps the side effect at one application. This fixture is the one that pins the three rules the spec states in §Journal semantics: `expected.events` is the APPENDED DELTA (never the whole journal); a step re-executed on resume does NOT re-journal its `intent`, because the `intent` already on disk is what criterion 10 requires; and the journal already carries a `run_start`, so no second one is appended (criterion 2).",
   "input": {
+    "run": {
+      "run_id": "run-0001",
+      "store_uri": "file://state/loopkit",
+      "provider": "stub",
+      "policy_path": "knowledge/",
+      "lane": ""
+    },
     "queue": [
       { "finding": "judge runner", "source": "gh#104", "priority": "high", "spec": "specs/pairwise-judge-verdicts.md", "status": "fixing" }
     ],
     "policy": { "concepts": [] },
     "journal": [
-      { "at": "2026-09-07T00:00:00+00:00", "event": "stage", "stage": "fixing", "scope": "" },
-      { "at": "2026-09-07T00:00:01+00:00", "event": "intent", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa" },
-      { "at": "2026-09-07T00:00:02+00:00", "event": "result", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa", "status": "ok" },
-      { "at": "2026-09-07T00:00:03+00:00", "event": "intent", "run_id": "run-0001", "step": "2", "idempotency_key": "k-bbb" }
+      { "at": "2026-09-07T00:00:00+00:00", "event": "run_start", "run_id": "run-0001", "store_uri": "file://state/loopkit", "provider": "stub", "policy_path": "knowledge/" },
+      { "at": "2026-09-07T00:00:01+00:00", "event": "stage", "stage": "fixing", "scope": "" },
+      { "at": "2026-09-07T00:00:02+00:00", "event": "intent", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa" },
+      { "at": "2026-09-07T00:00:03+00:00", "event": "result", "run_id": "run-0001", "step": "1", "idempotency_key": "k-aaa", "status": "ok" },
+      { "at": "2026-09-07T00:00:04+00:00", "event": "intent", "run_id": "run-0001", "step": "2", "idempotency_key": "k-bbb" }
     ]
   },
   "expected": {

@@ -654,6 +654,37 @@ else
   echo "  skip claude CLI not on PATH"
 fi
 
+# --- M1 runtime spec pins (added 2026-09-07 after the PR #8 review) ---------
+# Two classes of defect that review caught and no command would have:
+#   1. a fixture whose expected output cannot be computed from the spec, so it
+#      pins one implementation's printout rather than a cross-SDK contract;
+#   2. a model assertion that passes because no reachable state can break it,
+#      cited by a criterion as if it were evidence.
+# Both pins are the gate now, so neither class can return silently.
+echo "== M1 runtime spec: fixtures derive from the spec"
+if [ -f "$REPO/tests/pins/fixture-derivable.py" ]; then
+  fx_out="$(python3 "$REPO/tests/pins/fixture-derivable.py" 2>&1)"
+  if [ $? = 0 ]; then
+    ok "every conformance fixture derives from specs/loopkit-runtime.md"
+  else
+    fail "a conformance fixture does not derive: $(printf '%s' "$fx_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+  fi
+else
+  fail "tests/pins/fixture-derivable.py is missing"
+fi
+
+echo "== M1 runtime spec: every model assertion can fail"
+if [ -f "$REPO/tests/pins/model-invariants-live.sh" ]; then
+  mi_out="$(bash "$REPO/tests/pins/model-invariants-live.sh" 2>&1)"
+  if [ $? = 0 ]; then
+    ok "every assertion in loopkit-runtime.model.fizz is live under its mutation"
+  else
+    fail "a model assertion is vacuous: $(printf '%s' "$mi_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+  fi
+else
+  fail "tests/pins/model-invariants-live.sh is missing"
+fi
+
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
 section "dogfood: .loopkit/config.env sources clean"

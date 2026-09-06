@@ -3,20 +3,27 @@
 # CHECKED IN THIS REPO. The driver ships here:
 #   node plugins/loopkit/skills/run-state-model/driver.mjs check \
 #        specs/loopkit-runtime.model.fizz
-# Expected verdict: PASS (exit 0). See specs/loopkit-runtime.md §Control case
-# for the buggy twin that proves the checker can fail.
+# Expected verdict: PASS (driver exit 0). Every assertion below carries the
+# MUTATION that makes it fail; `bash tests/pins/model-invariants-live.sh` runs
+# each one and refuses a verdict that survives its own mutation. An assertion
+# whose mutation still PASSES is vacuous, and a vacuous assertion is worse than
+# no assertion because it reads as checked.
 #
 # The system: one Run executes one step against a Provider. The step is a side
-# effect, so it must survive a crash without happening twice, and a resume must
-# be answered from the journal rather than from the model.
+# effect, so it must survive a crash without happening twice, must not be
+# doubled by an at-least-once transport, and a resume must be answered from the
+# journal rather than from the model.
 #
 #   intent      "I am about to call the provider"      journaled BEFORE the call
 #   result      "the provider returned, here it is"    journaled AFTER the call
 #   owner       the lease on the step; a conditional write (put_if_absent)
-#   called      volatile — the provider returned but nothing is on disk yet
+#   called      volatile, PER WRITER — the provider returned for that writer but
+#               nothing is on disk yet. Modelling this as one shared flag was
+#               the 2026-09-07 defect: it silently shared one writer's memory
+#               with the other, which made the lease guard unfalsifiable.
 #
 # The crash window is the gap between CallProvider and Commit. Everything this
-# model exists to prove lives in that gap.
+# model exists to prove lives in that gap, plus the redelivery that follows it.
 
 ---
 deadlock_detection: false
@@ -25,17 +32,27 @@ deadlock_detection: false
 WRITERS = ["w1", "w2"]
 MAX_CRASHES = 1
 MAX_REPLAYS = 2
+MAX_REDELIVERIES = 1
 
 action Init:
     intent = 0
     result = 0
     owner = ""
-    called = 0
+    called = {"w1": 0, "w2": 0}
     effects = 0
     provider_calls = 0
+    calls_this_attempt = 0
     calls_at_journal = 0
     crashes = 0
     replays = 0
+    redeliveries = 0
+
+# The ONE place the side effect is applied: a conditional write keyed by the
+# step, so a redelivery converges instead of doubling. Commit and Redeliver
+# both go through here precisely so the guard has a single mutation site.
+func ApplyEffect():
+    if effects == 0:
+        effects = effects + 1
 
 # Journal the intent. put_if_absent: a second writer arriving here writes
 # nothing, which is why this is atomic and guarded rather than a blind set.
@@ -54,30 +71,31 @@ atomic action Claim:
 # journal-BEFORE-act stated as a guard, not as a comment.
 atomic action CallProvider:
     w = oneof WRITERS
-    if owner == w and intent == 1 and result == 0 and called == 0:
+    if owner == w and intent == 1 and result == 0 and called[w] == 0:
         provider_calls = provider_calls + 1
-        called = 1
+        calls_this_attempt = calls_this_attempt + 1
+        called[w] = 1
 
-# Journal the result and apply the side effect. The effect is a conditional
-# write keyed by the step, so a redelivery converges instead of doubling.
-# calls_at_journal is set BEFORE result so no interleaving can observe a
-# journaled result next to a stale call count.
+# Journal the result and apply the side effect. calls_at_journal is set BEFORE
+# result so no interleaving can observe a journaled result next to a stale
+# call count.
 atomic action Commit:
     w = oneof WRITERS
-    if owner == w and called == 1 and result == 0:
-        if effects == 0:
-            effects = effects + 1
+    if owner == w and called[w] == 1 and result == 0:
+        ApplyEffect()
         calls_at_journal = provider_calls
         result = 1
 
 # The owner dies between the provider call and the result journal. The lease
-# expires and `called` — which lived only in memory — is lost with it. Bounded
-# so the state space is finite; one crash is enough to witness the property.
+# expires and `called` — which lived only in memory — is lost with it, for
+# every writer. calls_this_attempt resets because a crash starts a new attempt.
+# Bounded so the state space is finite; one crash witnesses the property.
 atomic action Crash:
     if result == 0 and crashes < MAX_CRASHES:
         crashes = crashes + 1
         owner = ""
-        called = 0
+        called = {"w1": 0, "w2": 0}
+        calls_this_attempt = 0
 
 # Resume: read the journal. A step whose RESULT is journaled is answered from
 # the journal. Note what this action does NOT do: touch provider_calls.
@@ -85,16 +103,35 @@ atomic action Resume:
     if result == 1 and replays < MAX_REPLAYS:
         replays = replays + 1
 
-# --- the three properties -------------------------------------------------
+# At-least-once delivery. The transport hands an already-committed step to a
+# writer a second time — a redelivery the runtime cannot refuse and does not
+# control. Effectively-once APPLICATION is the convergence guard's job, and
+# without this action that guard is never exercised, which is exactly how
+# EffectAtMostOnce passed vacuously until 2026-09-07.
+atomic action Redeliver:
+    if result == 1 and redeliveries < MAX_REDELIVERIES:
+        redeliveries = redeliveries + 1
+        ApplyEffect()
 
-# No side effect happens twice, however the crash and the two writers
-# interleave.
+# --- the four properties ---------------------------------------------------
+# Each records the mutation that makes it fail. tests/pins/model-invariants-live.sh
+# applies these exact mutations and requires driver exit 1 for every one.
+
+# No side effect happens twice, however the crash, the two writers and the
+# redelivery interleave.
+# MUTATION (MUT-EFFECT): in `func ApplyEffect`, delete the line `if effects == 0:`
+# and dedent its body -> Redeliver applies a second time -> effects == 2.
 always assertion EffectAtMostOnce:
     return effects <= 1
 
 # Journal before act: nothing is ever executed whose intent is not on disk.
 # A crash that loses the whole process must still leave a record that the
 # effect MAY have happened.
+# MUTATION (MUT-INTENT): delete `intent == 1 and` from BOTH `Claim` and
+# `CallProvider` -> a provider call, then an effect, with intent == 0.
+# Removing it from `CallProvider` alone changes nothing, because `Claim`
+# already implies it; that near miss is recorded so nobody re-derives it and
+# mistakes a redundant guard for a checked one.
 always assertion NoEffectWithoutJournaledIntent:
     if effects >= 1:
         return intent == 1
@@ -102,7 +139,17 @@ always assertion NoEffectWithoutJournaledIntent:
 
 # Resume never re-calls the provider for a journaled step. Once the result is
 # on disk the call count is frozen at what it was when the result was written.
+# MUTATION (MUT-REPLAY): add `provider_calls = provider_calls + 1` to `Resume`.
 always assertion NoProviderCallAfterJournaledResult:
     if result == 1:
         return provider_calls == calls_at_journal
     return True
+
+# put_if_absent is mutual exclusion, not advice: within one attempt (the span
+# between crashes) at most one writer may reach the Provider. This is the
+# assertion criterion 27 names.
+# MUTATION (MUT-LEASE): delete `owner == "" and` — written as `and owner == ""`
+# — from `Claim` -> w2 steals the lease while w1 is mid-flight and both call
+# the Provider -> calls_this_attempt == 2.
+always assertion LeaseIsExclusive:
+    return calls_this_attempt <= 1
