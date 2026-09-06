@@ -74,6 +74,7 @@ put loopkit/protected.txt      .loopkit/protected.txt
 put loopkit/test-globs.txt     .loopkit/test-globs.txt
 put loopkit/memory.json        .loopkit/memory.json
 put loopkit/recall-triggers.txt .loopkit/recall-triggers.txt
+put loopkit/offload-patterns.txt .loopkit/offload-patterns.txt
 put loopkit/config.env.example .loopkit/config.env.example
 
 # .gitignore: the one file under .loopkit/ that may hold a webhook URL.
@@ -126,6 +127,7 @@ if [ -n "$PROFILE" ]; then
   append_profile block-patterns.txt  .loopkit/block-patterns.txt
   append_profile protected.txt       .loopkit/protected.txt
   append_profile recall-triggers.txt .loopkit/recall-triggers.txt
+  append_profile offload-patterns.txt .loopkit/offload-patterns.txt
   append_profile constitution.$PROFILE.md constitution.md
   if [ -d "$PDIR/evals" ]; then
     mkdir -p "evals/$PROFILE"

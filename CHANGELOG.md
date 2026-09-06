@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `hooks/offload_rewrite.py` — PreToolUse on Bash returns
+  `hookSpecificOutput.updatedInput` (hooks reference, "Decision control") for
+  a command matching a line of `.loopkit/offload-patterns.txt`: it runs as
+  `bash <plugin>/scripts/run-capped.sh -- '<original>'`, full output to
+  `.loopkit/scratch/`, head+tail in context, one `offload_rewrite` metrics
+  event. Passive without the file (init lays down a comment-only one); never
+  a permission decision; unchanged when already wrapped, on a heredoc, on a
+  newline, and on any error. The commerce profile adds one pattern (payments
+  CLI `… list`).
+- `scripts/run-capped.sh` — one word after `--` is a shell string and runs
+  under `bash -o pipefail -c`, so the hook's single-quoted form keeps the
+  exit code (`'false | true'` → 1). Several words are still an argv.
 - `scripts/judge.py` — the pairwise judge discipline as a script
   (`specs/pairwise-judge-verdicts.md`): `claude -p --output-format json`
   twice per criterion with positions swapped; the two runs disagreeing is
