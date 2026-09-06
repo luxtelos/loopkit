@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.2 — 2026-09-07
+
+The governance guard, fixed three times in one day. Each defect was found by the
+one before it, and the third is the one worth reading.
+
+### Fixed
+
+- **The guard blocked reads.** Shell coverage arrived in 0.2.1 and collected
+  every token after `sed`, `perl` and `awk` regardless of an in-place flag, and
+  every token after `git` regardless of the subcommand. Reading a protected file
+  with `sed -n`, `git diff` or `git show` was refused. That is worse than missing
+  a write: a guard that blocks reading teaches everyone to keep the override
+  exported, after which it guards nothing. Filters now count only with `-i` or
+  `--in-place`; git only for the subcommands that touch the working tree.
+- **The escape hatch could not be reached from a shell command.** A hook runs as
+  its own process, so an inline `GOVERNANCE_EDIT_OK=1 cmd` prefix lives in the
+  command string and never reaches the environment the hook reads. The
+  documented door did not open for any shell write. The prefix is now parsed
+  from the command itself; the environment variable still works.
+- **The pin for that second fix could not fail.** Its probe used a path that
+  normalises to a directory and never matches a protected pattern, so both door
+  tests reported success whatever the hook did. Fixed with the real path plus a
+  control asserting the write IS refused when neither door is open.
+  `tests/pins/governance-prove-red.sh` now breaks each half in turn and requires
+  the pin to report it; the suite asserts three of three.
+
+### Notes
+
+The case lists live in files rather than inline in the suite, because a shell
+command containing the literal write shapes trips the guard under test. Two of
+the three defects were found by the guard refusing its own author a read, and
+independently by a reviewer.
+
 ## 0.2.1 — 2026-09-07
 
 A guard that was never guarding, found by review rather than by the suite.
