@@ -43,6 +43,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/progress.py" last --n 3
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/progress.py" files-modified --limit 8
 ```
 
+The judge runner reads its six rules from judge.md at run time (no `claude` call here; six numbered lines is ok):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/judge.py" --print-rules | grep -c '^[1-6]\. '
+```
+
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/skills/run-state-model/driver.mjs" doctor || echo "model checkers not installed — bash ${CLAUDE_PLUGIN_ROOT}/skills/run-state-model/install.sh"
 ```
