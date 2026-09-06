@@ -36,3 +36,20 @@ Rows M2–M6 in state/triage.md sit at `blocked` only because each depends on th
 previous milestone's PR merging (M1 spec first — the owner's paper-trail rule).
 No decision is pending: the plan was approved 2026-09-07 with one ruling folded
 in (SQLite, no Postgres). Flip each row to `new` when its predecessor merges.
+
+## Two of the four M1 spec questions are already answered (2026-09-07)
+
+A review of the merged runtime specification found that only two of its four
+escalations need a human:
+
+- **Still yours:** whether budget exhaustion is resumable or terminal, and what
+  unit a budget counts (calls, tokens or seconds). Both are product choices with
+  no evidence in the repo either way.
+- **Answerable without you, and now closed:** whether `Store.list` returns a
+  total or an iterator is already settled normatively by the specification's own
+  criterion 30; the dead-letter destination is settled by its constraint that
+  existing behaviour is not redefined, and the existing behaviour escalates to
+  this file.
+
+An escalation that could have been answered from the repo is noise in your
+queue, so the two answerable ones were withdrawn rather than left standing.
