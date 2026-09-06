@@ -1,0 +1,4 @@
+# Commerce profile — writes that require memory to be consulted first
+# (appended to .loopkit/recall-triggers.txt). A checkout, refund or pricing
+# change is where a forgotten ruling costs money.
+path: (^|/)(checkout|refund|pricing|payout|cart)[^/]*\.(ts|js|py|go|rb)$

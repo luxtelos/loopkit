@@ -10,7 +10,7 @@
 #   .gitignore line for .loopkit/config.env
 #   a "LoopKit standing rules" block appended to CLAUDE.md (marker-guarded)
 #
-# usage: loopkit-init.sh [--project DIR] [--dry-run]
+# usage: loopkit-init.sh [--project DIR] [--dry-run] [--profile commerce]
 # Exit 0 on success. Prints CREATED / KEPT for every path so the run is auditable.
 
 set -euo pipefail
@@ -20,10 +20,12 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
 TPL="$PLUGIN_ROOT/templates"
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 DRY=0
+PROFILE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) ROOT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --profile) PROFILE="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -105,6 +107,30 @@ else
   [ -f CLAUDE.md ] || printf '# CLAUDE.md — standing rules for every session\n' > CLAUDE.md
   cat "$TPL/CLAUDE.snippet.md" >> CLAUDE.md
   say APPENDED "CLAUDE.md: LoopKit standing rules"
+fi
+
+# --profile <name>: append the profile's config to the project's, marker-guarded
+# so a second run is a no-op. Profiles are templates and checks, never code.
+if [ -n "$PROFILE" ]; then
+  PDIR="$TPL/profiles/$PROFILE"
+  [ -d "$PDIR" ] || { echo "no such profile: $PROFILE (have: $(ls "$TPL/profiles" | tr '\n' ' '))" >&2; exit 2; }
+  append_profile() {  # <profile file> <destination>
+    local src="$PDIR/$1" dst="$2" marker="# loopkit-profile:$PROFILE:$1"
+    [ -f "$src" ] || return 0
+    if [ -f "$dst" ] && grep -qF "$marker" "$dst"; then say KEPT "$dst ($PROFILE profile present)"; return 0; fi
+    if [ "$DRY" = 1 ]; then say APPEND "$dst <- profiles/$PROFILE/$1 (dry run)"; return 0; fi
+    mkdir -p "$(dirname "$dst")"
+    { printf '\n%s\n' "$marker"; cat "$src"; } >> "$dst"
+    say APPENDED "$dst <- profiles/$PROFILE/$1"
+  }
+  append_profile block-patterns.txt  .loopkit/block-patterns.txt
+  append_profile protected.txt       .loopkit/protected.txt
+  append_profile recall-triggers.txt .loopkit/recall-triggers.txt
+  append_profile constitution.$PROFILE.md constitution.md
+  if [ -d "$PDIR/evals" ]; then
+    mkdir -p "evals/$PROFILE"
+    for f in "$PDIR"/evals/*; do put "profiles/$PROFILE/evals/$(basename "$f")" "evals/$PROFILE/$(basename "$f")"; done
+  fi
 fi
 
 echo

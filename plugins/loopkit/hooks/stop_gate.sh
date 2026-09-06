@@ -33,6 +33,15 @@
 
 set -euo pipefail
 
+# The Stop hook's JSON arrives on stdin; read it once, here, so the session
+# key is available and nothing downstream blocks on a closed pipe.
+LOOPKIT_HOOK_STDIN=""
+if [ ! -t 0 ]; then
+    # Bounded: Claude Code writes the JSON and closes the pipe; a caller that
+    # leaves stdin open must not hang the gate. 2 s is far above the real case.
+    IFS= read -r -t 2 -d '' LOOPKIT_HOOK_STDIN 2>/dev/null || true
+fi
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -63,9 +72,29 @@ note() {
     python3 "$PLUGIN_ROOT/scripts/ticks.py" append --root "$ROOT" --event gate --k "result=$result" --k "reason=${1#gate FAIL: }" >/dev/null 2>&1 || true
 }
 
+# Claude Code stops honouring a Stop hook after 8 consecutive blocks and ends
+# the turn anyway (code.claude.com/docs/en/best-practices). The eighth block is
+# therefore not a block; it is the moment the gate is overridden. Count them
+# per session so the seventh says so, and the override is recorded rather
+# than silent. Fail-open: the counter can never change a verdict.
+STOP_KEY="$(printf '%s' "${LOOPKIT_HOOK_STDIN:-}" | python3 -c 'import hashlib,json,sys
+try:
+    d=json.load(sys.stdin); s=str(d.get("session_id") or "")
+except Exception:
+    s=""
+print(hashlib.sha256(s.encode()).hexdigest()[:16] if s else "unknown")' 2>/dev/null || echo unknown)"
+STOP_COUNTER="${TMPDIR:-/tmp}/loopkit-stopblocks-$STOP_KEY"
+consecutive_blocks() { cat "$STOP_COUNTER" 2>/dev/null || echo 0; }
+
 fail() {  # <message> — record, print, reject the stop
-    note "gate FAIL: $1"
+    local n; n=$(( $(consecutive_blocks) + 1 )); echo "$n" > "$STOP_COUNTER" 2>/dev/null || true
+    note "gate FAIL: $1 (consecutive block $n)"
     echo "FAIL: $1"
+    if [[ "$n" -ge 7 ]]; then
+        echo "STOP-GATE OVERRIDE IMMINENT: this is consecutive block $n of the 8 Claude Code honours before it ends the turn anyway."
+        echo "  The next block is not a block. Record what is failing and why in inbox/needs-human.md now; the human decides, not the override."
+        python3 "$PLUGIN_ROOT/scripts/ticks.py" append --root "$ROOT" --event gate_override_imminent --k "blocks=$n" >/dev/null 2>&1 || true
+    fi
     exit 1
 }
 
@@ -165,6 +194,7 @@ fi
 step "Type checking" "$LOOP_TYPECHECK_CMD"
 step "Building" "$LOOP_BUILD_CMD"
 
+rm -f "$STOP_COUNTER" 2>/dev/null || true
 note "gate PASS"
 echo ">> PASS: all gates passed. 'done' condition satisfied."
 exit 0
