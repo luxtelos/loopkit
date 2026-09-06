@@ -221,3 +221,9 @@ fi
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
+
+# --- the repo's own gate config must source silently: an unquoted multi-word
+# value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
+section "dogfood: .loopkit/config.env sources clean"
+cfg_err="$( ( set -a; . "$REPO_ROOT/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
+if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi
