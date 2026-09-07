@@ -1,6 +1,6 @@
 {
   "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
-  "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
+  "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely \u2014 the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
   "_allow_empty": "false since 2026-09-07. It was true while no document in this repo cited a file:line; both docs/GETTING-STARTED.md and specs/blocked-waits-on-what.md now do, so an EMPTY scan from here means the scan lost the docs, and that is red.",
   "allow_empty": false,
   "pins": [
@@ -74,7 +74,7 @@
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "no recognisable header, but the file holds",
-      "the refusal that replaced the silent zero — the spec's old 'rows parsed: 0, exit 0' argument for the no-sixth-column SHALL is dead, and the SHALL now rests on cross-version compatibility instead"
+      "the refusal that replaced the silent zero \u2014 the spec's old 'rows parsed: 0, exit 0' argument for the no-sixth-column SHALL is dead, and the SHALL now rests on cross-version compatibility instead"
     ],
     [
       "specs/blocked-waits-on-what.md",
@@ -93,6 +93,66 @@
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^def header_cells_if_header",
       "the single reader of ACCEPTED_HEADERS, so a six-column header is rejected in exactly one place"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/okf.py",
+      "^\\s+if res\\.startswith\\(\\(\"inbox/\", \"state/triage\"",
+      "the write path refuses the queue, the tick log, the progress file and inbox/ as sources \u2014 this IS the boundary rule's case 2, quoted rather than restated"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+_assert_human_claim_is_credible\\(paths, message\\)$",
+      "the human-claim guard is wired to the verify branch alone, which is why criterion 4 says upsert bypasses it"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+frontmatter\\.update\\(payload\\.get\\(\"frontmatter\"\\) or \\{\\}\\)$",
+      "apply_upsert copies payload frontmatter wholesale, so an agent can write a `verified: human:` entry through upsert \u2014 the hole criterion 4 must close"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+frontmatter\\[\"generated\"\\] = \\{\"by\": message\\.by",
+      "generated is overwritten from the message's own actor, so criterion 3's SHALL is the code's behaviour and not a wish"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+if introducer and \\(\"\\[bot\\]\" in introducer",
+      "the one door that IS guarded: a known bot author claiming human: is refused. Unknown authorship is not, which is criterion 4's second row"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "# Deliberately does NOT touch `status`",
+      "apply_stale leaves status alone, which the read path's failure branch depends on and must not change"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^def scan_drift",
+      "the per-concept digest comparison the read path SHALL reuse rather than reimplement"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/okf_bundle.py",
+      "^VALID_STATUS = \\(\"draft\", \"stable\", \"deprecated\"\\)$",
+      "the three status values, admitted from any actor \u2014 which is why criterion 5 is a detector over a convention, not a refusal"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/okf_bundle.py",
+      "^def trust_tier",
+      "trust tier is derived from `verified` alone, so a forged verified entry yields human-reviewed \u2014 the decorative-tiers failure ADR 0007 rejected Option A for"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/scripts/check-citations.py",
+      "^CITATION = re\\.compile\\(",
+      "the coordinate pattern criterion 11's detector imports rather than re-spells"
     ]
   ],
   "_as_of": "specs/blocked-waits-on-what.md writes its citations as `path:line as of <sha>`. check-citations.py matches path:line and ignores the suffix, so the convention is free to the gate and still checked by it."
