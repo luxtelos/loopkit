@@ -71,12 +71,24 @@ if [ "$N_PR" -gt 0 ]; then
   echo "      If it says QUIET, ignore it and do the work stage below."
 fi
 
-if   [ "$N_FIX" -gt 0 ]; then S="fixing";     A="run the reviewer agent + the stop gate on the in-flight change. PASS -> open PR, set pr-open. FAIL -> cite the criterion."
-elif [ "$N_RDY" -gt 0 ]; then S="spec-ready"; A="hand to the implementer in its own worktree and branch. Set fixing."
-elif [ "$N_DRF" -gt 0 ]; then S="spec-draft"; A="run the spec-writer skill to produce EARS criteria. Carry the control case in. Set spec-ready."
-elif [ "$N_NEW" -gt 0 ]; then S="new";        A="run loop-assess Mode A: baseline, classify, route. code -> spec-draft; anything else -> inbox and set the row inbox."
-else                          S="discover";   A="no actionable rows. Run morning-triage to find work."
+# The stage precedence and the CONTINUE/WAIT/IDLE split used to be two inline
+# if/elif chains right here. They are now ONE pure function,
+# loopkit_core.decide(counts) -> (Stage, Next) — spec criteria 4-8. Bash could
+# not be called from another language, unit-tested without spawning a shell and
+# a git repo, or held to spec/fixtures/*.json; a Python function can be all
+# three. This script keeps the parsing and the printing and delegates the
+# decision.
+DECISION="$(PYTHONPATH="$(cd "$HERE/.." && pwd)" python3 -m loopkit_core.decide \
+  --pr "$N_PR" --fixing "$N_FIX" --spec-ready "$N_RDY" --spec-draft "$N_DRF" \
+  --new "$N_NEW" --blocked "${N_BLOCKED:-0}")"
+if [ -z "$DECISION" ]; then
+  echo "STAGE: error — loopkit_core.decide produced nothing. Do not guess the stage; fix the core package."
+  exit 0
 fi
+field() { printf '%s\n' "$DECISION" | awk -F'\t' -v k="$1" '$1==k{print $2; exit}'; }
+S="$(field stage)"
+A="$(field action)"
+NEXT_LINE="$(field next_line)"
 
 echo "STAGE: $S"
 python3 "$HERE/ticks.py" append --root "$ROOT" --event stage --k "stage=$S" --k "scope=${SCOPE:-}" >/dev/null 2>&1 || true
@@ -92,13 +104,7 @@ echo "ACTION: $A"
 # Sleep only when something OUTSIDE the loop must move first. A tick that ends
 # with rows still actionable continues immediately; a wakeup timer is for a PR
 # in review, a CI run or a human ruling — never for work the loop could do now.
-if [ "$S" != "discover" ]; then
-  echo "NEXT: CONTINUE — after this stage there is still work here; run the next tick NOW. Do not schedule a wakeup; nothing external is being waited on."
-elif [ "${N_PR:-0}" -gt 0 ] || [ -n "${N_BLOCKED:-}" ]; then
-  echo "NEXT: WAIT — nothing here can move without an outside event (PR review / CI / a human ruling on ${N_BLOCKED:-0} blocked row(s)). A wakeup is appropriate: 30 min working hours, 60 otherwise."
-else
-  echo "NEXT: IDLE — no rows and nothing in flight. Run morning-triage now; a wakeup here would sleep on an empty queue."
-fi
+echo "NEXT: $NEXT_LINE"
 echo "RULE: advance exactly ONE stage this tick — for EVERY row listed under TARGETS,"
 echo "      in parallel worktrees — then update each row via"
 echo "      python3 $HERE/triage_state.py update --state $STATE --source <row source> --status <s>, and stop."

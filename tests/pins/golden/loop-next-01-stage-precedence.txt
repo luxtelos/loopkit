@@ -1,0 +1,14 @@
+BACKLOG: new=1 spec-draft=1 spec-ready=1 fixing=1 pr-open=1
+BLOCKED: 1 row(s) awaiting a human ruling — not polled, not a stage. See inbox/needs-human.md.
+POLL: 1 pr-open row(s) — run <SCRIPTS>/loop-watch.sh FIRST (cheap).
+      If it says ACT or ESCALATE, that preempts and becomes this tick.
+      If it says QUIET, ignore it and do the work stage below.
+STAGE: fixing
+TARGET: judge runner
+TARGETS: judge runner  [source: gh#104]
+ACTION: run the reviewer agent + the stop gate on the in-flight change. PASS -> open PR, set pr-open. FAIL -> cite the criterion.
+NEXT: CONTINUE — after this stage there is still work here; run the next tick NOW. Do not schedule a wakeup; nothing external is being waited on.
+RULE: advance exactly ONE stage this tick — for EVERY row listed under TARGETS,
+      in parallel worktrees — then update each row via
+      python3 <SCRIPTS>/triage_state.py update --state <PROJECT>/state/triage.md --source <row source> --status <s>, and stop.
+      One stage per tick keeps transitions attributable; one ROW per tick was never the rule.

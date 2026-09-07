@@ -104,10 +104,14 @@ plugins/loopkit/
   hooks/offload_rewrite.py         PreToolUse updatedInput: a Bash command matching .loopkit/offload-patterns.txt runs through run-capped.sh; passive without the file
   loopkit_memory/                  the memory registry (.loopkit/memory.json) and adapters: graph (codebase-memory CLI → grep),
                                    memory (mempalace CLI → notes on disk), knowledge (OKF, 0.2.0-c)
+  loopkit_core/                    the portable half (M2): the Queue, the journal, the Counts lookup, the inbox bridge,
+                                   the metrics — and decide(counts) → (Stage, Next), the precedence lifted out of bash.
+                                   Stdlib only, no Claude Code, no hook payloads, no plugin-cache path. Every module here
+                                   is ALSO reachable at its old scripts/ path, which is now a thin shim over it.
   scripts/loop-next.sh             which ONE stage is due (+ loop_next_pick.py: lanes, priority, blocked rows, fan-out)
   scripts/loop-scan.py             two API calls: PRs with real blockers, loop-owned issues, local backlog
   scripts/loop-watch.sh            cheap per-PR poll with a per-PR baseline
-  scripts/triage_state.py          the queue, escaped pipes and all; never hand-edit the table
+  scripts/triage_state.py          the queue, escaped pipes and all; never hand-edit the table (shim → loopkit_core)
   scripts/inbox_to_triage.py       prose findings → rows, create-only, dry run by default
   scripts/test-regressions.sh      one run diffed against state/known-test-failures.txt
   scripts/check-citations.py       file:line citations that still point where they claim; EMPTY (never PASS) when it finds none
