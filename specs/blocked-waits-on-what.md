@@ -6,13 +6,35 @@
   tick and becomes actionable by itself; a row waiting on a person is still
   never polled.
 
+## Citations in this spec
+
+Every `file:line` below is written **`path:line as of <sha>`**. A bare line
+number is a claim about whichever tree the reader happens to have, and it stops
+being true the moment `main` moves; the same number qualified by a sha is a
+claim about one tree, and that claim never rots.
+
+This spec learned it the expensive way. #27 moved
+`plugins/loopkit/loopkit_core/triage_state.py` several hundred lines under it
+and nine citations went stale at once — red the first day
+`check-citations.py` was pointed at this repository, in #39.
+
+The sha is `66abc4d`, the branch head every number below was re-measured on. To
+re-verify one: `git diff 66abc4d..HEAD -- <path>`; an empty diff means the
+number still holds. `check-citations.py` matches on `path:line` and ignores the
+suffix, so the convention costs the gate nothing and is still checked by it.
+
+This is documentation style, not governance, and it needs no ruling. The open
+question in `inbox/needs-human.md` is about who may write to `specs/` at all,
+which is a different thing from how a citation is spelled.
+
 ## Why
 
 `blocked` means two different things today and the tick cannot tell them apart.
 `loop-next.sh` prints "awaiting a human ruling — not polled, not a stage", and
 `loop_next_pick.pick()` counts blocked rows without ever emitting a target for
 one — `blocked` is absent from `WANT` at
-`plugins/loopkit/loopkit_core/loop_next_pick.py:26`. That is exactly right for a
+`plugins/loopkit/loopkit_core/loop_next_pick.py:26 as of 66abc4d`. That is
+exactly right for a
 row awaiting a ruling: polling it would nag the owner every tick, and the quiet
 is the point.
 
@@ -55,18 +77,21 @@ column, not `source`, not `finding`, not a sidecar file.
 Three reasons, each checked against the tree rather than assumed:
 
 1. **Nothing reads `spec` to make a decision.** Of the five columns at
-   `plugins/loopkit/loopkit_core/triage_state.py:14`, `source` is the identity
-   key (`find_row`, `plugins/loopkit/loopkit_core/triage_state.py:159`) and
+   `plugins/loopkit/loopkit_core/triage_state.py:17 as of 66abc4d`, `source` is
+   the identity key (`find_row`,
+   `plugins/loopkit/loopkit_core/triage_state.py:526 as of 66abc4d`) and
    `upsert_row` matches on it; `status` and `priority` drive the pick; and
    `finding` **plus** `source` are the haystack for scope matching at
-   `plugins/loopkit/loopkit_core/loop_next_pick.py:89`, so a condition written
+   `plugins/loopkit/loopkit_core/loop_next_pick.py:89 as of 66abc4d`, so a
+   condition written
    into either would silently change which rows a `--scope` lane matches. `spec`
    is parsed, normalised and written back, and no code branches on it.
 2. **It is empty on every blocked row that exists.** All 12 rows at `blocked` in
    `state/triage.md` today carry an empty `spec` cell. A blocked row has no spec
    yet by definition of being blocked — that is what it is waiting to earn.
 3. **It already round-trips.** `spec` is one of `COLUMNS`, so `parse_table`
-   copies it (`plugins/loopkit/loopkit_core/triage_state.py:128`) and
+   copies it (`plugins/loopkit/loopkit_core/triage_state.py:264 as of 66abc4d`)
+   and
    `format_row` writes it. No parser change is needed to *carry* a condition;
    only the evaluator is new. A sixth column would need both.
 
@@ -134,12 +159,14 @@ All three were run rather than reasoned about, and the third is worse than a
 rewrite:
 
 - `normalize_cell` is `" ".join(value.strip().split())`
-  (`plugins/loopkit/loopkit_core/triage_state.py:47`). It collapses any run of
+  (`plugins/loopkit/loopkit_core/triage_state.py:67 as of 66abc4d`). It
+  collapses any run of
   whitespace — all 29 characters, not only `U+0020` — to a single space, and
   strips the ends. **A cell carrying a double space, a tab, an NBSP, or a
   leading or trailing space is silently rewritten on read.**
 - `format_row` writes `.replace("|", "\\|")`
-  (`plugins/loopkit/loopkit_core/triage_state.py:65`). **A cell carrying a
+  (`plugins/loopkit/loopkit_core/triage_state.py:133 as of 66abc4d`). **A cell
+  carrying a
   literal pipe is silently rewritten on write.** The in-memory value survives
   the round trip because `split_markdown_row` unescapes it, but the bytes on
   disk change — `waits:row-done:a|b` is written as
@@ -149,9 +176,19 @@ rewrite:
   through `str.splitlines()`.** Ten characters break a line: `\n \v \f \r` and
   `\x1c \x1d \x1e \x85 \u2028 \u2029`. A cell containing any of them is written
   as one line and read back as two, and both halves fail the cell-count check at
-  `plugins/loopkit/loopkit_core/triage_state.py:121`. **The row is not
-  rewritten; it is deleted, silently, at exit 0.** Neither of the first two
-  reviews named this one. All ten are `isspace()`-true, so the `safe-char`
+  `plugins/loopkit/loopkit_core/triage_state.py:253 as of 66abc4d`. **That used
+  to delete the row silently at exit 0. Since `ea6e320` it does not:** the
+  short-read invariant at
+  `plugins/loopkit/loopkit_core/triage_state.py:275 as of 66abc4d` refuses the
+  whole parse, and `triage_state.py list` exits 2 naming the offending line. The
+  three line-breaking candidates in the table below are annotated `PARSE
+  REFUSED` for that reason; an earlier draft of this spec recorded them as `ROW
+  DELETED`, and what changed is the queue-never-reads-empty fix landing
+  underneath this spec, not anything about the grammar. The grammar is unmoved
+  by it — a cell that stops the tick is no more admissible than one that
+  vanishes — but the sentence had to move, because the sentence was the part
+  that went false. Neither of the first two reviews named this hazard at all.
+  All ten are `isspace()`-true, so the `safe-char`
   exclusion above already covers them — which is the second reason to key it on
   `isspace()` rather than on a hand-picked list of "the whitespace that
   matters". A hand-picked list would have had to know about `\x1d`.
@@ -174,9 +211,9 @@ illegal  True      True   'waits:row-done: leading'                         lead
 illegal  False     False  'waits:row-done:tab\there'                        TAB
 illegal  False     False  'waits:row-done:nbsp\xa0here'                     NBSP
 illegal  False     False  'waits:row-done:em\u2003here'                     EM SPACE
-illegal  False     False  'waits:row-done:vt\x0bhere'                       VERTICAL TAB     -> ROW DELETED
-illegal  False     False  'waits:row-done:fs\x1chere'                       FILE SEPARATOR   -> ROW DELETED
-illegal  False     False  'waits:row-done:cr\rhere'                         CARRIAGE RETURN  -> ROW DELETED
+illegal  False     False  'waits:row-done:vt\x0bhere'                       VERTICAL TAB     -> PARSE REFUSED
+illegal  False     False  'waits:row-done:fs\x1chere'                       FILE SEPARATOR   -> PARSE REFUSED
+illegal  False     False  'waits:row-done:cr\rhere'                         CARRIAGE RETURN  -> PARSE REFUSED
 illegal  True      True   'waits:row-done:a|b'                              literal PIPE (disk bytes differ)
 illegal  True      True   'waits:row-done:'                                 empty argument
 illegal  True      True   'waits::row-A'                                    empty kind
@@ -185,6 +222,12 @@ illegal  False     True   ' waits:row-done:a'                               lead
 
 LEGAL strings the pipeline rewrites: 0
 ```
+
+Re-measured at `66abc4d`, after #27 moved the parser. Every `legal?`,
+`survives` and `bytes` verdict is unchanged; only the three annotations moved,
+from `ROW DELETED` to `PARSE REFUSED`. The grammar this table exists to justify
+is therefore the same grammar, and that is worth stating explicitly rather than
+leaving a reader to diff two drafts.
 
 `survives` is "the value parsed back equals the value authored"; `bytes` is
 "writing that parse back reproduces the file byte for byte". **Zero of the legal
@@ -213,25 +256,111 @@ legal condition cell reads back exactly as authored.
 
 **The queue SHALL NOT gain a sixth column, for this or any other purpose.**
 
-This is not a style preference; a six-column queue destroys the file. The header
-is matched against a closed list of accepted shapes at
-`plugins/loopkit/loopkit_core/triage_state.py:89` (four-column and five-column
-only), and any row whose cell count differs from the header's is skipped at
-`plugins/loopkit/loopkit_core/triage_state.py:121`. Adding a sixth column to the
-real `state/triage.md` and parsing it with today's runtime:
+**The reason this section gave until 2026-09-07 has expired. The SHALL
+survives on a different one.** Both halves are set out below, because a rule
+kept on a reason that stopped being true is a rule nobody can argue with, and
+this spec is not entitled to one of those.
+
+#### What changed underneath it
+
+The header is matched against a closed list of accepted shapes — four-column
+and five-column only — at
+`plugins/loopkit/loopkit_core/triage_state.py:53 as of 66abc4d`, read by
+`header_cells_if_header` at
+`plugins/loopkit/loopkit_core/triage_state.py:95 as of 66abc4d`. A six-column
+header matches neither, and until `ea6e320` that produced `rows parsed: 0` at
+exit 0. This section argued from exactly that sentence. It can no longer.
+
+Taking the real `state/triage.md`, appending a sixth cell to its header,
+separator and every row, and parsing it with this branch's runtime:
 
 ```
-rows parsed: 0
-round-trip identical: False
-EXIT=0
+ValueError: <path>: no recognisable header, but the file holds 39 row-shaped
+line(s). An unknown, renamed or reordered column is the usual cause. Accepted
+headers: ['finding | source | priority | status',
+'finding | source | priority | spec | status']. Refusing to report an empty
+queue — a loop that reads its own memory as empty reports itself idle and
+nobody notices.
+
+rc=2
 ```
 
-Zero rows, **exit 0** — indistinguishable from an empty queue, and writing that
-parse back replaces all 37 rows with an empty table. This is precisely the
-2026-08-31 bug the parser's own comment at
-`plugins/loopkit/loopkit_core/triage_state.py:82` memorialises, where a header
-that failed to match returned `rows=[]` with exit 0 while the real file held 40
-rows.
+The refusal is at `plugins/loopkit/loopkit_core/triage_state.py:213 as of
+66abc4d`. Driven through the actual tick rather than the parser alone,
+`loop-next.sh --state <six-column queue>` prints one line and stops:
+
+```
+STAGE: error — could not parse <path> via triage_state.py. Do not guess; fix
+the state file.
+```
+
+**A loudly refused sixth column is a much smaller hazard than a silently zeroed
+one, and this spec says so plainly rather than leaving the old sentence
+standing.** The loop halts and names the file. Nobody is misled.
+
+#### Why the SHALL survives: the queue is a cross-version contract
+
+The runtime that reads `state/triage.md` is not necessarily the runtime that
+wrote it. LoopKit ships as a marketplace plugin and consumers run a pinned,
+cached copy, so "an older runtime" is the ordinary case rather than a corner.
+Every released version predates the fix. The same six-column queue, driven
+through v0.2.2's own `loop-next.sh`:
+
+```
+BACKLOG: new=0 spec-draft=0 spec-ready=0 fixing=0 pr-open=0
+STAGE: discover
+ACTION: no actionable rows. Run morning-triage to find work.
+NEXT: IDLE — no rows and nothing in flight.
+rc=0
+```
+
+Thirty-nine rows of work in the file, twelve of them blocked, and the tick
+reports itself idle at exit 0 with no BLOCKED line at all. Writing that parse
+back replaces the whole table with an empty one. Measured across the boundary
+where it moves:
+
+```
+runtime                            six-column queue
+v0.2.1  (released)                 rows parsed: 0, exit 0, table emptied on write
+v0.2.2  (released)                 rows parsed: 0, exit 0, table emptied on write
+687ccad (parent of the fix)        rows parsed: 0, exit 0, table emptied on write
+ea6e320 (the fix)                  ValueError, rc=2
+66abc4d (this branch)              ValueError, rc=2
+```
+
+Reproduce any row with `git show <sha>:plugins/loopkit/loopkit_core/triage_state.py`;
+no plugin cache is needed, and `git merge-base --is-ancestor ea6e320 v0.2.2`
+fails, which is the one-command form of the first three rows.
+
+So a sixth column written by a fixed runtime is still a silent total loss in
+every runtime anybody has installed. That is not a separate worry from
+criterion 8 — it *is* criterion 8's contract, "a queue written after this
+change SHALL parse in a runtime that predates it", and a sixth column breaks it
+in the worst available way. The mixed fleet is not hypothetical: it has already
+cost this loop a session, recorded in `inbox/needs-human.md`, where a
+governance hook from the cached 0.2.1 fired against a repo whose `main` carried
+the fix.
+
+Two smaller reasons survive alongside it. On the fixed runtime the queue is
+unreadable until a human repairs it — better than a lie, but still total
+unavailability of the loop's memory. And `write_table` hardcodes the
+five-column header at
+`plugins/loopkit/loopkit_core/triage_state.py:292 as of 66abc4d`, so a sixth
+column could not round-trip even if the parser admitted it.
+
+#### One more claim in this section that rotted
+
+Cell-count mismatches were described here as rows being "skipped". They are
+not, any more: the row is recorded as dropped at
+`plugins/loopkit/loopkit_core/triage_state.py:253 as of 66abc4d`, and the
+short-read invariant at
+`plugins/loopkit/loopkit_core/triage_state.py:275 as of 66abc4d` then refuses
+the whole parse. The parser's own docstring at
+`plugins/loopkit/loopkit_core/triage_state.py:153 as of 66abc4d` now records
+three visits from this family of bug — 2026-08-31, and twice on 2026-09-07 —
+and the fix that ended it. The old wording pointed at that comment as evidence
+the hazard was live; it is now evidence the hazard was closed, which is the
+opposite claim from the same citation.
 
 Criterion 8's SHALL forbids only a new *status value*, so a sixth column would
 satisfy it. Criterion 9 exists to close that gap, and its check runs today.
@@ -531,22 +660,49 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    ```
 
    Before and after are equal. The implementation is
-   `plugins/loopkit/loopkit_core/triage_state.py:14`; a bare `import triage_state`
+   `plugins/loopkit/loopkit_core/triage_state.py:17 as of 66abc4d`; a bare
+   `import triage_state`
    raises `ModuleNotFoundError` from the repo root, and the path-shim spelling
    (`cd plugins/loopkit/scripts && python3 -c "import triage_state; ..."`) works
-   but reads the shim at `plugins/loopkit/scripts/triage_state.py:2` rather than
+   but reads the shim at
+   `plugins/loopkit/scripts/triage_state.py:2 as of 66abc4d` rather than
    the implementation, so prefer the form above. Check `[M2b]`: write a queue
    with conditions, parse it with the merge-base `triage_state`, write it back,
    compare bytes.
 9. The queue SHALL NOT gain a sixth column. A five-column queue and a runtime
-   that expects five columns are the compatibility contract; six columns is a
-   silent total loss, not a degraded read. Check `[today]`: take the real
-   `state/triage.md`, append a sixth cell to its header, separator and every row,
-   and parse it with today's `parse_table`. It reports `rows parsed: 0` at
-   **exit 0**, and writing that parse back is not byte-identical to the input —
-   all 37 rows are gone. Run and confirmed on this branch. The check passes when
-   the implementation still reads the real queue as 37 rows, i.e. when nobody
-   took the sixth-column route.
+   that expects five columns are the compatibility contract, and the runtime
+   that reads the queue is not necessarily the one that wrote it.
+
+   This criterion's check was rewritten on 2026-09-07 because the old one
+   asserted a fact that had become false — it required `rows parsed: 0` at exit
+   0, and since `ea6e320` the parse refuses instead. **The SHALL was re-argued
+   rather than the citation re-pointed.** Making the old check pass again would
+   have meant pointing it at whatever still produced a silent zero, which is
+   precisely the move `check-citations.py` exists to catch.
+
+   Check `[today]`, three parts. Take the real `state/triage.md`, append a sixth
+   cell to its header, separator and every row, and:
+
+   a. **This runtime refuses it.** `parse_table` raises `ValueError` and
+      `triage_state.py list` exits **2**. `loop-next.sh --state <that file>`
+      prints `STAGE: error — could not parse …` and serves no stage. Zero rows
+      at exit 0 is a FAILURE of this check now, not the expected result.
+   b. **A released runtime still loses it silently.** The same file through
+      `git show 687ccad:plugins/loopkit/loopkit_core/triage_state.py` — the
+      parent of the fix, and the shape of both released tags — parses **0 rows
+      at exit 0**, and v0.2.2's `loop-next.sh` reports `STAGE: discover` /
+      `NEXT: IDLE` with no BLOCKED line. This is the part that keeps the SHALL
+      standing, so it is the part that must not be dropped as redundant.
+   c. **Nobody took the sixth-column route.** The implementation still reads the
+      real queue as **39 rows** (12 `blocked`), and
+      `python3 -c "...; print(triage_state.ACCEPTED_HEADERS)"` still lists
+      exactly the four- and five-column shapes.
+
+   The row count in (c) is a moving number by design — it was 37 when this spec
+   was first written and 39 at `66abc4d`. Assert it against a freshly parsed
+   count of the same file, never against a literal copied out of this
+   paragraph; a check that hardcodes 39 goes red on the next triage run and
+   teaches whoever fixes it to distrust the criterion.
 10. WHEN a row's status changes from `blocked` to any other value, the `spec`
     cell SHALL be cleared to the empty string in the same write.
 
@@ -565,7 +721,8 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
     For criterion 3's automatic transition that is the runtime. For a hand edit
     or a skill it is the caller, and the default is against them — `update_row`
     leaves `spec` untouched when the argument is `None`
-    (`plugins/loopkit/loopkit_core/triage_state.py:215`), so a status change
+    (`plugins/loopkit/loopkit_core/triage_state.py:582 as of 66abc4d`), so a
+    status change
     that simply does not mention `spec` preserves the stale condition. The
     caller must pass `spec=""` explicitly. A rule whose observance depends on
     remembering to pass an optional argument will be broken.
@@ -574,8 +731,8 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
     status is not `blocked` and whose `spec` cell begins `waits:` has that cell
     cleared, and one diagnostic line is printed naming the row. Clearing is safe
     because the prefix is unambiguous, and that was measured rather than
-    assumed: of the 37 rows in the real `state/triage.md`, three carry a
-    non-empty `spec` cell and all three begin `specs/`. `waits:` is not a path,
+    assumed: of the 39 rows in the real `state/triage.md` at `66abc4d`, three
+    carry a non-empty `spec` cell and all three begin `specs/`. `waits:` is not a path,
     so the repair cannot destroy a spec reference. The diagnostic is what stops
     the repair being a silent overwrite — the value goes, the evidence that it
     was there does not.
@@ -583,8 +740,10 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
     Check `[today]`: a detector over the real `state/triage.md` reporting every
     non-`blocked` row whose `spec` cell begins `waits:`. It runs against the
     current runtime and needs no evaluator. Run on this branch it reports zero,
-    against 37 rows of which 12 are `blocked` and none of the 12 carries a
-    condition yet. That zero is the baseline a regression is measured against: a
+    against 39 rows of which 12 are `blocked` and none of the 12 carries a
+    condition yet. Re-measured at `66abc4d`: the row total moved from 37 as the
+    queue grew, the blocked count and the three `specs/` cells did not, and the
+    detector still reports zero. Assert the zero, not the totals. That zero is the baseline a regression is measured against: a
     detector first run *after* the change could not tell a clean queue from a
     detector that never matches anything.
 
@@ -653,7 +812,8 @@ of ruling-blocked rows whose tick output is identical before and after.
 tick's output embeds the scripts directory and the project directory, both of
 which differ between any two checkouts. `tests/pins/loop-next-output-parity.py`
 already carries the machinery — it replaces them with `<SCRIPTS>` and `<PROJECT>`
-at `tests/pins/loop-next-output-parity.py:109`, and fixture `02-blocked-only` is
+at `tests/pins/loop-next-output-parity.py:119 as of 66abc4d`, and fixture
+`02-blocked-only` is
 already a ruling-blocked queue. Extend that pin rather than writing a second
 comparison; a fixture whose comparison forgets the scrubbing fails on every
 machine but the one that recorded it, and gets disabled rather than fixed.
