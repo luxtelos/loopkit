@@ -285,8 +285,9 @@ nobody notices.
 rc=2
 ```
 
-The refusal is at `plugins/loopkit/loopkit_core/triage_state.py:213 as of
-66abc4d`. Driven through the actual tick rather than the parser alone,
+The refusal is at
+`plugins/loopkit/loopkit_core/triage_state.py:213 as of 66abc4d`. Driven
+through the actual tick rather than the parser alone,
 `loop-next.sh --state <six-column queue>` prints one line and stops:
 
 ```
