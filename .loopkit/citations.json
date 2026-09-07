@@ -1,7 +1,56 @@
 {
   "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
   "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
-  "_allow_empty": "true, and it is a live decision, not neglect: no document in this repo cites a file:line today. Flip it to false the day one does, so the gate goes red if the scan ever stops seeing them.",
-  "allow_empty": true,
-  "pins": []
+  "_allow_empty": "false since 2026-09-07. It was true while no document cited a file:line, and the note here said to flip it the day one did. specs/blocked-waits-on-what.md now cites thirteen, so EMPTY would mean the scan has stopped seeing specs/ — exactly the silent-miss this gate exists to catch. Flipping it is what makes the gate verify something instead of reporting PASS for having checked nothing.",
+  "allow_empty": false,
+  "pins": [
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^COLUMNS = \\[\"finding\", \"source\", \"priority\", \"spec\", \"status\"\\]$",
+      "the queue is exactly five columns, which is why the spec forbids a sixth and puts the condition in the `spec` cell"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^def normalize_cell",
+      "the read-side rewrite the condition grammar must survive (collapses whitespace runs)"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "replace\\(\"\\|\", \"\\\\\\\\\\|\"\\)",
+      "the write-side rewrite the condition grammar must survive (escapes literal pipes)"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^\\s*accepted_headers = \\($",
+      "the closed header list that makes a six-column queue parse as zero rows"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "if len\\(cells\\) != len\\(header_cells\\):",
+      "the cell-count skip that silently drops every row of a mis-shaped table"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/loop_next_pick.py",
+      "^WANT = \\[\"pr-open\", \"fixing\", \"spec-ready\", \"spec-draft\", \"new\"\\]$",
+      "`blocked` is absent from WANT, so a blocked row is counted and never served"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/loop_next_pick.py",
+      "hay = \\(\\(r\\.get\\(\"finding\"\\).*r\\.get\\(\"source\"\\)",
+      "scope matching hays finding+source, which is why the condition may not live in either"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "tests/pins/loop-next-output-parity.py",
+      "replace\\(str\\(scripts\\), \"<SCRIPTS>\"\\)",
+      "the control case's absolute-path scrubbing already exists here and should be extended, not rewritten"
+    ]
+  ]
 }
