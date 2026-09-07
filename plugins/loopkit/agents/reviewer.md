@@ -116,3 +116,16 @@ in Claude Code), and a broad test run is often silent for longer than that.
 Never run a command that can stay silent for ten minutes: batch the runner with
 an explicit file list and a terse reporter, or run it in the background writing
 to a log and print `tail -2` of that log every 60 seconds until it ends.
+
+## Never put a secret on a command line
+
+An agent leaked a token on 2026-09-07 by writing `VAR='<token>' ssh host …`.
+Inline assignments go into the remote host's **process table**, where any other
+user on that box can read them with `ps`, and they get echoed back into
+transcripts. The token had to be rotated.
+
+- **Pipe secrets to stdin**, never as argv: `printf '%s' "$TOKEN" | ssh host 'read -r T; …'`
+- Or set them in the remote environment out of band, and reference the NAME.
+- A URL with credentials in it is the same mistake wearing different clothes:
+  `https://user:token@host/…` is argv too.
+- Filter output, but do not rely on filtering — the process table is not output.
