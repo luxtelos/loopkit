@@ -404,11 +404,11 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
 5. The condition check SHALL be a **closed function of its arguments**: it
    receives the rows this tick has already parsed and the condition to test, it
    reads nothing else, and it returns a verdict. No clock, no network, no
-   filesystem, no module-level state — and, the change in this round, no
-   carve-out for any of them.
+   filesystem, no module-level state — and, since round two, no carve-out for
+   any of them.
 
    **The "date comparison" this criterion used to allow is withdrawn.** That
-   allowance is what forced the previous check into the wrong shape. Permitting
+   allowance is what forced the first check into the wrong shape. Permitting
    *part* of a module obliges the check to enumerate the forbidden members of a
    permitted one, and an enumeration of forbidden members is a deny-list by
    construction: there is no way to say "`date` yes, `date.today` no" without
@@ -419,97 +419,218 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    and the check stays total. Withdrawing the allowance costs no capability. It
    moves one value across the function boundary.
 
-   **Check `[M2b]`: a static allow-list over the evaluator's code object.** Not
-   a runtime guard that patches forbidden names into raising. A guard like that
-   admits by default, and enumerating the known-bad while permitting the unknown
-   is the most-repeated defect in this codebase. Five parts, all decidable
-   without running the evaluator at all:
+   **Criterion 5 has been defeated twice, the same way both times.**
 
-   a. **It is a plain function at all.** `isinstance(evaluator,
-      types.FunctionType)`. A callable class instance has no inspectable
-      `__code__`, so every part below would raise rather than judge — and a
-      check that raises where it meant to refuse is a check whose verdict
-      depends on how the caller wrote its `try`. Refuse explicitly.
+   **Round one** was a deny-list of forbidden module names. The round-two review
+   beat it six ways: `from time import time`, `from datetime import datetime`
+   binding before the guard's `setattr`, `subprocess.run(["date"])`,
+   `perf_counter_ns`, `clock_gettime`, `os.stat().st_mtime`.
+
+   **Round two** replaced it with a static allow-list over the union of
+   `co_names`. The post-merge review of PR #29 beat that three ways. The clean
+   defeat uses only allow-listed names:
+
+   ```python
+   count = time.time                     # bound at module level
+   def evaluate(rows, arg):
+       hit = any(r.get("source") == arg and r.get("status") == "done" for r in rows)
+       return hit and (count() % 2 < 1)  # co_names == ['any', 'count']
+   ```
+
+   `any` was on the list as a builtin. `count` was on it as a `str`/`list`
+   attribute name. The evaluator passed parts (a) through (e) **and** the
+   determinism half, and returned `{False, True}` for identical inputs. A
+   poisoned `__builtins__` passed too, and so did `index = os.getpid`.
+
+   **The root cause is structural, and the structure is what round three
+   changes.** Round two's part (d) put attribute names and free globals into one
+   namespace and judged them against one list; its part (e) guarded only names
+   that happen to be *builtins*. Every allow-listed attribute name — `get`,
+   `count`, `index`, `keys` — was therefore also a free global that the defining
+   module could bind to anything at all.
+
+   **Do not add `count`, `index` or `getattr` to a list to make a refusal go
+   away.** That is the move this criterion has now watched fail twice: a
+   deny-list defeated six ways, then an allow-list defeated three. A third list
+   of names would be defeated a fourth time. Two things were wrong, and both are
+   answered by construction rather than by enumeration:
+
+   - **A name's meaning is set by its BINDING, not by its spelling.** `count`
+     is a harmless string method and a clock, depending on what the module
+     assigned to it. So the check resolves each free global and compares the
+     **object** — and, more to the point, the runtime stops consulting the
+     defining module's namespace at all.
+   - **`co_names` cannot tell a global from an attribute. `dis` can.** The
+     opcode that carries the name says which kind of name it is. So the check
+     partitions the instruction stream and judges each namespace against its
+     own list.
+
+   **Check `[M2b]`, in two halves.**
+
+   The first half is **enforcement**, the second is **detection**, and neither
+   alone is enough. Both are pinned, with every attack below, by
+   `tests/pins/criterion5-purity-attacks.py`.
+
+   **(A) The runtime SHALL call the evaluator against a sealed globals
+   mapping** holding only the allow-listed builtins —
+   `types.FunctionType(fn.__code__, {"__builtins__": <allow-listed builtins>},
+   ...)` — and SHALL NOT call the original function object. `count = time.time`
+   in the defining module is then not a name the check has to recognise; it is a
+   name that does not resolve. The sealed call raises `NameError`, measured:
+
+   ```
+   count = time.time        sealed call -> NameError: name 'count' is not defined
+   index = os.getpid        sealed call -> NameError: name 'index' is not defined
+   the pure control         sealed call -> True
+   ```
+
+   This closes, at once, every attack that reaches the world through **a name
+   the defining module bound** — including the ones nobody has written: an
+   unlisted name, a poisoned `__builtins__` (module or dict), a module constant
+   laundering a clock, and — the one detection cannot reach at all — a module
+   that rebinds a name *after* the check has run. A static check is a
+   photograph. Sealing is a wall.
+
+   It closes nothing else, and the boundary is exact. What the module bound is
+   unreachable; what the *sealed list itself* contains is still whatever it
+   contains, so a careless `id` on that list is as impure sealed as unsealed. A
+   value captured before sealing — a parameter default, a closure cell — is
+   already a value and not a name, which is why parts (b) and (c) below are not
+   made redundant by (A).
+
+   Sealing must not change a legal verdict, and does not: the pure control
+   returns the same answer sealed and unsealed. That is the property to pin,
+   because an enforcement step that quietly alters results is worse than the
+   hole it closes.
+
+   **(B) A static check for what sealing cannot reach.** Sealing owns the
+   globals; it cannot own what the evaluator reaches for **through its
+   arguments**, and `rows.__class__.__base__.__subclasses__()` never touches the
+   globals at all. Four parts, all decidable without running the evaluator —
+   and the fourth splits into the two namespaces round two conflated:
+
+   a. **It is a plain function.** `isinstance(evaluator, types.FunctionType)`.
+      A callable class instance has no inspectable `__code__`, so every part
+      below would raise rather than judge — and it cannot be sealed either, so
+      both halves need this first. Refuse explicitly.
    b. **No defaulted parameters.** `evaluator.__defaults__` and
       `evaluator.__kwdefaults__` are both empty. A default is evaluated once, at
       `def` time, in the module — so `def evaluate(rows, arg, _now=time.time())`
-      hides a clock read that no name in the function body records.
+      hides a clock read that no name in the function body records, and that
+      sealing cannot undo because the value is already captured.
    c. **No closure.** `evaluator.__closure__` is `None`. A free variable is
-      non-argument state by definition, and it is also how a decorator hides the
-      real evaluator behind a `functools.wraps` wrapper.
-   d. **Every reachable name is on the allow-list.** Take the union of
-      `co_names` over `evaluator.__code__` and, recursively, every code object
-      in its `co_consts`. That is every global, every imported name and every
-      attribute the function can reach, including from a nested `def` or
-      `lambda`. It must be a subset of the declared list. Everything else
-      fails: an unlisted module, an unlisted builtin, an unlisted attribute,
-      and — this is the point — a name nobody has thought of yet.
-   e. **No allow-listed builtin is shadowed.** For each reachable name that is
-      also a builtin, assert `evaluator.__globals__` either does not bind it or
-      binds it to the same object as `builtins` does. Without this, a module can
-      rebind `len` to something that reads the clock and its evaluator passes
-      part (d) with every name legal.
+      non-argument state by definition, it is also how a decorator hides the
+      real evaluator behind a `functools.wraps` wrapper, and it is the second
+      thing sealing cannot reach.
+   d. **The instruction stream is partitioned, and an unclassified opcode is
+      refused.** Walk `dis.get_instructions` over `evaluator.__code__` and,
+      recursively, every code object in its `co_consts`. Every instruction whose
+      opcode is in `dis.hasname` carries a name, and the opcode says what kind:
 
-   The allow-list is the builtins the evaluator uses plus the attribute names it
-   calls on its arguments — about twenty entries, all of them `str`, `dict` and
-   `list` members. Attribute names are included deliberately, although `dis`
-   could tell them apart from globals. It costs one line in the list, and it
-   earned itself: the only evaluator that reaches dangerous state while naming
-   **no module global whatsoever** does it through an argument, as
-   `rows.__class__.__base__.__subclasses__()`, and the names that refuse it are
-   `__class__`, `__base__` and `__subclasses__` — three attributes. A check that
-   scanned globals alone would let it through. Cheap over-strictness is the
-   right trade in a check whose entire job is to fail closed.
+      - `LOAD_GLOBAL`, `LOAD_NAME` → a **free global**, judged by (d1);
+      - `LOAD_ATTR`, `LOAD_METHOD` → an **attribute**, judged by (d2);
+      - `STORE_*`, `DELETE_*` → **refused**: the evaluator writes nothing,
+        neither to a module nor to an object it was handed;
+      - `IMPORT_NAME`, `IMPORT_FROM` → **refused**: it imports nothing;
+      - **anything else in `dis.hasname` → refused.**
 
-   **Measured against seventeen stand-in evaluators** — two legal shapes, the
-   six spellings the round-two review used to defeat the deny-list, four the
-   deny-list did catch, and five more written to attack this check rather than
-   the old one:
+      That last clause is what keeps this from decaying into a deny-list as
+      CPython moves, and on 3.14 it is not hypothetical: `LOAD_SUPER_ATTR`,
+      `INSTRUMENTED_LOAD_SUPER_ATTR` and `LOAD_FROM_DICT_OR_GLOBALS` are all
+      name-carrying and none is in the four sets above, while `LOAD_METHOD`,
+      listed above, was removed in 3.12 and is kept only for older runtimes.
+      The opcode set moves under the check every release; failing closed is the
+      only thing that makes that safe. A name in `co_names` that no classified
+      instruction reaches is refused for the same reason.
+   d1. **A free global must be on a short list AND bound to the pristine
+       builtin.** The name must be on `ALLOWED_GLOBALS`, and it must resolve —
+       through the evaluator's **own** lookup path, `__globals__` first and then
+       its own `__builtins__` fallback, module or dict — to the identical object
+       the pristine `builtins` module binds under that name. Round two looked
+       only in `__globals__` while comparing against `builtins`, which is
+       exactly how a poisoned `__builtins__` walked through: it asked the wrong
+       dictionary. Both halves are load-bearing and each proves red on its own —
+       removing the binding comparison re-admits `all = <clock wrapper>` and
+       both `__builtins__` poisonings.
+   d2. **An attribute must be on a short list, and never underscored.** No
+       attribute name may begin with `_`. That refuses `__class__`, `__base__`,
+       `__subclasses__`, `__globals__` and `__code__` as a **class** rather than
+       as five entries, which is the difference between a rule and a list.
+
+   **The two lists may not be merged back into one, and the control proves it.**
+   Merging them makes the *pure* evaluator fail: `any` becomes an unlisted
+   attribute and `get` a global that resolves to nothing. They are not two
+   spellings of one list. They describe two namespaces, and round two's single
+   list was the defect.
+
+   **`getattr` is not on `ALLOWED_GLOBALS`, and that exclusion carries weight**
+   the attribute list cannot:
+
+   ```python
+   get = getattr
+   def evaluate(rows, arg):
+       hit = any(r.get("source") == arg and r.get("status") == "done" for r in rows)
+       subs = get(get(get(rows, "__class__"), "__base__"), "__subclasses__")()
+       return hit and (len(subs) % 2 == 0)
+   ```
+
+   `co_names` is `{any, get, len}` — every one on round two's list, and **no
+   attribute name appears in it at all**, because the attributes are string
+   constants. Round two's proudest claim, that including attribute names is what
+   refuses the `__subclasses__` climb, is defeated by spelling the attributes as
+   constants: a check that reads names cannot see a name that was never a name.
+
+   Two separate things refuse it here, and it is worth knowing which is doing
+   the work. Written as above, (d1) refuses it because `get` is loaded as a
+   **global** and `get` is on the attribute list, not the global one — the
+   namespace split, again. Written without the alias, as plain `getattr(...)`,
+   only the curated global list refuses it. So `getattr` — and `vars`,
+   `globals`, `eval`, `exec`, `__import__` — must stay off `ALLOWED_GLOBALS`
+   permanently, and that is not a consequence of the split but an independent
+   requirement of it.
+
+   **`ALLOWED_GLOBALS` is short because the job is small, and curated because
+   pristine is not the same as pure.** `id` resolves to the genuine
+   `builtins.id` and is address-derived; `hash` of a string is randomised per
+   process, so two ticks in two processes disagree. Both pass (d1)'s identity
+   test the moment their names are on the list. **The identity test is
+   necessary, not sufficient — the short list is the control, and lengthening it
+   is a spec change, not a fix.**
+
+   **Measured.**
+
+   Round two's check and round three's, run against the same corpus. The
+   `flips?` column is ground truth: does the evaluator return different answers
+   for identical inputs?
 
    ```
-   evaluator                            intent     deny-list  audit-hook  allow-list
-   pure                                 allowed    allowed    allowed     allowed
-   date comparison, dates passed in     allowed    allowed    allowed     allowed
-   from time import time                forbidden  ALLOWED!   ALLOWED!    detected
-   from datetime import datetime        forbidden  ALLOWED!   ALLOWED!    detected
-   subprocess.run(["date", "+%s"])      forbidden  ALLOWED!   detected    detected
-   time.perf_counter_ns()               forbidden  ALLOWED!   ALLOWED!    detected
-   time.clock_gettime()                 forbidden  ALLOWED!   ALLOWED!    detected
-   os.stat().st_mtime                   forbidden  ALLOWED!   ALLOWED!    detected
-   time.time()                          forbidden  detected   ALLOWED!    detected
-   datetime.datetime.now()              forbidden  detected   ALLOWED!    detected
-   datetime.date.today()                forbidden  detected   ALLOWED!    detected
-   socket.getaddrinfo()                 forbidden  ALLOWED!   detected    detected
-   clock laundered via a module const   forbidden  ALLOWED!   ALLOWED!    detected
-   __import__("time") in a nested def   forbidden  detected   ALLOWED!    detected
-   open() on a file                     forbidden  detected   detected    detected
-   a shadowed builtin len()             forbidden  detected   ALLOWED!    detected
-   clock read in a parameter default    forbidden  ALLOWED!   ALLOWED!    detected
-
-   correct:    deny-list 8/17      audit-hook 5/17      allow-list 17/17
+   evaluator                                      intent     round2    round3    flips?
+   CONTROL pure                                   allowed    allowed   allowed   no
+   CONTROL known-bad time.time()                  forbidden  REFUSED   REFUSED   YES
+   R1 count = time.time                           forbidden  allowed!  REFUSED   YES
+   R2 __builtins__ is a poisoned MODULE           forbidden  allowed!  REFUSED   -
+   R3 index = os.getpid                           forbidden  allowed!  REFUSED   no
+   N1 __builtins__ is a poisoned DICT             forbidden  allowed!  REFUSED   -
+   N2 get = getattr, attributes as string CONSTS  forbidden  allowed!  REFUSED   no
+   N5 all = a clock wrapper                       forbidden  REFUSED   REFUSED   YES
+   N8 append() mutates the caller's rows          forbidden  allowed!  REFUSED   no
    ```
 
-   Three rows are worth reading twice.
+   R1, R2 and R3 are the post-merge review's. N1, N2, N5 and N8 were written
+   against round three rather than against round two — N5 is included although
+   round two's part (e) already caught it, because it is the shape "an
+   allow-listed name bound to something dangerous" in the one case round two
+   happened to cover, and the contrast with R1 is the whole lesson. `flips?` is
+   evidence, not a gate: `index = os.getpid` never flips within one process and
+   is forbidden anyway, which is precisely why determinism sampling cannot be
+   the check.
 
-   **`clock laundered via a module const`** is `_BOOT = time.time()` at module
-   level with the function returning `_BOOT`. The word `time` appears nowhere
-   inside the function. Every check that hunts for forbidden module names in the
-   function body — the deny-list, an audit hook, a grep, a reviewer reading it —
-   is blind to it. The allow-list refuses it because `_BOOT` is a name and
-   `_BOOT` is not on the list. That is the whole difference between the two
-   shapes: an allow-list does not have to recognise the danger, only to fail to
-   recognise the name.
-
-   **`clock read in a parameter default`** defeats parts (c), (d) and (e) on
-   their own; part (b) exists solely because of it. It was found by writing this
-   check, not by reading the old one, which is the argument for writing checks
-   that try to break themselves.
-
-   **The audit hook the round-two review proposed scores worse than the
-   deny-list it was meant to replace — and it would have looked like progress.**
-   Measured by arming a hook that trips on *any* audit event whatsoever, which
-   is the most generous construction available rather than a list of event
-   prefixes, twelve of the seventeen evaluators raise **no audit event at all**:
+   **Two earlier shapes, kept because they are the ones a reader reaches for.**
+   The deny-list of round one got 8 of 17 right on the corpus it was built
+   against. The audit hook the round-two review proposed scored **worse** —
+   5 of 17 — and would have looked like progress: measured by arming a hook that
+   trips on *any* audit event whatsoever, twelve of seventeen evaluators raise no
+   audit event at all.
 
    ```
    time.time()             -> NONE     subprocess.run(...)   -> subprocess.Popen, fork_exec, open
@@ -522,78 +643,79 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
 
    CPython raises audit events for imports, subprocess, sockets and `open`. It
    raises none for reading a clock, which is most of what this criterion
-   forbids. So an audit hook is a deny-list too — its list is merely written in
-   C, inside the interpreter, by somebody who was not thinking about this
-   criterion. It is recorded here because it is the plausible next thing a
-   reader reaches for, and because "it is a hook, so it must be sound" is how
-   the shape gets bought a third time.
+   forbids. An audit hook is a deny-list too; its list is merely written in C,
+   inside the interpreter, by somebody who was not thinking about this
+   criterion. "It is a hook, so it must be sound" is how the shape gets bought a
+   third time.
 
-   The same review offered a second suggestion — "assert on the evaluator's
-   imports" — and that one was right, in the direction if not the unit. The
-   check above is that idea generalised from imports to **names**, and the
-   generalisation is load-bearing rather than tidy-minded: `_BOOT =
-   time.time()` at module level imports nothing inside the function, and
-   `_now=time.time()` in a parameter default imports nothing at all. Both are
-   invisible to an import assertion and both are caught by a name assertion.
-   Imports are a subset of names; the two evaluators that live in the gap are
-   the two nobody had written yet.
+   **Those corpus scores measure a corpus, not the class**, and round two's
+   `17/17` is exactly what that mistake reads like from the inside. The number
+   was true of the seventeen evaluators it was run against and false of the
+   eighteenth, which the next reviewer wrote in an afternoon. Round three's
+   table above is the same kind of number and deserves the same suspicion; what
+   is different is the section below, which says where the class is still open.
 
-   **Six more, written to attack this check rather than the old one.** The
-   seventeen above were mostly inherited from two rounds of review, which makes
-   them a test of the previous check as much as this one. These were chosen by
-   asking where an allow-list over `co_names` would be weakest:
+   **What this does NOT close, named rather than left for the next reviewer.**
 
-   ```
-   adversarial evaluator     intent     verdict   refused because
-   clock read in a genexp    forbidden  detected  unlisted name: time
-   clock read in a lambda    forbidden  detected  unlisted name: time
-   rows.__class__.__base__   forbidden  detected  unlisted: __class__, __base__, __subclasses__
-     .__subclasses__()
-   a callable class instance forbidden  detected  not a plain function
-   functools.wraps wrapper   forbidden  detected  closure over non-argument state
-   str/dict methods only     allowed    allowed   -
+   An allow-list with an unnamed gap is a deny-list wearing better clothes.
+   Six gaps: **four measured** by the pin (1 to 4) and **two asserted** (5 and
+   6), said to be asserted rather than folded in with the measured ones. The pin
+   **fails if it reports zero gaps** — a clean sheet would mean the
+   demonstrations stopped running, not that the misses were closed.
 
-   wrong: 0/6
-   ```
-
-   The third and fourth are the ones that changed this criterion. The
-   attribute-chain evaluator names no module global at all — it climbs from an
-   *argument* to `object.__subclasses__`, and only the attribute half of part
-   (d) refuses it. The callable instance produced no verdict at all in the first
-   draft of this check; it raised, because a class instance has no `__code__`.
-   Part (a) exists because of it. Both were found by writing evaluators against
-   the check rather than by re-reading it, which is the method this criterion
-   recommends to whoever implements it: the twenty-third evaluator is the one
-   worth writing.
-
-   **What this check does not prove, said plainly so nobody mistakes it for
-   total.** It does not prove the evaluator is a function of *honest* inputs: if
-   the caller hands it a clock reading as an argument, the evaluator is still
-   pure with respect to what it was given. That hole is closed by criterion 6,
-   which fixes the argument list to the already-parsed rows and no path — the
-   two criteria only hold together, and weakening either reopens it. Separately,
-   `co_names` is a CPython implementation detail; a runtime that is not CPython
-   needs a different reading of the same rule. Both limits are named here rather
-   than left for the next reviewer to find.
+   1. **Argument-mediated impurity.** The pure control flips when a row's `.get`
+      reads the clock. No static check on the evaluator can see this; the
+      evaluator is genuinely pure with respect to what it was handed. Closed
+      only by criterion 6 — a fixed argument list of already-parsed rows and no
+      path — so the two criteria hold only together, and weakening either
+      reopens it.
+   2. **Non-termination.** `while True: pass` has an **empty** `co_names`, so
+      both halves accept it and the tick hangs. Purity is not termination.
+      Criterion 5 does not bound runtime and does not claim to.
+   3. **A pristine builtin that is not pure.** `id`, `hash`. Refused today by
+      the shortness of the list, not by any mechanism. See above.
+   4. **Time-of-check on the unsealed path.** Measured: the static check
+      accepts, the module then rebinds a name, and the unsealed evaluator flips.
+      The sealed one does not. This is why (A) is a SHALL and not an
+      optimisation, and why "SHALL NOT call the original function object" is
+      part of it.
+   5. **Hand-assembled bytecode** whose linear disassembly disagrees with
+      execution would defeat part (d). **Unproven** — not demonstrated here, and
+      not closed either. Recorded as an open question rather than dressed up as
+      covered.
+   6. **Non-CPython.** `dis`, `co_names` and opcode spellings are CPython
+      details. On another runtime part (B) cannot run at all; part (A) still can,
+      which is a further argument for enforcement over detection.
 
    **If you are reading this because the check refused something, do not add a
-   name to make it pass.** There is no deny-list here to lengthen. The list is
-   of what is permitted, and it is short because the evaluator's job is small. A
-   refusal means one of two things, and the refused name tells you which: either
-   the evaluator is reaching for state it should have been handed, or the
-   permitted list genuinely wants one more `str` method. `datetime` is the first
-   of those. `casefold` is the second.
+   name to make it pass.** There is no deny-list here to lengthen. A refusal
+   means one of two things, and the refused name tells you which: either the
+   evaluator is reaching for state it should have been handed, or the permitted
+   list genuinely wants one more `str` method. `count` is the first of those.
+   `casefold` is the second.
 
-   **Determinism, the weaker half, kept.** Call the evaluator twice with
-   identical inputs and compare. It adds almost nothing on top of the
-   allow-list, and it costs one line.
+   **Determinism, the weaker half, kept — and re-scoped.** Call the evaluator
+   with identical inputs and compare. Round two called it "the determinism half"
+   and meant two adjacent calls, which is why `count = time.time` passed it: two
+   calls a microsecond apart agree. Two adjacent calls are worth nothing here.
+
+   What the sampling IS worth is gap 1. Repeated over a window, it is the only
+   part of this criterion that notices **argument-mediated** impurity — the pure
+   control flipped under 200 sampled calls when a row's `.get` read the clock,
+   and neither half of the check above can see that at all. So it is kept, and
+   its job is named: it does not grade the evaluator's text, which (A) and (B)
+   do; it is a smoke alarm for impurity arriving through a route nobody
+   modelled. It is evidence, never the gate — an evaluator that flips is
+   certainly broken, an evaluator that does not flip has proved nothing.
 
    The draft before last named only "call it twice under a frozen clock", which
    cannot fail: freezing the clock removes the variable it exists to detect. The
-   draft after that replaced it with the deny-list in the table above, which
-   gets nine of seventeen wrong. Both are recorded because the *shape* of the
-   mistake survived a rewrite that made the check genuinely stronger, and that
-   is the thing to watch for rather than either individual check.
+   draft after that replaced it with the deny-list, which gets nine of seventeen
+   wrong. Round two replaced *that* with one name-list, which gets six of the
+   nine above wrong. Three rewrites, and the *shape* of the mistake survived all
+   three — a rule about names, checked in a namespace that is not the one the
+   name resolves in. That is the thing to watch for, rather than any individual
+   check.
 6. WHEN a condition names another row (for example, blocked until row X reaches
    `done`), the runtime SHALL evaluate it against the queue in the same read that
    produced the counts, SHALL NOT re-read the queue, and SHALL NOT follow a chain
@@ -768,10 +890,20 @@ while they needed the same unbuilt evaluator, so a reader who took the untagged
 set for the runnable set found three that were not.
 
 Criterion 5 is the exception worth naming. Its check is tagged `[M2b]` because
-there is no evaluator to inspect, but the check itself needs no evaluator to be
-*written*: it is thirty lines of `inspect` over a code object, and it was run
-against seventeen stand-in evaluators before this text was written. Against an
-evaluator that does not exist it fails closed, which is the correct verdict.
+there is no evaluator to inspect, but neither half needs one to be *written*,
+and both are written: they live in `tests/pins/criterion5-purity-attacks.py`,
+which the selftest runs today against stand-in evaluators. Against an evaluator
+that does not exist it fails closed, which is the correct verdict.
+
+That the pin runs before the evaluator exists is the point, not a curiosity.
+Round two's check was described in prose, and its numbers — `17/17`, `0/6` —
+were never committed as anything a reader could re-run; the post-merge review of
+PR #29 recorded them as unaudited and then defeated the check by hand. A check
+whose corpus is a sentence is a check nobody can attack except by rebuilding it
+first. The pin exists so the next attack costs an afternoon rather than a
+review, and it asserts that round two's check is **still fooled** by the three
+attacks that beat it, so a harness that quietly stopped reproducing them fails
+instead of printing a clean sheet.
 
 Every criterion names at least one check clause. Counted mechanically over this
 section, that is ten of ten; the first draft was seven of eight, criterion 6
