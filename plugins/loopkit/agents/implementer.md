@@ -36,6 +36,10 @@ Never decide done yourself. Never merge.
 - Never stage everything. `git add -A`, `--all` and `.` are refused by the
   same hook (`git-add-all`). Name the files, so the diff you commit is the diff
   you reviewed.
+- Commit with `loop-commit.sh -m "…" -- <paths>`, never a bare `git commit`
+  (refused by `require_commit_lock.py`). In your own worktree you contend with
+  nobody and the lock is uncontended; the habit is what makes it safe on the
+  days you are working in a shared one.
 - If you hit something outside the spec, route to `inbox/` instead of guessing.
 - Repo-specific constraints are not restated here. The project's `CLAUDE.md`
   auto-loads every session and carries them. Two copies of one rule are free to
@@ -95,3 +99,16 @@ to help; it spends the reader's trust in the claims around it that are true.
 
 Housekeeping you did on your own machine is not evidence. Either produce the
 list and check it in the body, or say plainly that it was unaudited.
+
+## Never put a secret on a command line
+
+An agent leaked a token on 2026-09-07 by writing `VAR='<token>' ssh host …`.
+Inline assignments go into the remote host's **process table**, where any other
+user on that box can read them with `ps`, and they get echoed back into
+transcripts. The token had to be rotated.
+
+- **Pipe secrets to stdin**, never as argv: `printf '%s' "$TOKEN" | ssh host 'read -r T; …'`
+- Or set them in the remote environment out of band, and reference the NAME.
+- A URL with credentials in it is the same mistake wearing different clothes:
+  `https://user:token@host/…` is argv too.
+- Filter output, but do not rely on filtering — the process table is not output.

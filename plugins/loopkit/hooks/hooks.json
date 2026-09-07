@@ -1,5 +1,5 @@
 {
-  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, protect_governance, protect_tests, require_recall (gate), and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission \u2014 exit 0 with no output is the normal prompt. offload_rewrite returns updatedInput for a Bash command matching .loopkit/offload-patterns.txt; it never decides a permission and is passive without that file.",
+  "$comment": "LoopKit hook wiring. Every command hook is fail-open except the ones meant to block: require_contracts (gate), block_dangerous, require_commit_lock, protect_governance, protect_tests, require_recall (gate), and the Stop gate. Exit 2 blocks; anything else allows. count_approvals never decides a permission \u2014 exit 0 with no output is the normal prompt. offload_rewrite returns updatedInput for a Bash command matching .loopkit/offload-patterns.txt; it never decides a permission and is passive without that file.",
   "hooks": {
     "SessionStart": [
       {
@@ -46,6 +46,15 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/block_dangerous.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/require_commit_lock.py\""
           }
         ]
       },
