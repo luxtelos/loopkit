@@ -263,6 +263,17 @@ out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
 grep -q 'no row in TOOLS.md' <<<"$out" && ok "check-tools: server without a row" || fail "tools row: $out"
 grep -q 'relative path' <<<"$out" && ok "check-tools: relative command" || fail "tools relative: $out"
 grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'ghp_0123' <<<"$out" && ok "check-tools: secret flagged by key, value never printed" || fail "tools secret: $out"
+printf '{"mcpServers":{"ghost":{"command":"./bin/server","args":["--token","gho_SYNTHETIC0000000000000000000000000"]}}}' > "$F/.mcp.json"
+out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
+# `gho_` is the prefix `gh auth token` hands out, so it is the token an agent in
+# this repo is likeliest to be holding — and it was NOT in the scanner until a
+# real one was exposed in a process table on 2026-09-07 and had to be revoked.
+# Two assertions, not one: flagged by KEY, and the value never echoed. A scanner
+# that matches perfectly and then prints the match puts the secret in a log,
+# which is the same failure by a different route.
+grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'gho_SYNTHETIC' <<<"$out" \
+  && ok "check-tools: a gh-cli OAuth token is flagged by key, value never printed" \
+  || fail "tools gho_ secret: $out"
 expect_rc 1 "check-tools --strict fails" python3 "$P/scripts/check-tools.py" --root "$F" --strict
 mkdir -p "$F/.claude"; printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 .claude/hooks/block_dangerous.py"}]}]}}' > "$F/.claude/settings.json"
 out="$(python3 "$P/scripts/check-duplicate-hooks.py" --root "$F" --plugin "$P")"
@@ -952,6 +963,12 @@ qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
 printf '%s\n' "$qz" | grep '^  FAIL' || true
 [ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
   || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
+
+echo "== the secret scanner knows every shape it claims to know"
+ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
+printf '%s\n' "$ss" | grep '^  FAIL' || true
+[ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
+  || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
