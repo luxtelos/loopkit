@@ -52,3 +52,21 @@ explicit file list in small batches with a terse reporter, or start the broad
 run in the background writing to a log and print `tail -2` of that log every 60
 seconds until it ends. The same applies to `test-regressions.sh` and the stop
 gate.
+
+## Where to run the suite
+
+**Run it on the remote Linux host, not on this Mac.** `bash tools/remote-gate.sh
+<branch>` with `LOOPKIT_REMOTE` set.
+
+Two reasons, both measured rather than assumed:
+
+- **The Mac lies.** Three checks fail there because `/var` is a symlink, and a
+  wall-clock timing check flakes under load — observed at 215, 307, 318 and
+  429 ms on unchanged code. Every run then needs someone to say "ignore those
+  four", and a suite whose output must be explained away is one whose real
+  failures get explained away too. On 2026-09-07 four failures appeared on the
+  Mac and all four were noise; the same commit was ALL PASS on Linux.
+- **The Mac has no room.** Measured that day: ~48 MB of 16 GB free, load average
+  49-91. The remote had 18 GB free and 8 idle cores.
+
+Use the Mac for one thing only: confirming the bash 3.2 path still works.
