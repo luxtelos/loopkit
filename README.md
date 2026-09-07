@@ -9,6 +9,20 @@ Extracted from a production repo where an agent loop shipped a payments epic,
 then stripped of everything that named that repo. What is left is the part
 that transfers.
 
+<!-- Committed rather than hot-linked, deliberately. Peerlist's live embed
+     endpoint sits behind a Cloudflare challenge and answers 403 to every
+     server-side fetch we tried, including one identifying as `github-camo` —
+     and GitHub fetches README images server-side, so the live badge would very
+     likely render broken. This SVG is self-contained (no external references,
+     raster embedded) and cannot fail. Trade-off: the upvote count is frozen at
+     export. Swap the `src` back to the embed URL once it serves to camo. -->
+<p>
+  <a href="https://peerlist.io/akulmat/project/loopkit-a-finishing-harness">
+    <img src="docs/assets/peerlist-launch-badge.svg"
+         alt="LoopKit: a finishing harness — live on Peerlist" height="72">
+  </a>
+</p>
+
 ## What it actually does
 
 | Problem in a long agent session                      | What LoopKit does about it                                                                                                                                  |
