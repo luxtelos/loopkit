@@ -66,6 +66,7 @@ base_env = {k: v for k, v in os.environ.items() if k != "LOOPKIT_COMMIT_UNLOCKED
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp) / "proj"
     (root / ".loopkit").mkdir(parents=True)
+    (root / ".loopkit" / "scopes.json").write_text("{}\n")   # init ran here
     env = dict(base_env, CLAUDE_PROJECT_DIR=str(root))
 
     print("MUST BLOCK (exit 2):")
@@ -98,6 +99,22 @@ with tempfile.TemporaryDirectory() as tmp:
     bare.mkdir()
     checks.append(("passive in a non-LoopKit repo",
                    rc(f"{GIT}{COMMIT} -m 'x'", dict(base_env, CLAUDE_PROJECT_DIR=str(bare))), 0))
+
+    # A `.loopkit/` directory ALONE is not a loop. Passive hooks (metrics,
+    # session snapshots) create it in any repo a LoopKit-equipped session
+    # touches; found in the wild on 2026-09-07, where the main checkout held
+    # nothing but a metrics.jsonl and this gate was ready to refuse every
+    # commit in it.
+    touched = Path(tmp) / "touched"
+    (touched / ".loopkit").mkdir(parents=True)
+    (touched / ".loopkit" / "metrics.jsonl").write_text("{}\n")
+    checks.append(("a hook-created .loopkit/ is not a loop",
+                   rc(f"{GIT}{COMMIT} -m 'x'", dict(base_env, CLAUDE_PROJECT_DIR=str(touched))), 0))
+    # ...but the queue is.
+    (touched / "state").mkdir()
+    (touched / "state" / "triage.md").write_text("| finding |\n")
+    checks.append(("state/triage.md marks a real loop",
+                   rc(f"{GIT}{COMMIT} -m 'x'", dict(base_env, CLAUDE_PROJECT_DIR=str(touched))), 2))
 
     for name, got, want in checks:
         ok = got == want

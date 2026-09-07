@@ -22,8 +22,9 @@ when the project is LoopKit-initialised. Everything else passes, including
 `git add`, which is harmless on its own once commits go through the pathspec.
 
 WHAT IT DELIBERATELY DOES NOT DO.
-  * It is passive in any directory with no `.loopkit/` — it must never lock up
-    a repo that never asked for LoopKit.
+  * It is passive in any directory with no LOOP in it — see
+    `is_loopkit_project`. A bare `.loopkit/` is not enough: passive hooks
+    create that directory in repos that never ran init.
   * It does not try to be unbypassable. `LOOPKIT_COMMIT_UNLOCKED=1` in the
     environment, or written inline at the front of the command, opens the door
     — and lands in the transcript where a human can see it, which is the point.
@@ -75,6 +76,23 @@ def project_root() -> Path:
     return Path.cwd()
 
 
+def is_loopkit_project(root: Path) -> bool:
+    """Is there actually a LOOP here, or just a `.loopkit/` directory?
+
+    `.loopkit/` alone is too loose a marker: passive hooks (metrics, session
+    snapshots) create it in any repo a LoopKit-equipped session happens to touch.
+    Caught by running this hook against the real checkout on 2026-09-07 — the
+    main ai-k3 tree had nothing but a `metrics.jsonl` in there and the gate was
+    ready to refuse every commit in it.
+
+    The marker has to be something `loopkit-init.sh` lays down and a passive
+    hook never would: the queue itself, or the scope config.
+    """
+    if not (root / ".loopkit").is_dir():
+        return False
+    return (root / "state" / "triage.md").exists() or (root / ".loopkit" / "scopes.json").exists()
+
+
 def _disabled(root: Path) -> bool:
     try:
         lines = (root / ".loopkit" / "block-disabled.txt").read_text(encoding="utf-8").splitlines()
@@ -88,8 +106,8 @@ def needs_lock(command: str, root: Path | None = None) -> bool:
     if not command:
         return False
     root = root or project_root()
-    if not (root / ".loopkit").is_dir():
-        return False  # not a LoopKit project: stay out of the way entirely
+    if not is_loopkit_project(root):
+        return False  # no loop here: stay out of the way entirely
     if _disabled(root):
         return False
     if os.environ.get(DOOR):

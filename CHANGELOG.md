@@ -20,7 +20,10 @@ The guard rail that was only a sentence.
   `git commit` in a LoopKit project, naming the wrapper. Passive where there is
   no `.loopkit/`; openable with `LOOPKIT_COMMIT_UNLOCKED=1` (inline or in the
   environment) or by naming `commit-without-lock` in
-  `.loopkit/block-disabled.txt`.
+  `.loopkit/block-disabled.txt`. "LoopKit project" means `.loopkit/` PLUS
+  something init lays down (`state/triage.md` or `.loopkit/scopes.json`) — a
+  bare `.loopkit/` is created by passive hooks in repos that never ran init,
+  and the first cut of this gate was ready to refuse every commit in one.
 - `scripts/test_driver_lock.py` and `hooks/test_require_commit_lock.py`, wired
   into `tests/selftest.sh`. The first carries a CONTROL that reproduces the
   original index sweep before measuring the fixed case, plus mutual exclusion
