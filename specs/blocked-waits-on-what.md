@@ -123,8 +123,9 @@ trimming or casefolding of its own. That is also why a leading or trailing space
 is illegal rather than merely untidy: no normalised `source` begins or ends with
 one, so such an argument could never match any row. Admitting it would buy a
 condition that looks well-formed and is permanently unsatisfiable, which is the
-quietest failure on offer. A `source` containing a literal `|` is unnameable for
-the same reason and is a known limit, recorded below.
+quietest failure on offer. A `source` containing a literal `|` is unnameable
+too, for the different reason given below — the write-side escape changes the
+bytes — and that is a known limit rather than an oversight.
 
 ### What the syntax may not contain, and why
 
@@ -146,7 +147,7 @@ rewrite:
   pin against a hand-written queue fails.
 - **`write_table` writes each row as one line and `parse_table` reads it back
   through `str.splitlines()`.** Ten characters break a line: `\n \v \f \r` and
-  `\x1c \x1d \x1e \x85    `. A cell containing any of them is written
+  `\x1c \x1d \x1e \x85 \u2028 \u2029`. A cell containing any of them is written
   as one line and read back as two, and both halves fail the cell-count check at
   `plugins/loopkit/loopkit_core/triage_state.py:121`. **The row is not
   rewritten; it is deleted, silently, at exit 0.** Neither of the first two
@@ -164,7 +165,7 @@ LEGAL    True      True   'waits:row-done:row-A'                            plai
 LEGAL    True      True   'waits:row-done:docs/research/runtime-plan.md §M3' a real source cell, non-ASCII
 LEGAL    True      True   'waits:row-done:a b'                              one interior space
 LEGAL    True      True   'waits:row-done:a b c d'                          several single spaces
-LEGAL    True      True   'waits:row-done:a​b'                         ZWSP - not isspace(), not split
+LEGAL    True      True   'waits:row-done:a\u200bb'                         ZWSP - not isspace(), not split
 illegal  False     False  'waits:row-done:a  b'                             DOUBLE space
 illegal  False     True   'waits:row-done: '                                argument is one space
 illegal  False     True   'waits:row-done:  '                               argument is two spaces
@@ -172,7 +173,7 @@ illegal  False     True   'waits:row-done:trailing '                        trai
 illegal  True      True   'waits:row-done: leading'                         leading space
 illegal  False     False  'waits:row-done:tab\there'                        TAB
 illegal  False     False  'waits:row-done:nbsp\xa0here'                     NBSP
-illegal  False     False  'waits:row-done:em here'                     EM SPACE
+illegal  False     False  'waits:row-done:em\u2003here'                     EM SPACE
 illegal  False     False  'waits:row-done:vt\x0bhere'                       VERTICAL TAB     -> ROW DELETED
 illegal  False     False  'waits:row-done:fs\x1chere'                       FILE SEPARATOR   -> ROW DELETED
 illegal  False     False  'waits:row-done:cr\rhere'                         CARRIAGE RETURN  -> ROW DELETED
