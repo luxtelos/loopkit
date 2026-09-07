@@ -33,7 +33,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance; do
+for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
@@ -41,6 +41,9 @@ echo "== script tests"
 expect_rc 0 "test_loop_next_pick" python3 "$P/scripts/test_loop_next_pick.py"
 expect_rc 0 "test_loop_scan" python3 "$P/scripts/test_loop_scan.py"
 expect_rc 0 "test_inbox_to_triage" python3 "$P/scripts/test_inbox_to_triage.py"
+# Carries its own CONTROL: it reproduces the 2026-09-07 index-sweep first, so
+# the locked case is measured against a race that demonstrably still bites.
+expect_rc 0 "test_driver_lock" python3 "$P/scripts/test_driver_lock.py"
 
 echo "== model-checker driver selftest (stub engines)"
 expect_rc 0 "driver selftest" node "$P/skills/run-state-model/driver.mjs" selftest
@@ -53,6 +56,7 @@ expect_rc 0 "init (first run)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 expect_rc 0 "init (second run, idempotent)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 n="$(grep -c 'loopkit:begin' "$T/CLAUDE.md")"; [ "$n" = 1 ] && ok "CLAUDE.md block appended exactly once" || fail "CLAUDE.md block count=$n"
 grep -qxF '.loopkit/config.env' "$T/.gitignore" && ok ".gitignore ignores config.env" || fail ".gitignore"
+grep -qxF '.loopkit/driver.lock' "$T/.gitignore" && ok ".gitignore ignores the driver lock" || fail "driver.lock not ignored"
 
 # An ignore line init added once is init's LAST word on it. A project that
 # deletes the line and keeps the marker has decided; the old check ("is the
@@ -109,6 +113,38 @@ python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status
 # exits on the first match and the script takes SIGPIPE on its next echo.
 out="$(bash "$P/scripts/loop-next.sh")"
 grep -q '^STAGE: spec-draft' <<<"$out" && ok "transition recorded, stage moves" || fail "update did not move the stage"
+
+# Concurrent writers must not lose a row. Before the driver lock, every mutating
+# command here was parse-then-write with nothing serialising it, and COMMANDS.md's
+# "the state file is the lock" enforced nothing. Ten writers, ten rows, or the
+# lock is not doing its job.
+echo "== state/triage.md survives concurrent writers"
+C="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-conc.XXXXXX")"; mkdir -p "$C/state" "$C/.loopkit"
+python3 "$TS" ensure-schema --state "$C/state/triage.md" >/dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  python3 "$TS" upsert --state "$C/state/triage.md" --finding "row $i" \
+    --source "src $i" --priority low --status new >/dev/null &
+done
+wait
+n="$(python3 "$TS" list --state "$C/state/triage.md" | grep -c 'src ')"
+[ "$n" = 10 ] && ok "10 concurrent upserts kept all 10 rows" || fail "lost rows under concurrency: $n/10"
+
+# The inbox bridge is the OTHER writer of this file, and it does not go through
+# triage_state's CLI — it calls upsert_row directly, in a loop, after its own
+# parse. So it has to take the same lock itself or an --apply run racing a
+# direct upsert drops one of them on the next write_table.
+mkdir -p "$C/inbox"
+printf '# needs-human\n\n## Decide the retry budget (2026-01-01)\n\nText.\n' > "$C/inbox/needs-human.md"
+python3 "$P/scripts/inbox_to_triage.py" --inbox "$C/inbox/needs-human.md" --state "$C/state/triage.md" --apply >/dev/null &
+python3 "$TS" upsert --state "$C/state/triage.md" --finding "racer" --source "src 11" --priority low --status new >/dev/null &
+wait
+rows="$(python3 "$TS" list --state "$C/state/triage.md")"
+case "$rows" in *"src 11"*) has_upsert=1 ;; *) has_upsert=0 ;; esac
+case "$rows" in *"retry budget"*) has_bridge=1 ;; *) has_bridge=0 ;; esac
+[ "$has_upsert$has_bridge" = "11" ] \
+  && ok "a bridge --apply racing an upsert loses neither row" \
+  || fail "bridge/upsert race lost a row (upsert=$has_upsert bridge=$has_bridge)"
+find "$C" -delete
 
 # inbox bridge
 printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
@@ -806,6 +842,15 @@ echo "== M2 core: the moved modules work through both doors"
 csp_out="$(python3 "$REPO/tests/pins/core-shim-parity.py" 2>&1)"; csp_rc=$?
 [ "$csp_rc" = 0 ] && ok "every moved module imports as loopkit_core.<name> and at its old script path" \
   || fail "core/shim parity: $(printf '%s' "$csp_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+
+# The queue half of the driver lock, pinned at the location M2 moved it to.
+# `write_lock` fails open, so a helper it cannot find degrades to a no-op that
+# still returns a usable context manager — the guard would stop guarding and
+# every caller would still report success. This is the check that notices.
+echo "== driver lock: the queue's read-modify-write actually holds it"
+qlh_out="$(python3 "$REPO/tests/pins/queue-lock-held.py" 2>&1)"; qlh_rc=$?
+[ "$qlh_rc" = 0 ] && ok "triage_state.write_lock is a real flock at loopkit_core's path, excludes a foreign writer, re-enters for a descendant" \
+  || fail "queue lock held: $(printf '%s' "$qlh_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
 
 echo "== M2 core: decide() is pure"
 dp_out="$(python3 "$REPO/tests/pins/decide-pure.py" 2>&1)"; dp_rc=$?

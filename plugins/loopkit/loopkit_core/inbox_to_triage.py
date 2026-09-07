@@ -34,6 +34,7 @@ finding into a task is the lookup; deciding what the task IS remains work.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import os
 import re
@@ -127,27 +128,32 @@ def bridge(
         # tick and must never be the reason a tick fails.
         return []
 
-    ts.ensure_schema(Path(state))
-    existing = {r["source"] for r in ts.parse_table(Path(state)).rows}
+    # ensure_schema + parse + N upserts is ONE read-modify-write of the queue.
+    # Splitting it across the driver lock would let a concurrent writer land
+    # between the parse and an upsert, and the row it wrote would be dropped by
+    # the next write_table. A dry run only reads, so it takes no lock.
+    with (ts.write_lock(Path(state)) if apply else contextlib.nullcontext()):
+        ts.ensure_schema(Path(state))
+        existing = {r["source"] for r in ts.parse_table(Path(state)).rows}
 
-    created: list[tuple[str, str]] = []
-    for heading in HEADING.findall(text):
-        if is_closed(heading):
-            continue
-        source = source_for(heading)
-        if source in existing:
-            continue
-        created.append((heading, source))
-        existing.add(source)
-        if apply:
-            ts.upsert_row(
-                Path(state),
-                finding=heading,
-                source=source,
-                priority=priority,
-                spec="",
-                status="new",
-            )
+        created: list[tuple[str, str]] = []
+        for heading in HEADING.findall(text):
+            if is_closed(heading):
+                continue
+            source = source_for(heading)
+            if source in existing:
+                continue
+            created.append((heading, source))
+            existing.add(source)
+            if apply:
+                ts.upsert_row(
+                    Path(state),
+                    finding=heading,
+                    source=source,
+                    priority=priority,
+                    spec="",
+                    status="new",
+                )
     return created
 
 
