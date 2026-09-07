@@ -57,7 +57,7 @@ and run those serially.
 | `new`        | `loopkit:loop-assess` Mode A — baseline, classify, route      | `spec-draft` if `code`; otherwise `inbox`                      |
 | `spec-draft` | `loopkit:spec-writer` — EARS criteria, carrying the control case | `spec-ready`                                                |
 | `spec-ready` | implementer agent, in its own worktree and branch             | `fixing`                                                       |
-| `fixing`     | reviewer agent + the stop gate                                | `pr-open` on PASS; stay `fixing` on FAIL, citing the criterion |
+| `fixing`     | reviewer agent + the stop gate                                | `pr-open` ONLY on a recorded PASS; stay `fixing` on FAIL, citing the criterion |
 | `pr-open`    | handled by the poll in step 2                                 | `done` on merge                                                |
 | `blocked`    | nothing — it waits on a human ruling in `inbox/needs-human.md` | whatever the ruling says                                      |
 | `discover`   | `loopkit:morning-triage`                                      | rows appear as `new`                                           |
@@ -94,6 +94,33 @@ So: pick the stage by lookup, advance it for **every** row at it, record each
 transition keyed on `--source`, and stop when the stage is done — not when some
 quota is met. What must stay bounded is the _stage_, so each transition is
 attributable and the loop is resumable after a crash or a compaction.
+
+## Finishing means the owner only ever sees what is ready
+
+**A pull request the loop has not had reviewed is not finished work, and handing
+it over is not a status report — it is passing the unfinished thing upward.**
+
+On 2026-09-07 a tick told the owner "READY TO MERGE: none — all four green but
+unreviewed" and, in the same message, handed them all four. Both cannot be true.
+Worse, the blocker `loop-scan.py` printed was `needs a reviewer`, and the loop
+has reviewer agents. It reported the absence of a step it could have taken.
+
+So:
+
+- A row reaches `pr-open` only when a reviewer has returned a verdict and that
+  verdict is PASS. "I opened a pull request" is not the transition; "a different
+  agent judged it and it held" is.
+- `needs a reviewer` is never a thing to report. It is a thing to do. When the
+  scan prints it, dispatch the reviewer — that IS the tick.
+- Report to the owner only what they can act on: what is READY TO MERGE, what
+  needs a RULING, and what needs a credential or an action only they hold.
+  Everything else is the loop's own work in progress and belongs in the queue,
+  not in their inbox.
+- A state-only pull request is not exempt. A queue that misdescribes reality is
+  worse than no queue, because the loop reads it as memory and acts on it.
+
+The test for any hand-off: could the owner act on this line right now, without
+asking a question? If not, it was not ready to hand over.
 
 ## Why `new` is where the value is
 

@@ -692,14 +692,29 @@ out="$(rw 'seq 1 5')"
 after="$(grep -c offload_rewrite "$O/.loopkit/metrics.jsonl" || true)"
 [ "$after" = $((before + 1)) ] && ok "one offload_rewrite event per rewrite in metrics.jsonl ($before -> $after)" || fail "metrics: $before -> $after"
 out="$(rw 'git status')"; [ -z "$out" ] && ok "control: git status still passes through with patterns loaded" || fail "control rewrote git status: $out"
-python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/offload-patterns.txt"
-timing="$(CLAUDE_PROJECT_DIR="$O" python3 -c '
-import json, subprocess, sys, time
-payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "seq 1 3"}})
-t = time.time(); r = subprocess.run([sys.executable, sys.argv[1]], input=payload, capture_output=True, text=True)
-print(int((time.time() - t) * 1000), "hit" if r.stdout else "miss")' "$P/hooks/offload_rewrite.py")"
-set -- $timing
-[ "$1" -lt 200 ] && [ "$2" = hit ] && ok "50-line pattern file: ${1} ms, last line matched" || fail "timing: $timing"
+printf '^seq\\b\n' > "$O/.loopkit/one-pattern.txt"
+python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/many-patterns.txt"
+# A RELATIVE budget, not a wall clock. The absolute 200 ms version failed twice
+# on 2026-09-07 (215 ms, then 205 ms) on a busy machine with nothing regressed,
+# and a gate that fails for load teaches people to re-run until green — which is
+# indistinguishable from re-running until a real failure hides. What the pin
+# actually wants is that the matcher is linear in the pattern count rather than
+# pathological, and a ratio measured in the same run on the same machine says
+# that without depending on how busy the machine is.
+timing="$(CLAUDE_PROJECT_DIR="$O" python3 "$REPO/tests/pins/offload-cost-ratio.py" \
+  "$P/hooks/offload_rewrite.py" "$O/.loopkit/one-pattern.txt" "$O/.loopkit/many-patterns.txt" 2>&1)"
+# A measurement that produced nothing must SAY so. `set -- $timing` on an empty
+# string used to abort the whole suite with "unbound variable", which reads as a
+# suite bug rather than as the measurement failing.
+if [ -z "$timing" ]; then
+  fail "timing: the cost-ratio measurement produced no output"
+else
+  set -- $timing
+  ratio_ok="$(python3 -c "print(1 if float('${1:-99}') < 3.0 else 0)" 2>/dev/null || echo 0)"
+  [ "$ratio_ok" = 1 ] && [ "${3:-miss}" = hit ] \
+    && ok "50 patterns cost ${1}x one pattern (${2} ms), last line matched" \
+    || fail "timing: 50 patterns cost ${1:-?}x one pattern — want under 3x (raw ${2:-?} ms, ${3:-?})"
+fi
 bd="$(grep -n 'block_dangerous.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 orw="$(grep -n 'offload_rewrite.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 [ -n "$orw" ] && [ "$orw" -gt "$bd" ] && ok "hooks.json wires offload_rewrite.py after block_dangerous.py" || fail "hooks.json order: block=$bd offload=$orw"
@@ -845,6 +860,34 @@ red_n="$(printf '%s' "$red_out" | grep -c 'RED, as required' || true)"
 notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
+
+
+# The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
+# all four unreviewed" and handed the owner all four in the same breath. The
+# rule that fixes it is only worth having if it is present where an agent reads
+# it, so assert both surfaces.
+echo "== finishing: the loop reviews before it hands over"
+grep -q 'Finish before handing over' "$P/hooks/loop_doctrine.py" \
+  && ok "the always-on doctrine carries the finishing rule" \
+  || fail "loop_doctrine.py lost the finishing rule"
+grep -q 'Finishing means the owner only ever sees what is ready' "$P/skills/loop-tick/SKILL.md" \
+  && ok "loop-tick documents what may be handed over" \
+  || fail "loop-tick lost the hand-off section"
+grep -q 'pr-open` ONLY on a recorded PASS' "$P/skills/loop-tick/SKILL.md" \
+  && ok "pr-open requires a recorded PASS, not merely an opened PR" \
+  || fail "the fixing->pr-open transition no longer requires a verdict"
+doc_out="$(printf '{"prompt":"/loop work the backlog"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "a tick prompt actually receives the finishing rule" ;;
+  *) fail "the doctrine hook does not emit the finishing rule on a tick prompt" ;;
+esac
+
+
+echo "== the queue never parses as empty when it is not"
+qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
+printf '%s\n' "$qz" | grep '^  FAIL' || true
+[ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
+  || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"

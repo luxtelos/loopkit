@@ -99,6 +99,13 @@ Three rules, and they are the whole of it:
    ScheduleWakeup; IDLE means run morning-triage now. Ask "what am I waiting
    on?" — if the answer is "nothing", a timer is a delay, not a discipline.
 
+5. Finish before handing over. A PR the loop has not had REVIEWED is not
+   finished, and `needs a reviewer` is a thing to DO, not to report — the loop
+   has reviewer agents. A row reaches pr-open only on a recorded PASS from a
+   different agent. Tell the owner only what they can act on: READY TO MERGE, a
+   ruling, or a credential only they hold (owner, 2026-09-07: "the finishing
+   harness means it takes complete end to end ownership").
+
 The skill you invoked carries everything else, and is the source of truth."""
 
 

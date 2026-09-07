@@ -100,6 +100,26 @@ def parse_table(path: Path) -> TriageTable:
             break
 
     if header_index is None:
+        # A file with no recognisable header is legitimately empty ONLY if it
+        # also holds no row-shaped lines. Otherwise this is the 2026-08-31 bug
+        # wearing a different hat: padding was fixed, an unknown or renamed
+        # column was not, and both land here returning rows=[] with exit 0.
+        # A loop whose memory reads as empty stops working and says nothing, so
+        # this is the one place in the parser that raises rather than degrades.
+        row_shaped = [
+            ln for ln in lines
+            if ln.strip().startswith("|")
+            and not set(ln.strip().strip("|").replace("|", "")) <= set("-: ")
+        ]
+        if len(row_shaped) > 1:  # a header line plus at least one data line
+            raise ValueError(
+                f"{path}: no recognisable header, but the file holds "
+                f"{len(row_shaped) - 1} row-shaped line(s). An unknown or renamed "
+                f"column is the usual cause. Accepted headers: "
+                f"{[' | '.join(h) for h in accepted_headers]}. Refusing to report "
+                f"an empty queue — a loop that reads its own memory as empty "
+                f"reports itself idle and nobody notices."
+            )
         prefix = path.read_text(encoding="utf-8")
         if prefix and not prefix.endswith("\n"):
             prefix += "\n"
