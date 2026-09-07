@@ -6,6 +6,28 @@ The guard rail that was only a sentence.
 
 ### Added
 
+- **A secret guard on Bash, not only on `.mcp.json`.** `hooks/block_dangerous.py`
+  now refuses a command whose TEXT carries a secret-looking literal. 0.2.2 taught
+  `check-tools.py` the GitHub token family, and that was right as far as it went,
+  but `check-tools.py` reads `.mcp.json` files and nothing else — while the token
+  that was actually burned on 2026-09-07 never touched one. It was passed inline
+  on an SSH command line, into the remote host's process table where any user can
+  read it with `ps`, and into a transcript. With 0.2.2 merged that command still
+  ran unblocked. It is refused now.
+  The refusal reports the SHAPE (`github`, `doppler`) and never the value, and it
+  says what to do instead — stdin, `--env-file`, a credential helper — because a
+  guard that only says no gets worked around and the workaround is usually worse.
+  Switchable off by naming `secret-on-command-line` in
+  `.loopkit/block-disabled.txt`, like any other pattern.
+- **`loopkit_core/secrets.py`** — the token-shape table, written once and
+  imported by both scanners. Two copies of one regex are two regexes by the end
+  of the month; `tests/pins/secret-shapes.py` asserts the two callers hold the
+  same regex OBJECT, not merely the same behaviour.
+- **Fourteen shapes** the table did not know: Doppler (`dp.pt.`) and Render
+  (`rnd_`) — this repo's own toolchain, so not hypothetical — plus GitLab,
+  Google, npm, HuggingFace, legacy OpenAI, Stripe restricted, Slack app-level and
+  session, SendGrid, Twilio, an AWS secret access key, and a PEM `BEGIN … PRIVATE
+  KEY` block.
 - **A real driver lock.** `scripts/driver_lock.py` holds an `flock` on
   `<worktree>/.loopkit/driver.lock` — the worktree, because the thing actually
   shared is the git INDEX, one file per worktree and process-global within it.
@@ -30,6 +52,26 @@ The guard rail that was only a sentence.
   under six concurrent holders, release after a `SIGKILL`, re-entrancy, and the
   `EX_TEMPFAIL` timeout. The selftest also asserts ten concurrent
   `triage_state.py upsert` calls keep all ten rows.
+
+### Fixed
+
+- **The refusal message printed the command back.** `block_dangerous.py` ended
+  every block with `dangerous command pattern detected: <the whole command>`. The
+  commerce profile's `no-live-keys` pattern fires on `sk_live_` literals, so
+  catching one echoed it straight into the transcript — the guard moved the
+  secret rather than stopping it. The secret branch runs first and prints no
+  command at all; the pattern branch now redacts, as a backstop for a shape the
+  table does not know yet. A pattern that also matched is still named, so a
+  project's named ruling does not silently stop appearing.
+- **The leading `\b` made a glued token invisible.** `\b` between two word
+  characters does not exist, so `my_gho_<body>` matched nothing. A token glued to
+  a preceding word character is a leak, not a false positive; the anchor is gone.
+- **Encodings that occur in ordinary config are now decoded before scanning**:
+  base64, percent-encoding, `\uXXXX` inside a JSON string, and a shell line
+  continuation (which is not an evasion — it is what the shell will actually
+  run). Reversed text is deliberately NOT decoded, and the module says so: it is
+  not a shape anybody produces by accident, and it would widen the
+  false-positive surface for no real case.
 
 ### Changed
 

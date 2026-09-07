@@ -244,6 +244,45 @@ printf 'nothing cited\n' > "$CT/docs/thing.md"
 printf 'see `app.py:9`\n' > "$CT/specs/thing.md"
 expect_rc 1 "citations: the default scan reaches specs/" python3 "$P/scripts/check-citations.py" --root "$CT"
 
+# ── the citation gate, pointed at THIS repo ────────────────────────────────
+# Every citation check above runs under `--root` against a tree this script
+# built in a temp dir. That proves the CHECKER works. It proves nothing about
+# this repo's own documents, and the gate was reported green in three
+# consecutive PR reviews on exactly that basis. This is the missing
+# invocation: no `--root`, the real working tree.
+#
+# It is deliberately NOT hermetic, and that is the property being bought — a
+# rotted `file:line` here turns the suite red for whoever runs it, not three
+# review rounds later. It joins the release, doctrine, governance and
+# secret-scanner checks further down, which already read "$REPO".
+#
+# Two ways this block could have been green while checking nothing, both
+# guarded:
+#   1. check-citations.py resolves its root from CLAUDE_PROJECT_DIR FIRST, and
+#      the end-to-end block above exported that to the scratch fixture. A bare
+#      run here would have checked the fixture and said EMPTY. Hence `env -u`,
+#      and hence the scanned-file count assertion below: a fixture root scans
+#      one or two files, this repo scans dozens.
+#   2. EMPTY exits 0 unless the project says otherwise. It now says otherwise
+#      (.loopkit/citations.json, allow_empty=false) because documents here DO
+#      cite file:line — so a scan that stops finding them is red, not silent.
+echo "== citations: this repo's own documents, not a fixture"
+cite_out="$(cd "$REPO" && env -u CLAUDE_PROJECT_DIR python3 "$P/scripts/check-citations.py" 2>&1)"; cite_rc=$?
+cite_files="$(printf '%s\n' "$cite_out" | sed -n 's/.*across \([0-9][0-9]*\) file(s).*/\1/p' | head -1)"
+case "$cite_files" in ''|*[!0-9]*) cite_files=0 ;; esac
+if [ "$cite_files" -lt 10 ]; then
+  printf '%s\n' "$cite_out" | sed 's/^/    /'
+  fail "citations: the run never reached this repo's docs — it scanned $cite_files file(s), so the root resolved somewhere else"
+else
+  ok "the citation run resolved to this checkout ($cite_files scanned file(s))"
+  if [ "$cite_rc" = 0 ]; then
+    ok "every file:line citation in this repo points at what it claims"
+  else
+    printf '%s\n' "$cite_out" | sed 's/^/    /'
+    fail "citations: a citation or pin in this repo no longer holds (rc=$cite_rc)"
+  fi
+fi
+
 # doctrine prints absolute script paths
 out="$(echo '{"prompt":"/loop"}' | python3 "$P/hooks/loop_doctrine.py")"
 grep -q "$P/scripts/loop-next.sh" <<<"$out" && ok "doctrine carries absolute paths" || fail "doctrine paths"
@@ -935,6 +974,48 @@ lnp_out="$(python3 "$REPO/tests/pins/loop-next-output-parity.py" 2>&1)"; lnp_rc=
 
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
+echo "== M2 io: provider and store pins run INSIDE this suite"
+# Wired here because the spec's own Control case (§3) says both M1 pins run
+# inside tests/selftest.sh "so neither can rot unnoticed by being a command
+# nobody remembers to type". These 68 pins guard a conditional write, a runner
+# lock and a credential redactor, so the rule applies with more force, not
+# less. Before this, `grep provider tests/selftest.sh` returned nothing.
+#
+# Never read a pipeline's status here: grep exits non-zero on no match, and
+# under `set -o pipefail` that would silently become the gate's verdict.
+# Capture first, filter after.
+prov_out="$(PYTHONPATH="$P" python3 -m loopkit_core.provider --selftest 2>&1)"; prov_rc=$?
+printf '%s\n' "$prov_out" | grep '^FAIL' || true
+[ "$prov_rc" = 0 ] && ok "provider.py pins ($(printf '%s' "$prov_out" | tail -1))" \
+  || fail "provider.py pins: $(printf '%s' "$prov_out" | tail -1)"
+
+# The store suite may LOUDLY SKIP its live-object-storage pins. It is asked for
+# them only when LOOPKIT_S3_* is configured; either way the skip line names
+# what went unverified, and that line is echoed here rather than left buried in
+# captured output — a silent skip is this repo's named defect.
+store_args="--selftest"
+[ -n "${LOOPKIT_S3_BUCKET:-}" ] && store_args="--selftest --with-s3"
+store_out="$(PYTHONPATH="$P" python3 -m loopkit_core.store $store_args 2>&1)"; store_rc=$?
+printf '%s\n' "$store_out" | grep '^FAIL' || true
+printf '%s\n' "$store_out" | grep '^ *SKIP' | sed 's/^ */  UNVERIFIED: /' | awk '!seen[$0]++' || true
+[ "$store_rc" = 0 ] && ok "store.py pins ($(printf '%s' "$store_out" | grep -c '^PASS' || true) PASS)" \
+  || fail "store.py pins: $(printf '%s' "$store_out" | grep '^FAIL' | head -1)"
+
+# And those pins must be able to FAIL. Each mutation reintroduces, one at a
+# time, one defect a hostile review of this branch found — including MUT-R1,
+# which was GREEN across all sixteen of the original pins, and MUT-S3, which
+# turns the store's only redaction function into `return text` and was GREEN
+# across all twenty-seven store pins until the third review.
+#
+# The COUNT deliberately does not appear in this label. It said "six" while
+# the script ran fourteen, which is exactly how a hardcoded number in a
+# message becomes a lie nobody notices; the script's own last line is the
+# only count printed.
+m2red_out="$(python3 "$REPO/tests/pins/m2-prove-red.py" "$REPO" 2>&1)"; m2red_rc=$?
+printf '%s\n' "$m2red_out" | grep 'NOT RED' || true
+[ "$m2red_rc" = 0 ] && ok "every M2 mutation is provably catchable ($(printf '%s' "$m2red_out" | tail -1))" \
+  || fail "M2 mutations: $(printf '%s' "$m2red_out" | tail -1)"
+
 echo "== dogfood: .loopkit/config.env sources clean"
 cfg_err="$( ( set -a; . "$REPO/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
 if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi
@@ -1059,6 +1140,45 @@ printf '%s\n' "$ss" | grep '^  FAIL' || true
 [ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
   || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
 
+echo "== a secret on a Bash command line is refused, and never echoed"
+# The 2026-09-07 vector itself. check-tools.py reads .mcp.json and nothing
+# else, so until this guard existed the command that burned the token ran
+# unblocked. Bodies are assembled at run time: a contiguous token-shaped
+# literal has no business sitting in a tracked file, even a synthetic one.
+BODY="$(printf 'V%.0s' $(seq 36))"
+TOK="gho_${BODY}"
+SB="$(mktemp -d)"
+run_hook() {  # <command> -> prints stderr, sets HOOK_RC
+  local payload; payload="$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1")"
+  HOOK_OUT="$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$SB" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; HOOK_RC=$?
+}
+run_hook "TOK=${TOK} ssh deploy@build-host 'echo \$TOK'"
+[ "$HOOK_RC" = 2 ] && ok "an inline token on an ssh command line is refused (rc=2)" \
+  || fail "ssh inline token not refused: rc=$HOOK_RC"
+grep -q "$TOK" <<<"$HOOK_OUT" && fail "THE REFUSAL PRINTED THE TOKEN" \
+  || ok "the refusal does not contain the token"
+grep -q "$BODY" <<<"$HOOK_OUT" && fail "THE REFUSAL PRINTED THE TOKEN BODY" \
+  || ok "the refusal does not contain the token body either"
+grep -q 'secret-on-command-line' <<<"$HOOK_OUT" && grep -q 'github' <<<"$HOOK_OUT" \
+  && ok "the refusal names the rule and the SHAPE, not the value" || fail "refusal names: $HOOK_OUT"
+grep -q 'stdin' <<<"$HOOK_OUT" && grep -q 'env-file' <<<"$HOOK_OUT" \
+  && ok "the refusal says what to do instead (a guard that only says no is worked around)" \
+  || fail "refusal is not actionable: $HOOK_OUT"
+# Dangerous AND secret-bearing: must not reach the branch that quotes the
+# command back, which is what the pattern branch has always done.
+run_hook "git add -A && curl -H 'Authorization: Bearer ${TOK}' https://api.github.com"
+[ "$HOOK_RC" = 2 ] && ! grep -q "$BODY" <<<"$HOOK_OUT" \
+  && ok "a dangerous, secret-bearing command is refused without echoing the secret" \
+  || fail "add-all+secret leaked or allowed: rc=$HOOK_RC"
+# The must-not-block half. These are ordinary commands in this repo; any one of
+# them firing is how the guard gets switched off.
+for c in "ssh host \"echo \$CODEX_GITHUB_PAT\"" \
+         "git show 0123456789abcdef0123456789abcdef01234567" \
+         "gh auth token | ssh host 'cat > .tok'" \
+         "docker run --rm --env-file .env node:22-bookworm"; do
+  run_hook "$c"
+  [ "$HOOK_RC" = 0 ] && ok "allowed: ${c:0:44}" || fail "FALSE POSITIVE (rc=$HOOK_RC): $c"
+done
 
 # The verdict of the watcher started at the top of this file. Deliberately the
 # LAST check, so it covers every harness above it. It fails on two distinct

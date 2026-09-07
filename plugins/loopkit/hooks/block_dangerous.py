@@ -24,10 +24,30 @@ Two lessons are baked into the patterns:
     `&&` into the next command. `git add x && git commit -F msg` was once
     blocked because `-F` on the wrong command looked like force-add.
 
+A THIRD lesson, added 2026-09-07 after a token was burned: this hook also
+refuses a command carrying a secret-looking literal in its TEXT. `gho_` on an
+SSH command line is how the leak happened — the value lands in the remote
+host's process table, readable by any user with `ps`, and in the transcript.
+`check-tools.py` scanned `.mcp.json` and nothing else, so nothing stood in that
+command's way. The shape table is shared with it (`loopkit_core.secrets`) so
+the two scanners cannot drift.
+
+That check gets its own branch rather than a row in BUILTIN_PATTERNS, and the
+reason is the message: the pattern branch prints the offending command back so
+a false positive can be reported, and printing a command that contains a secret
+is the same leak by another route. The secret branch reports the SHAPE only
+("github", "doppler") and never the value. It also runs FIRST, so a command
+that is both dangerous and secret-bearing can never reach the branch that
+quotes it — and that branch now redacts as well, belt and braces.
+
 Per-project extension, both optional, both under <project>/.loopkit/:
 
   block-patterns.txt   one extra regex per line (blank lines and # comments ok)
   block-disabled.txt   one built-in pattern NAME per line to switch off
+
+The secret check answers to `block-disabled.txt` under the name
+`secret-on-command-line`, like any other pattern — switching it off is a
+reviewed change to a tracked file, not a rephrasing of the command.
 """
 
 from __future__ import annotations
@@ -38,6 +58,15 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+# `plugins/loopkit`, the directory that CONTAINS the package.
+_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
+
+from loopkit_core import secrets as _secrets  # noqa: E402
+
+SECRET_RULE = "secret-on-command-line"
 
 CMD = r"(?:\A|[;&|]\s*|\n\s*)"  # "at a command position"
 
@@ -152,6 +181,19 @@ def is_dangerous(command: str, patterns: list[tuple[str, str]] | None = None) ->
     return None
 
 
+def secret_shapes(command: str, root: Path | None = None) -> list[str]:
+    """Shape names of any secret-looking literal in `command` — never values.
+
+    Honours `.loopkit/block-disabled.txt`, so a project that genuinely cannot
+    live with this check switches it off the same reviewed way it switches off
+    any other pattern.
+    """
+    root = root or project_root()
+    if SECRET_RULE in set(_read_list(root / ".loopkit" / "block-disabled.txt")):
+        return []
+    return _secrets.scan(command)
+
+
 def read_command_from_stdin() -> str:
     """Pull the shell command out of the PreToolUse JSON that Claude pipes in.
 
@@ -174,16 +216,51 @@ def read_command_from_stdin() -> str:
 
 
 if __name__ == "__main__":
+    cmd = ""
+    shapes: list[str] = []
+    hit = None
     try:
         cmd = read_command_from_stdin()
-        hit = is_dangerous(cmd) if cmd else None
+        if cmd:
+            # FIRST, always. A command carrying a secret must never reach the
+            # pattern branch below, which quotes the command back.
+            shapes = secret_shapes(cmd)
+            hit = is_dangerous(cmd)
     except Exception:
-        hit = None  # a crash is an allow; say nothing rather than lie
-    if hit:
+        shapes, hit = [], None  # a crash is an allow; say nothing rather than lie
+
+    def _ruling(name: str) -> str:
+        return "" if name.startswith("project-") or name in {n for n, _ in BUILTIN_PATTERNS} else f" ruling: {name}"
+
+    if shapes:
         # Exit 2 is the ONLY code Claude Code treats as "block this tool call".
-        ruling = "" if hit.startswith("project-") or hit in {n for n, _ in BUILTIN_PATTERNS} else f" ruling: {hit}"
+        # Note what is NOT in this message: the command, and the value. Only
+        # the shape names, and what to do instead.
+        #
+        # A pattern that ALSO matched is still named. Pre-empting it silently
+        # would make a project's named ruling — the commerce profile's
+        # `no-live-keys` fires on exactly the literals this branch catches —
+        # look unenforced, and `rulings-compile.py` sells that name to the
+        # reader as the thing standing guard. Both reasons, no command text.
+        also = f"\nAlso matches [{hit}]:{_ruling(hit)}" if hit else ""
         print(
-            f"BLOCKED [{hit}]:{ruling} dangerous command pattern detected: {cmd}\n"
+            f"BLOCKED [{SECRET_RULE}]: {_secrets.advice(shapes)}{also}\n"
+            "If this is genuinely not a secret, name "
+            f"`{SECRET_RULE}` in .loopkit/block-disabled.txt (a reviewed "
+            "change to a tracked file).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if hit:
+        ruling = _ruling(hit)
+        # `redact` and not `cmd`: this line printed the raw command until
+        # 2026-09-07, so a `sk_live_` literal caught by the commerce profile's
+        # `no-live-keys` pattern was echoed straight into the transcript. The
+        # secret branch above catches most of it; this is the backstop for a
+        # shape the table does not know yet.
+        print(
+            f"BLOCKED [{hit}]:{ruling} dangerous command pattern detected: {_secrets.redact(cmd)}\n"
             "If this is a false positive, name the pattern in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
             "the command around the guard.",
