@@ -1,0 +1,8 @@
+BACKLOG: new=0 spec-draft=0 spec-ready=0 fixing=0 pr-open=0
+STAGE: discover
+ACTION: no actionable rows. Run morning-triage to find work.
+NEXT: IDLE — no rows and nothing in flight. Run morning-triage now; a wakeup here would sleep on an empty queue.
+RULE: advance exactly ONE stage this tick — for EVERY row listed under TARGETS,
+      in parallel worktrees — then update each row via
+      python3 <SCRIPTS>/triage_state.py update --state <PROJECT>/state/triage.md --source <row source> --status <s>, and stop.
+      One stage per tick keeps transitions attributable; one ROW per tick was never the rule.
