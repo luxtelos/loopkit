@@ -739,14 +739,33 @@ out="$(rw 'seq 1 5')"
 after="$(grep -c offload_rewrite "$O/.loopkit/metrics.jsonl" || true)"
 [ "$after" = $((before + 1)) ] && ok "one offload_rewrite event per rewrite in metrics.jsonl ($before -> $after)" || fail "metrics: $before -> $after"
 out="$(rw 'git status')"; [ -z "$out" ] && ok "control: git status still passes through with patterns loaded" || fail "control rewrote git status: $out"
-python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/offload-patterns.txt"
-timing="$(CLAUDE_PROJECT_DIR="$O" python3 -c '
-import json, subprocess, sys, time
-payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "seq 1 3"}})
-t = time.time(); r = subprocess.run([sys.executable, sys.argv[1]], input=payload, capture_output=True, text=True)
-print(int((time.time() - t) * 1000), "hit" if r.stdout else "miss")' "$P/hooks/offload_rewrite.py")"
-set -- $timing
-[ "$1" -lt 200 ] && [ "$2" = hit ] && ok "50-line pattern file: ${1} ms, last line matched" || fail "timing: $timing"
+# SHAPE, not wall clock. Two earlier versions of this check were wrong in
+# opposite directions and for the same reason. A hard 200 ms budget failed for
+# LOAD (215 ms, 205 ms, and 307 ms for a reviewer) with nothing regressed. The
+# ratio that replaced it ran two subprocesses, so ~59 ms of interpreter startup
+# sat in both halves and diluted it: idle it ranged 0.45-1.81, under load it
+# reached 2.75 against its own 3.0 threshold, and it MISSED injected quadratic
+# work at +55 ms. Noise band and detection band overlapped.
+#
+# The pin now imports decide() and measures nanoseconds per pattern in-process
+# at 20 patterns and at 2000, so the startup constant is not in the measurement
+# at all. Linear holds it flat (0.75-1.43 including under 12-way load); O(n^2)
+# reads 96. NOT pinned, and deliberately: the end-to-end wall clock of one hook
+# invocation, which is mostly Python starting up. See the pin's header.
+#
+# The exit status is the verdict; the printed line is for the reader. Reading
+# only the text would re-invent the bug where a measurement that produced
+# nothing still parsed into a passing comparison.
+timing="$(CLAUDE_PROJECT_DIR="$O" python3 "$REPO/tests/pins/offload-cost-ratio.py" \
+  "$P/hooks/offload_rewrite.py" 2>&1)"; timing_rc=$?
+if [ -z "$timing" ]; then
+  fail "timing: the cost-ratio measurement produced no output"
+elif [ "$timing_rc" = 0 ]; then
+  set -- $timing
+  ok "per-pattern cost is flat from 20 to 2000 patterns (${1}x, ${2} ns/pattern), last of 50 patterns matched"
+else
+  fail "timing: $timing"
+fi
 bd="$(grep -n 'block_dangerous.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 orw="$(grep -n 'offload_rewrite.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 [ -n "$orw" ] && [ "$orw" -gt "$bd" ] && ok "hooks.json wires offload_rewrite.py after block_dangerous.py" || fail "hooks.json order: block=$bd offload=$orw"
@@ -902,6 +921,48 @@ notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
 
+
+# The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
+# all four unreviewed" and handed the owner all four in the same breath. The
+# rule that fixes it is only worth having if it is present where an agent reads
+# it, so assert both surfaces.
+echo "== finishing: the loop reviews before it hands over"
+grep -q 'Finish before handing over' "$P/hooks/loop_doctrine.py" \
+  && ok "the always-on doctrine carries the finishing rule" \
+  || fail "loop_doctrine.py lost the finishing rule"
+grep -q 'Finishing means the owner only ever sees what is ready' "$P/skills/loop-tick/SKILL.md" \
+  && ok "loop-tick documents what may be handed over" \
+  || fail "loop-tick lost the hand-off section"
+grep -q 'pr-open` ONLY on a recorded PASS' "$P/skills/loop-tick/SKILL.md" \
+  && ok "pr-open requires a recorded PASS, not merely an opened PR" \
+  || fail "the fixing->pr-open transition no longer requires a verdict"
+doc_out="$(printf '{"prompt":"/loop work the backlog"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "a tick prompt actually receives the finishing rule" ;;
+  *) fail "the doctrine hook does not emit the finishing rule on a tick prompt" ;;
+esac
+# The plugin's OWN canonical invocation. `^\s*/loop\b` cannot match
+# `/loopkit:tick` (`\b` fails between `p` and `k`), so the doctrine used to be
+# silent on the one prompt the skill list advertises.
+doc_out="$(printf '{"prompt":"/loopkit:tick"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "/loopkit:tick receives the doctrine too" ;;
+  *) fail "the doctrine hook is silent on /loopkit:tick" ;;
+esac
+# The three checks above assert the TEXT is present, which a future agent
+# satisfies by paraphrase. This one runs the recorder and asserts the
+# BEHAVIOUR, which is the difference between a rule and a wish.
+gv="$(python3 "$REPO/tests/pins/pr-open-needs-a-verdict.py" 2>&1)"; gv_rc=$?
+printf '%s\n' "$gv" | grep '^  FAIL' || true
+[ "$gv_rc" = 0 ] && ok "the recorder REFUSES pr-open without a verdict, and has a visible override" \
+  || fail "pr-open gate: $(printf '%s' "$gv" | tail -1)"
+
+
+echo "== the queue never parses as empty when it is not"
+qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
+printf '%s\n' "$qz" | grep '^  FAIL' || true
+[ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
+  || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
 
 echo "== the secret scanner knows every shape it claims to know"
 ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
