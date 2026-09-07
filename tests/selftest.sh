@@ -692,28 +692,32 @@ out="$(rw 'seq 1 5')"
 after="$(grep -c offload_rewrite "$O/.loopkit/metrics.jsonl" || true)"
 [ "$after" = $((before + 1)) ] && ok "one offload_rewrite event per rewrite in metrics.jsonl ($before -> $after)" || fail "metrics: $before -> $after"
 out="$(rw 'git status')"; [ -z "$out" ] && ok "control: git status still passes through with patterns loaded" || fail "control rewrote git status: $out"
-printf '^seq\\b\n' > "$O/.loopkit/one-pattern.txt"
-python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/many-patterns.txt"
-# A RELATIVE budget, not a wall clock. The absolute 200 ms version failed twice
-# on 2026-09-07 (215 ms, then 205 ms) on a busy machine with nothing regressed,
-# and a gate that fails for load teaches people to re-run until green — which is
-# indistinguishable from re-running until a real failure hides. What the pin
-# actually wants is that the matcher is linear in the pattern count rather than
-# pathological, and a ratio measured in the same run on the same machine says
-# that without depending on how busy the machine is.
+# SHAPE, not wall clock. Two earlier versions of this check were wrong in
+# opposite directions and for the same reason. A hard 200 ms budget failed for
+# LOAD (215 ms, 205 ms, and 307 ms for a reviewer) with nothing regressed. The
+# ratio that replaced it ran two subprocesses, so ~59 ms of interpreter startup
+# sat in both halves and diluted it: idle it ranged 0.45-1.81, under load it
+# reached 2.75 against its own 3.0 threshold, and it MISSED injected quadratic
+# work at +55 ms. Noise band and detection band overlapped.
+#
+# The pin now imports decide() and measures nanoseconds per pattern in-process
+# at 20 patterns and at 2000, so the startup constant is not in the measurement
+# at all. Linear holds it flat (0.75-1.43 including under 12-way load); O(n^2)
+# reads 96. NOT pinned, and deliberately: the end-to-end wall clock of one hook
+# invocation, which is mostly Python starting up. See the pin's header.
+#
+# The exit status is the verdict; the printed line is for the reader. Reading
+# only the text would re-invent the bug where a measurement that produced
+# nothing still parsed into a passing comparison.
 timing="$(CLAUDE_PROJECT_DIR="$O" python3 "$REPO/tests/pins/offload-cost-ratio.py" \
-  "$P/hooks/offload_rewrite.py" "$O/.loopkit/one-pattern.txt" "$O/.loopkit/many-patterns.txt" 2>&1)"
-# A measurement that produced nothing must SAY so. `set -- $timing` on an empty
-# string used to abort the whole suite with "unbound variable", which reads as a
-# suite bug rather than as the measurement failing.
+  "$P/hooks/offload_rewrite.py" 2>&1)"; timing_rc=$?
 if [ -z "$timing" ]; then
   fail "timing: the cost-ratio measurement produced no output"
-else
+elif [ "$timing_rc" = 0 ]; then
   set -- $timing
-  ratio_ok="$(python3 -c "print(1 if float('${1:-99}') < 3.0 else 0)" 2>/dev/null || echo 0)"
-  [ "$ratio_ok" = 1 ] && [ "${3:-miss}" = hit ] \
-    && ok "50 patterns cost ${1}x one pattern (${2} ms), last line matched" \
-    || fail "timing: 50 patterns cost ${1:-?}x one pattern — want under 3x (raw ${2:-?} ms, ${3:-?})"
+  ok "per-pattern cost is flat from 20 to 2000 patterns (${1}x, ${2} ns/pattern), last of 50 patterns matched"
+else
+  fail "timing: $timing"
 fi
 bd="$(grep -n 'block_dangerous.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 orw="$(grep -n 'offload_rewrite.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
@@ -881,6 +885,21 @@ case "$doc_out" in
   *"Finish before handing over"*) ok "a tick prompt actually receives the finishing rule" ;;
   *) fail "the doctrine hook does not emit the finishing rule on a tick prompt" ;;
 esac
+# The plugin's OWN canonical invocation. `^\s*/loop\b` cannot match
+# `/loopkit:tick` (`\b` fails between `p` and `k`), so the doctrine used to be
+# silent on the one prompt the skill list advertises.
+doc_out="$(printf '{"prompt":"/loopkit:tick"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "/loopkit:tick receives the doctrine too" ;;
+  *) fail "the doctrine hook is silent on /loopkit:tick" ;;
+esac
+# The three checks above assert the TEXT is present, which a future agent
+# satisfies by paraphrase. This one runs the recorder and asserts the
+# BEHAVIOUR, which is the difference between a rule and a wish.
+gv="$(python3 "$REPO/tests/pins/pr-open-needs-a-verdict.py" 2>&1)"; gv_rc=$?
+printf '%s\n' "$gv" | grep '^  FAIL' || true
+[ "$gv_rc" = 0 ] && ok "the recorder REFUSES pr-open without a verdict, and has a visible override" \
+  || fail "pr-open gate: $(printf '%s' "$gv" | tail -1)"
 
 
 echo "== the queue never parses as empty when it is not"

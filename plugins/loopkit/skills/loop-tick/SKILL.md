@@ -110,6 +110,24 @@ So:
 - A row reaches `pr-open` only when a reviewer has returned a verdict and that
   verdict is PASS. "I opened a pull request" is not the transition; "a different
   agent judged it and it held" is.
+
+  **This one is enforced, not merely asked for.** The reviewer records its
+  verdict and `triage_state.py` refuses the transition without one:
+
+  ```bash
+  # the reviewer, after judging:
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triage_state.py" verdict \
+    --state state/triage.md --source "<row source>" \
+    --result PASS --by "<reviewing agent>" --evidence "<what proved it>"
+  ```
+
+  The verdict is one line in `state/ticks.jsonl`; the latest verdict for a
+  source wins, so a PASS followed by a FAIL closes the door again. Set
+  `LOOPKIT_AGENT` on each agent's runs and the recorder also refuses a PASS
+  from the agent that did the work; leave it unset and it cannot tell them
+  apart and does not pretend to. When a human decides otherwise, the door is
+  `--override-verdict "<reason>"`, which writes the reason to the ledger and
+  says so on stderr — use it, rather than routing around the gate in the dark.
 - `needs a reviewer` is never a thing to report. It is a thing to do. When the
   scan prints it, dispatch the reviewer — that IS the tick.
 - Report to the owner only what they can act on: what is READY TO MERGE, what

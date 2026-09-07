@@ -52,6 +52,14 @@ FATIGUE_N = int(os.environ.get("LOOPKIT_APPROVAL_FATIGUE_N", "30") or 30)
 # backlog-work phrasing that the loop-tick skill's own description advertises.
 TICK_SIGNALS = (
     r"^\s*/loop\b",
+    # The plugin's OWN canonical invocation, and for a while the one prompt the
+    # doctrine could not see. `\b` does not match between `p` and `k`, so
+    # `^\s*/loop\b` fails on `/loopkit:tick` — the hook stayed silent on exactly
+    # the path the skill list tells people to use. Named explicitly rather than
+    # widened to `/loopkit\b`, because `/loopkit:init` and `/loopkit:doctor` are
+    # not ticks and a hook that fires on everything is noise, and noise is how a
+    # guard gets switched off.
+    r"^\s*/loopkit:(?:tick|scan)\b",
     r"\bloop-tick\b",
     r"\bloopkit\s+backlog\b",
     r"\bwork\s+the\s+backlog\b",
@@ -102,9 +110,14 @@ Three rules, and they are the whole of it:
 5. Finish before handing over. A PR the loop has not had REVIEWED is not
    finished, and `needs a reviewer` is a thing to DO, not to report — the loop
    has reviewer agents. A row reaches pr-open only on a recorded PASS from a
-   different agent. Tell the owner only what they can act on: READY TO MERGE, a
-   ruling, or a credential only they hold (owner, 2026-09-07: "the finishing
-   harness means it takes complete end to end ownership").
+   different agent, and triage_state.py now REFUSES the transition without one:
+       python3 {s}/triage_state.py verdict --state state/triage.md \\
+         --source "<row source>" --result PASS --by "<reviewing agent>"
+   Set LOOPKIT_AGENT per agent and it also refuses a self-approval. A human who
+   has decided otherwise passes --override-verdict "<reason>", which is recorded.
+   Tell the owner only what they can act on: READY TO MERGE, a ruling, or a
+   credential only they hold (owner, 2026-09-07: "the finishing harness means it
+   takes complete end to end ownership").
 
 The skill you invoked carries everything else, and is the source of truth."""
 
