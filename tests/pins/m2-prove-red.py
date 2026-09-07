@@ -14,14 +14,35 @@ string; if the target is no longer in the file the run FAILS rather than
 passing quietly, so a module that drifts away from its own pin is caught
 instead of silently losing cover.
 
+SAFETY, because this script WRITES TO SOURCE FILES
+
+Two of these running at once corrupt each other: the second captures its
+"originals" while the first has the file mutated, and then restores that
+mutated text as if it were pristine. Observed for real on 2026-09-07 while
+timing this script beside a suite run, so it is guarded rather than
+documented:
+
+  * an exclusive `flock` means a second run REFUSES instead of interleaving;
+  * a pre-flight check refuses to start if any mutation's replacement text is
+    already present, which is what a previous killed run would leave behind;
+  * SIGINT and SIGTERM restore before exiting.
+
+SIGKILL still cannot be caught -- nothing can -- but the pre-flight check
+turns the wreckage into a loud refusal on the next run instead of a mutated
+file that could be committed. If you ever see that refusal, restore with
+`git checkout -- plugins/loopkit/loopkit_core/provider.py
+plugins/loopkit/loopkit_core/store.py`.
+
 usage: python3 tests/pins/m2-prove-red.py [repo-root]
 exit 0 == every mutation went red and every file was restored.
 """
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.abspath(
@@ -158,8 +179,66 @@ def run_selftest(module: str) -> int:
     return proc.returncode
 
 
+def acquire_lock():
+    """Refuse to run beside another instance. Returns the held fd, or None."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not POSIX
+        return None
+    path = os.path.join(tempfile.gettempdir(), "loopkit-m2-prove-red.lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        print(
+            "REFUSED: another m2-prove-red run holds %s.\n"
+            "  Two runs mutate the same source files and restore each other's\n"
+            "  mutated text as if it were pristine. Wait for the other run."
+            % path
+        )
+        raise SystemExit(1)
+    return fd
+
+
+def preflight(originals) -> list:
+    """Refuse to start on a tree a previous run left mutated."""
+    dirty = []
+    for mut_id, _module, _why, edits in MUTATIONS:
+        for path, _old, new in edits:
+            if new in originals[path]:
+                dirty.append(
+                    "%s: replacement text for %s is ALREADY in the file -- a "
+                    "previous run was killed mid-mutation. Restore with "
+                    "`git checkout -- %s` before re-running."
+                    % (mut_id, os.path.basename(path), os.path.relpath(path, ROOT))
+                )
+    return dirty
+
+
 def main() -> int:
+    lock_fd = acquire_lock()
     originals = {path: open(path).read() for path in (PROVIDER, STORE)}
+
+    dirty = preflight(originals)
+    if dirty:
+        for line in dirty:
+            print("  REFUSED  " + line)
+        return 1
+
+    def restore_and_die(signum, _frame):  # pragma: no cover - signal path
+        for path, text in originals.items():
+            with open(path, "w") as handle:
+                handle.write(text)
+        print("\n  interrupted (signal %d) -- source files restored" % signum)
+        raise SystemExit(130)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, restore_and_die)
+        except (ValueError, OSError):  # pragma: no cover - not main thread
+            pass
+
     red = 0
     problems = []
     try:
@@ -210,6 +289,8 @@ def main() -> int:
         if open(path).read() != text:
             print("  RESTORE FAILED: %s" % path)
             return 1
+    if lock_fd is not None:
+        os.close(lock_fd)
     return 0
 
 
