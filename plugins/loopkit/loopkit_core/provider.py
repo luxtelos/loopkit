@@ -135,6 +135,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 if __package__ in (None, ""):  # pragma: no cover - exercised by the path gate
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from loopkit_core.redact import Redactor, url_secrets  # noqa: E402
+from loopkit_core.nethttp import (  # noqa: E402
+    REDIRECT_CODES,
+    RedirectRefused,
+    credentialed_opener,
+    safe_origin,
+)
 
 __all__ = [
     "Provider",
@@ -406,8 +412,15 @@ _Redactor = Redactor
 
 
 def _no_proxy_opener() -> urllib.request.OpenerDirector:
-    """Never route a keyed request through an ambient proxy from the environment."""
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    """No ambient proxy, and NO REDIRECT EVER FOLLOWED.
+
+    The redirect half is the 2026-09-07 fourth-round finding: `build_opener`
+    keeps `HTTPRedirectHandler`, which copies `req.headers` -- the
+    `Authorization: Bearer <key>` this module adds -- to whatever host a 301
+    names. Proven leaking on 301, 302 and 303 against a live sink. See
+    `loopkit_core/nethttp.py` for the policy and why refusing beats stripping.
+    """
+    return credentialed_opener()
 
 
 # --------------------------------------------------------------------------
@@ -548,10 +561,31 @@ class _HttpProvider:
             data = json.dumps(body).encode("utf-8")
             request = urllib.request.Request(url, data=data, method="POST")
             for header, value in headers.items():
-                request.add_header(header, value)
+                # `add_unredirected_header`, NOT `add_header`. `add_header`
+                # writes to `req.headers`, which urllib's redirect handler
+                # copies to a new host wholesale; urllib's own auth handlers
+                # use the unredirected dict for exactly this reason. Redirects
+                # are refused outright by the opener, so this is the SECOND of
+                # two independent defences: if a future edit ever puts a
+                # following redirect handler back, the key still does not
+                # travel. `headers` is where the caller puts the credential
+                # (`Authorization`, `x-api-key`), so this is the line that
+                # matters. Pinned by P11 (destination, not header name).
+                request.add_unredirected_header(header, value)
             request.add_header("Content-Type", "application/json")
             with self._opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
+        except RedirectRefused as exc:
+            # Explicit and FIRST: `RedirectRefused` is a plain `Exception`, so
+            # without this branch the catch-all below would swallow it and
+            # print "message withheld", hiding the one diagnostic an operator
+            # needs (a wrong-region bucket, a gateway that moved). The message
+            # is composed inside nethttp.py from a status code and
+            # scheme+host only; scrubbed anyway, because "composed safely" is
+            # a claim about today's code.
+            raise ProviderTransportError(
+                self._redact.scrub("%s %s: %s" % (where, label, exc))
+            ) from None
         except urllib.error.HTTPError as exc:  # non-2xx
             try:
                 detail = exc.read().decode("utf-8", "replace")[:200]
@@ -1471,12 +1505,23 @@ def _pin_leak_sweep() -> None:
         for name, value in headers.items()
         if name != "_path" and sentinel in value
     ] + ["path=%s" % h["_path"] for h in seen_headers if sentinel in h["_path"]]
+    # Round 4: this used to assert `not on_wire` over a list that is empty by
+    # construction -- urllib never resolves a userinfo URL, so no request is
+    # made and "no leak reached the server" printed the same as "the pin never
+    # fired". Saying "(0 requests)" in the label made that honest but did not
+    # make it a test. The fix is to assert the thing that is actually true and
+    # can actually break: NO REQUEST IS MADE AT ALL. A regression that
+    # promoted userinfo into a resolvable request -- into the Host header, or
+    # by stripping the userinfo and connecting anyway -- makes `seen_headers`
+    # non-empty and this goes red. P8b-control above proves the counter can
+    # count.
     _check(
-        "P8b URL userinfo is never promoted onto the wire, and the failure it "
-        "causes is a scrubbed ProviderError (%d requests reached the server)"
+        "P8b a userinfo URL produces NO REQUEST ON THE WIRE at all (%d seen, "
+        "0 required), nothing is promoted into a header or the request line, "
+        "and the failure it causes is a scrubbed ProviderError"
         % len(seen_headers),
-        not on_wire and not errors,
-        "wire=%r errors=%r" % (on_wire[:2], errors[:2]),
+        len(seen_headers) == 0 and not on_wire and not errors,
+        "seen=%d wire=%r errors=%r" % (len(seen_headers), on_wire[:2], errors[:2]),
     )
 
     # The sentinel as the API KEY, against a live upstream that echoes it back
@@ -1678,18 +1723,20 @@ def _pin_leak_sweep_nasty() -> None:
             for name, value in headers.items()
             if name != "_path" and hits(value)
         ] + ["path=%s" % h["_path"] for h in seen_headers if hits(h["_path"])]
-        # HONEST NOTE, or this assertion reads stronger than it is: urllib
-        # never RESOLVES a userinfo URL -- it treats `user:pw@host` as one
-        # hostname and DNS fails -- so `len(seen_headers)` here is 0 and "no
-        # leak reached the server" and "the pin never fired" print the same.
-        # P9b-control is what keeps it from being vacuous, and P9c2 below adds
-        # a wire assertion that DOES fire.
+        # Round 4: `on_wire` is empty by construction here -- urllib never
+        # RESOLVES a userinfo URL, it treats `user:pw@host` as one hostname
+        # and DNS fails -- so asserting `not on_wire` asserted nothing. Naming
+        # the zero in the label was honest but still not a test. Assert the
+        # property that is real and breakable instead: a userinfo URL carrying
+        # a NEWLINE makes NO REQUEST AT ALL. P9b-control proves the counter
+        # counts; P9c2 below is the wire assertion that fires on a request
+        # that does happen.
         _check(
-            "P9c URL userinfo is never promoted onto the wire, even carrying a "
-            "newline (%d requests reached the server; urllib refuses to resolve "
-            "a userinfo URL at all, so see P9c2)" % len(seen_headers),
-            not on_wire,
-            "%r" % on_wire[:3],
+            "P9c a userinfo URL carrying a newline produces NO REQUEST ON THE "
+            "WIRE at all (%d seen, 0 required) and promotes nothing into a "
+            "header or the request line" % len(seen_headers),
+            len(seen_headers) == 0 and not on_wire,
+            "seen=%d wire=%r" % (len(seen_headers), on_wire[:3]),
         )
 
         # A wire assertion that really fires. A TAB in an API key is accepted
@@ -1805,6 +1852,175 @@ def _pin_leak_sweep_nasty() -> None:
         server.server_close()
 
 
+def _pin_redirect_never_reaches_a_second_host() -> None:
+    """P11 -- the credential never reaches a host the SERVER chose.
+
+    The pin that was missing. `P9c2` and `S9d` assert WHICH HEADER a key lands
+    in and never WHICH HOST receives it, so both stayed green while urllib's
+    `HTTPRedirectHandler` copied `Authorization: Bearer <key>` to whatever
+    `Location` a 301 named (proven on 301/302/303 against a live sink, with no
+    exception raised and the stranger's body returned as model output).
+
+    So this pin asserts the DESTINATION. Two servers on different netlocs:
+    `A` is the configured endpoint and answers only redirects; `B` is the
+    stranger and records everything it receives. `B` must never be touched.
+
+    A CONTROL runs first -- `B` reached directly DOES record an
+    `Authorization` header -- because otherwise "the key never reached B" and
+    "B was never wired up" print the same, and this repo has already shipped
+    one pin that passed on an empty collection.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    sentinel = "sk-REDIRECTPIN-do-not-leak-0123456789"
+    stranger: List[Dict[str, str]] = []
+
+    class Sink(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_POST(self):  # noqa: N802 - stdlib naming
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            stranger.append({k.lower(): v for k, v in self.headers.items()})
+            raw = json.dumps({"choices": [{"message": {"content": "FROM THE STRANGER"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        do_GET = do_POST
+
+    sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+    threading.Thread(target=sink.serve_forever, daemon=True).start()
+    sink_port = sink.server_address[1]
+    # A DIFFERENT hostname as well as a different port, so "same host" can
+    # never be the reason this passes.
+    sink_base = "http://localhost:%d" % sink_port
+
+    status_box = {"code": 302}
+
+    class Redirector(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_POST(self):  # noqa: N802 - stdlib naming
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            self.send_response(status_box["code"])
+            self.send_header("Location", sink_base + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST
+
+    redirector = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+    threading.Thread(target=redirector.serve_forever, daemon=True).start()
+    redirect_base = "http://127.0.0.1:%d" % redirector.server_address[1]
+
+    try:
+        # --- control: the sink really does observe an Authorization header.
+        stranger.clear()
+        _capture(
+            lambda: OpenAICompatProvider(
+                base_url=sink_base, api_key=sentinel, model="pin-model", env={}
+            ).complete([{"role": "user", "content": "x"}])
+        )
+        _check(
+            "P11-control the second host IS observable: reached directly it "
+            "records the Authorization header (%d requests)" % len(stranger),
+            len(stranger) == 1 and sentinel in stranger[0].get("authorization", ""),
+            "seen=%r" % (stranger[:1],),
+        )
+
+        # --- the assertion, for every status urllib will act on.
+        leaked: List[str] = []
+        followed: List[str] = []
+        not_refused: List[str] = []
+        for code in REDIRECT_CODES:
+            status_box["code"] = code
+            stranger.clear()
+            result, error, streams = _capture(
+                lambda: OpenAICompatProvider(
+                    base_url=redirect_base, api_key=sentinel, model="pin-model", env={}
+                ).complete([{"role": "user", "content": "x"}])
+            )
+            if stranger:
+                followed.append("HTTP %d -> %d request(s) reached the second host" % (code, len(stranger)))
+            for headers in stranger:
+                for name, value in headers.items():
+                    if sentinel in value:
+                        leaked.append("HTTP %d -> header %r" % (code, name))
+            # Silence is a defect too: the caller must be TOLD, not handed the
+            # stranger's answer (or a bare success) as if nothing happened.
+            if not error:
+                not_refused.append("HTTP %d -> no exception; returned %r" % (code, result))
+            elif not error.startswith("Provider"):
+                not_refused.append("HTTP %d -> raised %s" % (code, error.split(":")[0]))
+            if sentinel in error or sentinel in streams:
+                leaked.append("HTTP %d -> the refusal message itself carries the key" % code)
+
+        _check(
+            "P11a a cross-host redirect NEVER delivers the API key to the second "
+            "host, on any of 301/302/303/307/308",
+            not leaked,
+            " | ".join(leaked[:4]),
+        )
+        _check(
+            "P11b a cross-host redirect is not followed AT ALL -- the second "
+            "host receives no request, so its body can never be returned as "
+            "model output",
+            not followed,
+            " | ".join(followed[:4]),
+        )
+        _check(
+            "P11c every refused redirect raises a ProviderError rather than "
+            "failing silently or succeeding with a stranger's answer",
+            not not_refused,
+            " | ".join(not_refused[:4]),
+        )
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        redirector.shutdown()
+        redirector.server_close()
+
+
+def _pin_safe_url_agrees_with_nethttp() -> None:
+    """P12 -- the two URL-origin renderers cannot drift apart.
+
+    `_safe_url` (here) renders request URLs; `nethttp.safe_origin` renders
+    redirect targets. They cannot be one function: MUT-L1 mutates `_safe_url`
+    in place and would stop finding its text if the body moved. Two copies of
+    a safety renderer is exactly the drift that left `store._scrub` two
+    reviews behind this file's, so they are held together here instead of
+    hoped about: same hostile inputs, byte-identical output.
+    """
+    disagreed = []
+    for url in (
+        "https://user:pw@host.example:8443/v1/SECRETPATH/chat?q=1#f",
+        "http://127.0.0.1:9",
+        "ftp://127.0.0.1:9/x",
+        "file:///etc/hosts",
+        "http://host.example:notaport/x",
+        "//127.0.0.1:9/x",
+        "",
+        "not a url at all",
+        "http://[::1]:8080/x",
+    ):
+        mine, theirs = _safe_url(url), safe_origin(url)
+        if mine != theirs:
+            disagreed.append("%r: _safe_url=%r safe_origin=%r" % (url, mine, theirs))
+    _check(
+        "P12 _safe_url and nethttp.safe_origin render the same origin for the "
+        "same hostile URL -- neither drops a path the other keeps",
+        not disagreed,
+        " | ".join(disagreed[:3]),
+    )
+
+
 def _selftest() -> int:
     server, base = _mock_server()
     try:
@@ -1817,6 +2033,8 @@ def _selftest() -> int:
         _pin_no_secret_leak(base)
         _pin_leak_sweep()
         _pin_leak_sweep_nasty()
+        _pin_redirect_never_reaches_a_second_host()
+        _pin_safe_url_agrees_with_nethttp()
     finally:
         server.shutdown()
         server.server_close()

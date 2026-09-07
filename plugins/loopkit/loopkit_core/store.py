@@ -175,6 +175,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 if __package__ in (None, ""):  # pragma: no cover - exercised by the path gate
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from loopkit_core.redact import Redactor, url_secrets  # noqa: E402
+from loopkit_core.nethttp import (  # noqa: E402
+    REDIRECT_CODES,
+    RedirectRefused,
+    credentialed_opener,
+)
 
 __all__ = [
     "Store",
@@ -817,7 +822,14 @@ class S3Store:
         self.host = "%s:%d" % (hostname, port) if port else hostname
         self.prefix = prefix.strip("/")
         self.timeout = timeout
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # No ambient proxy, and NO REDIRECT EVER FOLLOWED. The redirect half
+        # is the 2026-09-07 fourth-round finding: `build_opener` keeps
+        # `HTTPRedirectHandler`, which copied the signed `Authorization`
+        # header -- `Credential=<access key id>` -- to whatever host a 3xx
+        # named, on ALL FIVE redirect codes, because list/get are GETs.
+        # A wrong-region bucket answers 301/307 as ordinary operation, so this
+        # was reachable by misconfiguration alone. See loopkit_core/nethttp.py.
+        self._opener = credentialed_opener()
         self._next_seq: Dict[str, int] = {}
 
     # -- signing ------------------------------------------------------------
@@ -890,7 +902,13 @@ class S3Store:
             url, data=body if method in ("PUT", "POST") else None, method=method
         )
         for name, value in headers.items():
-            request.add_header(name, value)
+            # `add_unredirected_header`, NOT `add_header`: `add_header` writes
+            # to `req.headers`, the dict urllib's redirect handler copies to a
+            # new host wholesale. `headers` here includes `authorization`
+            # (`Credential=<access key id>`) and the signed `host` and
+            # `x-amz-*` headers. Redirects are refused by the opener, so this
+            # is the second of two independent defences. Pinned by S11.
+            request.add_unredirected_header(name, value)
         try:
             with self._opener.open(request, timeout=self.timeout) as response:
                 return response.status, response.read(), dict(response.headers)
@@ -900,6 +918,14 @@ class S3Store:
             except Exception:  # pragma: no cover
                 detail = b""
             return exc.code, detail, dict(exc.headers or {})
+        except RedirectRefused as exc:
+            # Explicit and ahead of the catch-all: `RedirectRefused` is a
+            # plain `Exception`, so the catch-all would otherwise reduce it to
+            # "message withheld" and hide the one thing an operator needs to
+            # read here -- an S3 301/307 means the bucket is in another
+            # region. Composed in nethttp.py from a status code and
+            # scheme+host only; scrubbed anyway.
+            raise StoreTransportError(self._scrub(str(exc))) from None
         except urllib.error.URLError as exc:
             # `reason` is a socket-layer object (`ConnectionRefusedError`,
             # `gaierror`, `TimeoutError`). It never carries a header, so its
@@ -2386,6 +2412,218 @@ def _worker(args: Sequence[str]) -> int:
     return 2
 
 
+def _pin_redirect_never_reaches_a_second_host() -> None:
+    """S11 -- the signed credential never reaches a host the SERVER chose.
+
+    `S9d` pins that the access key id lands in `Credential=` and nowhere else
+    -- WHICH HEADER, never WHICH HOST. It stayed green while urllib's
+    `HTTPRedirectHandler` copied the whole signed `Authorization` header to
+    whatever `Location` a 3xx named. Worse here than in `provider.py`, because
+    `list`/`get` are GETs and urllib follows all five codes for a GET: proven
+    leaking on 301, 302, 303, 307 AND 308 against a live sink, each with no
+    exception raised and the stranger's XML parsed as the bucket's own
+    listing.
+
+    This is not exotic for S3. A bucket addressed in the wrong region answers
+    `301 PermanentRedirect` / `307` as ORDINARY operation, so an operator with
+    one wrong config line handed their access key id to another host.
+
+    Two servers on different netlocs; the stranger must never be touched. A
+    control proves the stranger is observable first, so this cannot pass by
+    being unwired.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    access_key = "AKIAREDIRECTPIN01"
+    secret_key = "sekritREDIRECTPIN/secretkey0123456789"
+    stranger: List[Dict[str, str]] = []
+    listing = (
+        b"<?xml version='1.0' encoding='UTF-8'?>"
+        b"<ListBucketResult><Contents><Key>from-the-stranger</Key></Contents>"
+        b"</ListBucketResult>"
+    )
+
+    class Sink(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_GET(self):  # noqa: N802 - stdlib naming
+            stranger.append({k.lower(): v for k, v in self.headers.items()})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(listing)))
+            self.end_headers()
+            self.wfile.write(listing)
+
+        do_POST = do_PUT = do_HEAD = do_GET
+
+    sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+    threading.Thread(target=sink.serve_forever, daemon=True).start()
+    # A different HOSTNAME as well as a different port.
+    sink_base = "http://localhost:%d" % sink.server_address[1]
+
+    status_box = {"code": 301}
+
+    class Redirector(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_GET(self):  # noqa: N802 - stdlib naming
+            self.send_response(status_box["code"])
+            self.send_header("Location", sink_base + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_POST = do_PUT = do_HEAD = do_GET
+
+    redirector = ThreadingHTTPServer(("127.0.0.1", 0), Redirector)
+    threading.Thread(target=redirector.serve_forever, daemon=True).start()
+    redirect_base = "http://127.0.0.1:%d" % redirector.server_address[1]
+
+    def capture_result(call):
+        """Like `_capture`, but keeps the RETURN VALUE too.
+
+        `_capture` drops it, and here the defect's loudest signature is a
+        SUCCESSFUL call that returns another host's listing -- no exception at
+        all. A pin that could only see exceptions would miss exactly that.
+        """
+        import contextlib
+        import traceback
+
+        out, err = io.StringIO(), io.StringIO()
+        value, error_text = None, ""
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                value = call()
+            except BaseException as exc:  # noqa: BLE001 - the pin is about the text
+                error_text = "%s: %s\n%s" % (
+                    type(exc).__name__,
+                    exc,
+                    "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                )
+        return value, error_text, out.getvalue() + err.getvalue()
+
+    try:
+        stranger.clear()
+        control = S3Store(
+            bucket="pin-bucket", endpoint=sink_base, access_key=access_key,
+            secret_key=secret_key, region="us-east-1", timeout=5,
+        )
+        _capture(lambda: control.list(""))
+        _check(
+            "S11-control the second host IS observable: reached directly it "
+            "records the signed Authorization header (%d requests)" % len(stranger),
+            len(stranger) == 1 and access_key in stranger[0].get("authorization", ""),
+            "seen=%r" % (stranger[:1],),
+        )
+
+        leaked: List[str] = []
+        followed: List[str] = []
+        not_refused: List[str] = []
+        for code in REDIRECT_CODES:
+            status_box["code"] = code
+            stranger.clear()
+            store = S3Store(
+                bucket="pin-bucket", endpoint=redirect_base, access_key=access_key,
+                secret_key=secret_key, region="us-east-1", timeout=5,
+            )
+            result, error, streams = capture_result(lambda st=store: st.list(""))
+            if stranger:
+                followed.append("HTTP %d -> %d request(s) reached the second host" % (code, len(stranger)))
+            for headers in stranger:
+                for name, value in headers.items():
+                    if access_key in value:
+                        leaked.append("HTTP %d -> header %r" % (code, name))
+            if not error:
+                not_refused.append("HTTP %d -> no exception; list() returned %r" % (code, result))
+            elif not error.startswith("Store"):
+                not_refused.append("HTTP %d -> raised %s" % (code, error.split(":")[0]))
+            for needle, what in ((access_key, "access key id"), (secret_key, "secret key")):
+                if needle in error or needle in streams:
+                    leaked.append("HTTP %d -> the refusal message carries the %s" % (code, what))
+
+        _check(
+            "S11a a cross-host redirect NEVER delivers the access key id to the "
+            "second host, on any of 301/302/303/307/308 (a wrong-region bucket "
+            "answers 301/307 in ordinary operation)",
+            not leaked,
+            " | ".join(leaked[:4]),
+        )
+        _check(
+            "S11b a cross-host redirect is not followed AT ALL -- the second "
+            "host receives no request, so its listing can never be returned as "
+            "this bucket's contents",
+            not followed,
+            " | ".join(followed[:4]),
+        )
+        _check(
+            "S11c every refused redirect raises a StoreError rather than "
+            "returning a stranger's listing as if it were the bucket's",
+            not not_refused,
+            " | ".join(not_refused[:4]),
+        )
+
+        # The `__init__` scheme guard checks the URL the OPERATOR typed. A
+        # `Location` is a second URL nobody typed, and urllib's redirect
+        # handler permits `ftp` on one: before this fix `ftp://` on a Location
+        # REACHED THE FTP HANDLER ("ftp error: [Errno 61] Connection
+        # refused"), reopening the exact door S10a had just closed. Refusing
+        # every redirect closes it by construction -- there is no second URL
+        # to check -- and this pin holds that shut.
+        reopened = []
+        for target in ("file:///etc/hosts", "ftp://127.0.0.1:9/x", "gopher://127.0.0.1:9/x"):
+            status_box["code"] = 302
+            hijack = ThreadingHTTPServer(("127.0.0.1", 0), _fixed_location_handler(target))
+            threading.Thread(target=hijack.serve_forever, daemon=True).start()
+            try:
+                store = S3Store(
+                    bucket="pin-bucket",
+                    endpoint="http://127.0.0.1:%d" % hijack.server_address[1],
+                    access_key=access_key, secret_key=secret_key,
+                    region="us-east-1", timeout=5,
+                )
+                _, error, _streams = capture_result(lambda st=store: st.list(""))
+                # "unreachable: ftp error" is urllib having TRIED the FTP
+                # handler. The refusal must come from us, before any handler.
+                if "refused to follow" not in error:
+                    reopened.append("%s -> %s" % (target, error.strip()[:90]))
+            finally:
+                hijack.shutdown()
+                hijack.server_close()
+        _check(
+            "S11d a redirect cannot reopen a scheme the __init__ guard closed: "
+            "file://, ftp:// and gopher:// on a Location are refused before any "
+            "urllib handler sees them",
+            not reopened,
+            " | ".join(reopened[:3]),
+        )
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        redirector.shutdown()
+        redirector.server_close()
+
+
+def _fixed_location_handler(location: str):
+    """A server that answers every request with a 302 to `location`."""
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_GET(self):  # noqa: N802 - stdlib naming
+            self.send_response(302)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_POST = do_PUT = do_HEAD = do_GET
+
+    return Handler
+
+
 def _selftest(with_s3: bool) -> int:
     import tempfile
 
@@ -2403,6 +2641,7 @@ def _selftest(with_s3: bool) -> int:
         _pin_leak_sweep_store(tmp)
         _pin_scrub_itself(tmp)
         _pin_s3_scheme()
+        _pin_redirect_never_reaches_a_second_host()
     if with_s3:
         _pin_s3_live()
     else:

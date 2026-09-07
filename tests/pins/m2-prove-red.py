@@ -57,6 +57,17 @@ PKG = os.path.join(ROOT, "plugins", "loopkit")
 PROVIDER = os.path.join(PKG, "loopkit_core", "provider.py")
 STORE = os.path.join(PKG, "loopkit_core", "store.py")
 REDACT = os.path.join(PKG, "loopkit_core", "redact.py")
+NETHTTP = os.path.join(PKG, "loopkit_core", "nethttp.py")
+
+# The two redirect mutations below both need the SAME opener edit, so it is
+# named once here rather than retyped: two copies of a mutation's target
+# string is how one of them silently stops matching after a reformat.
+SAFE_OPENER = (
+    "    return urllib.request.build_opener(\n"
+    "        urllib.request.ProxyHandler({}), _RefuseRedirect\n"
+    "    )"
+)
+VULN_OPENER = "    return urllib.request.build_opener(urllib.request.ProxyHandler({}))"
 
 # (id, module, why it matters, [(file, old, new), ...])
 MUTATIONS = [
@@ -300,6 +311,80 @@ MUTATIONS = [
             )
         ],
     ),
+    # --- the fourth review's blocker: a credential carried off the configured
+    # endpoint by an HTTP redirect. Two INDEPENDENT defences guard it (the
+    # opener refuses every 3xx; the credential is attached with
+    # `add_unredirected_header`), so removing either one alone leaves the
+    # system safe -- which is the point of defence in depth and also means a
+    # one-line mutation cannot reach the disclosure. Same shape as MUT-R2:
+    # the pair is the mutation, and that IS the finding. RH1/RH4 remove one
+    # defence and prove the pins that guard the redirect itself; RH2/RH3
+    # remove both and reproduce the reviewer's live-sink leak exactly.
+    (
+        "MUT-RH1",
+        "provider",
+        "the opener keeps urllib's HTTPRedirectHandler, so a 301 is FOLLOWED "
+        "and a stranger's body is returned as model output. (Reviewer's leak "
+        "5, first half.)",
+        [(NETHTTP, SAFE_OPENER, VULN_OPENER)],
+    ),
+    (
+        "MUT-RH2",
+        "provider",
+        "BOTH redirect defences removed: the API key itself reaches a second "
+        "host on 301/302/303, which is the reviewer's live-sink finding "
+        "verbatim. P9c2 pins WHICH HEADER and stays green throughout; only a "
+        "pin that asserts the DESTINATION catches this.",
+        [
+            (NETHTTP, SAFE_OPENER, VULN_OPENER),
+            (
+                PROVIDER,
+                "                request.add_unredirected_header(header, value)",
+                "                request.add_header(header, value)",
+            ),
+        ],
+    ),
+    (
+        "MUT-RH5",
+        "provider",
+        "nethttp.safe_origin keeps the URL PATH, so a refusal message echoes "
+        "the redirect target's path -- the MUT-L1 defect, in the copy MUT-L1 "
+        "does not reach. P12 is what stops the two renderers drifting.",
+        [
+            (
+                NETHTTP,
+                '    return "%s://%s" % (scheme or "?", host or "?")',
+                '    return "%s://%s%s" % (scheme or "?", host or "?", '
+                "urllib.parse.urlsplit(url).path)",
+            )
+        ],
+    ),
+    (
+        "MUT-RH3",
+        "store",
+        "BOTH redirect defences removed: the signed Authorization header, "
+        "Credential=<access key id> included, reaches a second host on ALL "
+        "FIVE redirect codes because list/get are GETs. S9d pins WHICH HEADER "
+        "and stays green.",
+        [
+            (NETHTTP, SAFE_OPENER, VULN_OPENER),
+            (
+                STORE,
+                "            request.add_unredirected_header(name, value)",
+                "            request.add_header(name, value)",
+            ),
+        ],
+    ),
+    (
+        "MUT-RH4",
+        "store",
+        "the opener keeps HTTPRedirectHandler, so a redirect is followed: a "
+        "stranger's listing is returned as this bucket's contents, AND `ftp://` "
+        "on a Location reaches the FTP handler -- reopening the door the "
+        "__init__ scheme guard closed, because that guard only ever saw the "
+        "URL the operator typed.",
+        [(NETHTTP, SAFE_OPENER, VULN_OPENER)],
+    ),
 ]
 
 
@@ -336,29 +421,67 @@ def lock_path() -> str:
     return os.path.join(ROOT, "tmp", "m2-prove-red.lock")
 
 
+# The ONE way to run this script without a lock, and it has to be typed.
+# See `acquire_lock` for why there is exactly one.
+UNLOCKED_ENV = "M2_PROVE_RED_ALLOW_UNLOCKED"
+
+
+def _no_lock(why: str, path: str):
+    """One answer for every reason the lock is unavailable: refuse.
+
+    Round 4 review, finding 2: this script had TWO ways to end up without a
+    lock and gave them OPPOSITE answers -- an uncreatable lock file was a
+    `SystemExit(1)`, while a platform with no `fcntl` printed a warning and
+    ran on. No reason was stated for the difference, and there is not one.
+    The hazard is identical in both cases and is the hazard the lock exists
+    for: two concurrent runs rewrite the SAME source files and restore each
+    other's mutated text as if it were pristine, which leaves a corrupted
+    working tree that the tree-clean check then reports as clean. Whether the
+    lock is missing because the platform has no flock or because the path is
+    unwritable changes nothing about that. Loud is not the same as safe, and a
+    lock that is sometimes advisory is a lock nobody can reason about.
+
+    So: refuse in both, and offer ONE deliberate escape hatch covering both,
+    which a human has to type. An env var is a decision with a name on it; a
+    printed warning in a 14-mutation run is a line nobody reads.
+    """
+    if os.environ.get(UNLOCKED_ENV) == "1":
+        print(
+            "  UNLOCKED BY REQUEST (%s=1): %s\n"
+            "  Two concurrent runs will corrupt each other's source files.\n"
+            "  The pre-flight check is the only guard left." % (UNLOCKED_ENV, why)
+        )
+        return None
+    print(
+        "REFUSED: %s (lock path: %s).\n"
+        "  This script rewrites source files in place and will not do it\n"
+        "  without a lock: two runs restore each other's mutated text as if\n"
+        "  it were pristine, and the tree-clean check then passes on a\n"
+        "  corrupted tree.\n"
+        "  If you accept that risk, re-run with %s=1." % (why, path, UNLOCKED_ENV)
+    )
+    raise SystemExit(1)
+
+
 def acquire_lock():
-    """Refuse to run beside another instance. Returns the held fd, or None."""
+    """Refuse to run beside another instance. Returns the held fd, or None.
+
+    Every path out of here is a REFUSAL except a lock actually held (or the
+    explicit `M2_PROVE_RED_ALLOW_UNLOCKED=1` opt-out). `None` is returned only
+    on that opt-out, never as a silent fallback.
+    """
+    path = lock_path()
     try:
         import fcntl
     except ImportError:  # pragma: no cover - not POSIX
-        print(
-            "  WARNING: no fcntl on this platform, so two concurrent runs are\n"
-            "  NOT excluded. The pre-flight check is the only guard left."
-        )
-        return None
-    path = lock_path()
+        return _no_lock("this platform has no fcntl, so no lock can be taken", path)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     except OSError as exc:
-        # Carrying on unlocked is how two runs restore each other's mutated
-        # text as if it were pristine. Refuse instead.
-        print(
-            "REFUSED: cannot create the run lock at %s (%s). This script "
-            "rewrites source files and will not do it without a lock."
-            % (path, exc.strerror)
+        return _no_lock(
+            "cannot create the run lock (%s)" % exc.strerror, path
         )
-        raise SystemExit(1)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
