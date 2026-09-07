@@ -76,13 +76,44 @@ Each file is one JSON object:
    behaviour change that must be caught.
 5. **An empty `expected.messages` means no message may be enqueued**, not that
    messages are unchecked.
-6. **`messages` content is the one key not derivable from `input` alone.** What
-   an agent proposes depends on the Provider, and the stub Provider's script is
-   not carried in the fixture. So `tests/pins/fixture-derivable.py` asserts of
-   `messages` only what the spec does determine: that every expected Message is
-   one `knowledge_actor.validate_message` ACCEPTS. Stating that limit is the
-   point — an unstated gap is how fixture 05 shipped asserting a message the
-   runtime was required to refuse.
+6. **ONE key is not derivable from `input` alone: `messages` content.**
+   This rule said "the one key", then briefly "TWO keys" when `targets` was
+   found undefined, and is back to one now that spec §Targets states the rule
+   and `derive_targets` implements it. The history is left visible because a
+   rule that has been wrong twice earns a reader's suspicion.
+
+   **`messages` content.** What an agent proposes depends on the Provider, and
+   the stub Provider's script is not carried in the fixture. So
+   `tests/pins/fixture-derivable.py` asserts of `messages` only what the spec
+   does determine: that every expected Message is one
+   `knowledge_actor.validate_message` ACCEPTS.
+
+   **`targets`.** `specs/loopkit-runtime.md` asserts this key in fixtures 01,
+   04 and 05 and defines it nowhere — no shape, no membership rule, no
+   ordering, no cap. Four things are open, and the shipped code answers two of
+   them two different ways:
+   - *Membership.* `loop_next_pick.py` emits a `target:<stage>` line for every
+     one of the four work stages; `loop-next.sh` awk-filters to the selected
+     stage alone. On fixture 01's queue the picker emits four targets and the
+     fixture asserts one.
+   - *Ordering.* File order unscoped, `PRIORITY_RANK` order inside a lane.
+   - *The cap.* `loop_next_pick.MAX_FANOUT` is 8; no fixture reaches it.
+   - *Lane filtering.* The picker scopes rows by substring against terms from
+     `<project>/.loopkit/scopes.json` — a file no fixture carries, so a scoped
+     target set cannot be computed from `input` at all.
+
+   So the pin asserts of `targets` only the properties the spec states —
+   criterion 5 (no `pr-open` row), criterion 6 (no `blocked` row), criterion 9
+   (no two targets share a `source`), §Edge cases (Stage `discover` serves
+   none), and that a target names a real Queue row with that row's `finding`.
+   It does NOT compute the key. It used to, from a hand-written reading of the
+   undefined noun, which made it read as covering derivability when it did not.
+
+   Stating both limits is the point — an unstated gap is how fixture 05 shipped
+   asserting a message the runtime was required to refuse. The normative
+   wording that would close `targets` is proposed in `inbox/needs-human.md`;
+   once it lands in the spec, the pin should compute `targets` from it and this
+   rule should shrink back to naming `messages` alone.
 
 ## Running them
 
@@ -101,8 +132,11 @@ python3 tests/pins/fixture-derivable.py
 
 The second is the one that matters. It is a reference implementation of exactly
 the rules `specs/loopkit-runtime.md` states — stage precedence, the Next
-three-way split, counts, targets, the journal delta, provider replay, lane
-scoping and the draft gate — and it recomputes every fixture from `input`. It
+three-way split, counts, the journal delta, provider replay, lane scoping and
+the draft gate — and it recomputes those keys for every fixture from `input`.
+`targets` is deliberately absent from that list: the spec states no rule to
+implement, so the pin checks the properties it does state instead of inventing
+one (rule 6). It
 imports `okf_bundle.trust_tier` and `knowledge_actor.validate_message` rather
 than reimplementing them, so a fixture that disagrees with the shipped code
 fails here rather than in a reviewer's head.
