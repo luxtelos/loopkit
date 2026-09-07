@@ -16,10 +16,10 @@ read, and a hand edit breaks that.
 | Adoption runbook for a project that already carries its own hooks: init, memory.json, duplicate hooks, rulings dry-run, ledger baseline | plan §adoption runbook | medium |  | done |
 | install.sh Linux path unexercised; selftest verified on node:22-bookworm — say so in GETTING-STARTED and pin a Linux run in CI | docs/GETTING-STARTED.md §linux | low |  | done |
 | Release 0.2.0: tag + GitHub release once PRs #2 #3 #4 are merged by the owner | release §0.2.0 | high |  | done |
-| Submit to anthropics/claude-plugins-official once 0.2.0 is tagged | plan §distribution official-marketplace | medium |  | blocked |
+| Submit to anthropics/claude-plugins-official once 0.2.0 is tagged | plan §distribution official-marketplace | medium |  | new |
 | Bloom profile (six behaviour seeds + check-bloom.py) — waits on the owner's spend decision and a control-case run | docs/research/bloom-assessment.md | medium |  | blocked |
 | M1 runtime spec: specs/loopkit-runtime.md (EARS), ADR-0001..0004, docs/DDD-ERD.md, spec/fixtures, loopkit-runtime.model.fizz | docs/research/runtime-plan.md §M1 | high |  | done |
-| M2 loopkit-core: extract portable modules, lift stage+NEXT into loop_next_pick.decide, Provider (stub/OpenAI-compat/Anthropic), Store (fs/sqlite/s3), Runner, projection | docs/research/runtime-plan.md §M2 | high |  | blocked |
+| M2 loopkit-core: extract portable modules, lift stage+NEXT into loop_next_pick.decide, Provider (stub/OpenAI-compat/Anthropic), Store (fs/sqlite/s3), Runner, projection | docs/research/runtime-plan.md §M2 | high |  | new |
 | M3 plugin becomes an adapter over loopkit-core; selftest unchanged | docs/research/runtime-plan.md §M3 | medium |  | blocked |
 | M4 projections + protocols: knowledge project --schema, A2A agent card, AG-UI emitter behind a flag | docs/research/runtime-plan.md §M4 | medium |  | blocked |
 | M5 loopkit-js from the conformance fixtures (packages/js) | docs/research/runtime-plan.md §M5 | low |  | blocked |
@@ -43,3 +43,4 @@ read, and a hand edit breaks that.
 | state/triage.md updates need a merged PR, so while PRs sit unmerged the lookup re-serves rows already advanced on an unmerged branch — the loop's memory lags its own work by the review latency | loop 2026-09-07 §queue-lags-review | high |  | blocked |
 | Release 0.2.2: governance guard fixes reach installed copies only after the manifest bump merges | release §0.2.2 | high |  | done |
 | M1 spec review FAIL: scoping field is fiction (scopes/scope/tags vs okf.py's lane\|scope\|domain prefix), fixture 05 message lacks required enqueued_at, criterion 1 run_start contradicts all four fixtures, fixture 04 events ambiguous, counts undefined | PR #8 review §spec-defects | high |  | done |
+| blocked is doing two jobs: waiting on a PERSON and waiting on an EVENT. An event-blocked row is never polled, so its precondition can be met for hours with nobody noticing — M2 and the marketplace submission both sat blocked after their preconditions passed | loop 2026-09-07 §blocked-conflates-two-waits | high |  | new |
