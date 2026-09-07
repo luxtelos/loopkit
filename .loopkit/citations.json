@@ -1,7 +1,7 @@
 {
   "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
   "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
-  "_allow_empty": "false since 2026-09-07. The previous note here said 'true, and it is a live decision: no document in this repo cites a file:line today. Flip it to false the day one does.' docs/GETTING-STARTED.md now does, so this is that day. An EMPTY scan from here on means the scan lost the docs, and that is red.",
+  "_allow_empty": "false since 2026-09-07. It was true while no document in this repo cited a file:line; both docs/GETTING-STARTED.md and specs/blocked-waits-on-what.md now do, so an EMPTY scan from here means the scan lost the docs, and that is red.",
   "allow_empty": false,
   "pins": [
     [
@@ -15,6 +15,85 @@
       ".github/workflows/selftest.yml",
       "run: bash tests/selftest\\.sh",
       "CI reaches that gate by running the suite"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^COLUMNS = \\[\"finding\", \"source\", \"priority\", \"spec\", \"status\"\\]$",
+      "the queue is exactly five columns, which is why the spec forbids a sixth and puts the condition in the `spec` cell"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^def normalize_cell",
+      "the read-side rewrite the condition grammar must survive (collapses whitespace runs)"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "replace\\(\"\\|\", \"\\\\\\\\\\|\"\\)",
+      "the write-side rewrite the condition grammar must survive (escapes literal pipes)"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^ACCEPTED_HEADERS(?::[^=]+)? = \\(",
+      "the closed four/five-column header list; a six-column header matches neither, which is why the spec forbids a sixth column"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "if len\\(cells\\) != len\\(header_cells\\):",
+      "the cell-count mismatch that records a dropped row; paired with the short-read invariant below it is a refusal, no longer a silent skip"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/loop_next_pick.py",
+      "^WANT = \\[\"pr-open\", \"fixing\", \"spec-ready\", \"spec-draft\", \"new\"\\]$",
+      "`blocked` is absent from WANT, so a blocked row is counted and never served"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/loop_next_pick.py",
+      "hay = \\(\\(r\\.get\\(\"finding\"\\).*r\\.get\\(\"source\"\\)",
+      "scope matching hays finding+source, which is why the condition may not live in either"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "tests/pins/loop-next-output-parity.py",
+      "replace\\(str\\(scripts\\), \"<SCRIPTS>\"\\)",
+      "the control case's absolute-path scrubbing already exists here and should be extended, not rewritten"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^\\s*if spec is not None:$",
+      "update_row leaves the spec cell untouched when the argument is None, which is why criterion 10 cannot rely on the caller remembering to clear a spent condition"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "no recognisable header, but the file holds",
+      "the refusal that replaced the silent zero — the spec's old 'rows parsed: 0, exit 0' argument for the no-sixth-column SHALL is dead, and the SHALL now rests on cross-version compatibility instead"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^    if len\\(rows\\) < len\\(data_indices\\):$",
+      "the short-read invariant: a row that fails the cell-count check is refused, not silently deleted, which is why the grammar table reads PARSE REFUSED"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^    header = \"\\| finding \\| source \\| priority \\| spec \\| status \\|\"$",
+      "write_table hardcodes the five-column header, so a sixth column cannot round-trip even if a parser admitted it"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^def header_cells_if_header",
+      "the single reader of ACCEPTED_HEADERS, so a six-column header is rejected in exactly one place"
     ]
-  ]
+  ],
+  "_as_of": "specs/blocked-waits-on-what.md writes its citations as `path:line as of <sha>`. check-citations.py matches path:line and ignores the suffix, so the convention is free to the gate and still checked by it."
 }
