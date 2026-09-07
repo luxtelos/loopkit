@@ -292,7 +292,7 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    **Check `[M2b]`: a static allow-list over the evaluator's code object.** Not
    a runtime guard that patches forbidden names into raising. A guard like that
    admits by default, and enumerating the known-bad while permitting the unknown
-   is the most-repeated defect in this codebase. Four parts, all decidable
+   is the most-repeated defect in this codebase. Five parts, all decidable
    without running the evaluator at all:
 
    a. **It is a plain function at all.** `isinstance(evaluator,
