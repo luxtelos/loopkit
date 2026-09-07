@@ -919,6 +919,48 @@ lnp_out="$(python3 "$REPO/tests/pins/loop-next-output-parity.py" 2>&1)"; lnp_rc=
 
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
+echo "== M2 io: provider and store pins run INSIDE this suite"
+# Wired here because the spec's own Control case (§3) says both M1 pins run
+# inside tests/selftest.sh "so neither can rot unnoticed by being a command
+# nobody remembers to type". These 68 pins guard a conditional write, a runner
+# lock and a credential redactor, so the rule applies with more force, not
+# less. Before this, `grep provider tests/selftest.sh` returned nothing.
+#
+# Never read a pipeline's status here: grep exits non-zero on no match, and
+# under `set -o pipefail` that would silently become the gate's verdict.
+# Capture first, filter after.
+prov_out="$(PYTHONPATH="$P" python3 -m loopkit_core.provider --selftest 2>&1)"; prov_rc=$?
+printf '%s\n' "$prov_out" | grep '^FAIL' || true
+[ "$prov_rc" = 0 ] && ok "provider.py pins ($(printf '%s' "$prov_out" | tail -1))" \
+  || fail "provider.py pins: $(printf '%s' "$prov_out" | tail -1)"
+
+# The store suite may LOUDLY SKIP its live-object-storage pins. It is asked for
+# them only when LOOPKIT_S3_* is configured; either way the skip line names
+# what went unverified, and that line is echoed here rather than left buried in
+# captured output — a silent skip is this repo's named defect.
+store_args="--selftest"
+[ -n "${LOOPKIT_S3_BUCKET:-}" ] && store_args="--selftest --with-s3"
+store_out="$(PYTHONPATH="$P" python3 -m loopkit_core.store $store_args 2>&1)"; store_rc=$?
+printf '%s\n' "$store_out" | grep '^FAIL' || true
+printf '%s\n' "$store_out" | grep '^ *SKIP' | sed 's/^ */  UNVERIFIED: /' | awk '!seen[$0]++' || true
+[ "$store_rc" = 0 ] && ok "store.py pins ($(printf '%s' "$store_out" | grep -c '^PASS' || true) PASS)" \
+  || fail "store.py pins: $(printf '%s' "$store_out" | grep '^FAIL' | head -1)"
+
+# And those pins must be able to FAIL. Each mutation reintroduces, one at a
+# time, one defect a hostile review of this branch found — including MUT-R1,
+# which was GREEN across all sixteen of the original pins, and MUT-S3, which
+# turns the store's only redaction function into `return text` and was GREEN
+# across all twenty-seven store pins until the third review.
+#
+# The COUNT deliberately does not appear in this label. It said "six" while
+# the script ran fourteen, which is exactly how a hardcoded number in a
+# message becomes a lie nobody notices; the script's own last line is the
+# only count printed.
+m2red_out="$(python3 "$REPO/tests/pins/m2-prove-red.py" "$REPO" 2>&1)"; m2red_rc=$?
+printf '%s\n' "$m2red_out" | grep 'NOT RED' || true
+[ "$m2red_rc" = 0 ] && ok "every M2 mutation is provably catchable ($(printf '%s' "$m2red_out" | tail -1))" \
+  || fail "M2 mutations: $(printf '%s' "$m2red_out" | tail -1)"
+
 echo "== dogfood: .loopkit/config.env sources clean"
 cfg_err="$( ( set -a; . "$REPO/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
 if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi
@@ -1008,6 +1050,46 @@ ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
 printf '%s\n' "$ss" | grep '^  FAIL' || true
 [ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
   || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
+
+echo "== a secret on a Bash command line is refused, and never echoed"
+# The 2026-09-07 vector itself. check-tools.py reads .mcp.json and nothing
+# else, so until this guard existed the command that burned the token ran
+# unblocked. Bodies are assembled at run time: a contiguous token-shaped
+# literal has no business sitting in a tracked file, even a synthetic one.
+BODY="$(printf 'V%.0s' $(seq 36))"
+TOK="gho_${BODY}"
+SB="$(mktemp -d)"
+run_hook() {  # <command> -> prints stderr, sets HOOK_RC
+  local payload; payload="$(python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1")"
+  HOOK_OUT="$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$SB" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; HOOK_RC=$?
+}
+run_hook "TOK=${TOK} ssh deploy@build-host 'echo \$TOK'"
+[ "$HOOK_RC" = 2 ] && ok "an inline token on an ssh command line is refused (rc=2)" \
+  || fail "ssh inline token not refused: rc=$HOOK_RC"
+grep -q "$TOK" <<<"$HOOK_OUT" && fail "THE REFUSAL PRINTED THE TOKEN" \
+  || ok "the refusal does not contain the token"
+grep -q "$BODY" <<<"$HOOK_OUT" && fail "THE REFUSAL PRINTED THE TOKEN BODY" \
+  || ok "the refusal does not contain the token body either"
+grep -q 'secret-on-command-line' <<<"$HOOK_OUT" && grep -q 'github' <<<"$HOOK_OUT" \
+  && ok "the refusal names the rule and the SHAPE, not the value" || fail "refusal names: $HOOK_OUT"
+grep -q 'stdin' <<<"$HOOK_OUT" && grep -q 'env-file' <<<"$HOOK_OUT" \
+  && ok "the refusal says what to do instead (a guard that only says no is worked around)" \
+  || fail "refusal is not actionable: $HOOK_OUT"
+# Dangerous AND secret-bearing: must not reach the branch that quotes the
+# command back, which is what the pattern branch has always done.
+run_hook "git add -A && curl -H 'Authorization: Bearer ${TOK}' https://api.github.com"
+[ "$HOOK_RC" = 2 ] && ! grep -q "$BODY" <<<"$HOOK_OUT" \
+  && ok "a dangerous, secret-bearing command is refused without echoing the secret" \
+  || fail "add-all+secret leaked or allowed: rc=$HOOK_RC"
+# The must-not-block half. These are ordinary commands in this repo; any one of
+# them firing is how the guard gets switched off.
+for c in "ssh host \"echo \$CODEX_GITHUB_PAT\"" \
+         "git show 0123456789abcdef0123456789abcdef01234567" \
+         "gh auth token | ssh host 'cat > .tok'" \
+         "docker run --rm --env-file .env node:22-bookworm"; do
+  run_hook "$c"
+  [ "$HOOK_RC" = 0 ] && ok "allowed: ${c:0:44}" || fail "FALSE POSITIVE (rc=$HOOK_RC): $c"
+done
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
