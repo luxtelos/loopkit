@@ -273,32 +273,68 @@ What I would fix before submitting, and would rather you decide on:
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
 
-## Criterion 23 is wrong and should change: usage absent, never zero (2026-09-07)
+## Owner ruling needed: criterion 23 — usage `0`, or usage absent? (2026-09-07)
 
-A reviewer ruled on the conflict I created between the merged specification and
-the M2 brief, and ruled against the specification — on better grounds than the
-brief itself offered. Recording it here because changing a merged criterion is
-your call, not the loop's.
+Changing a merged criterion is your call, not the loop's, so this is written as a
+decision with both costs rather than as a recommendation with one.
 
-The specification's criterion 23 says a provider's `usage` SHALL be `0` when the
-upstream reports no count. The reviewer's argument for absent instead:
+**The conflict.** `specs/loopkit-runtime.md:366-372` (criterion 23) says a
+Provider's return value SHALL carry all three keys, and that `usage` SHALL use
+`0` — "never `null`, never a missing key" — when the upstream API reports no
+count. The M2 brief said the opposite: absent, never zero. PR #27 followed the
+brief, left the specification alone, and flagged the conflict.
 
-- `inbox/needs-human.md` Q2 already treats a provider reporting 0 as having an
-  UNLIMITED budget. So criterion 23 makes criterion 21 undecidable: a real zero
-  and a fabricated zero are the same value with opposite meanings.
-- `loop-metrics.py` already returns `None`, not 0, when there is nothing to
-  count. The specification is the outlier, not the code.
+**A correction to myself before the options.** I justified absent in the brief by
+saying a fabricated zero corrupts the tokens-per-task metric. A reviewer traced
+that and rejected it: there is no token metric in this repository, and nothing
+consumes `usage` outside the unmerged #27 branch. My stated reason was
+speculative. The two arguments below are theirs, and are present in the
+repository today:
 
-Notably the reviewer REJECTED the reason I gave in the brief — that a fabricated
-zero corrupts the tokens-per-task metric — after tracing it: there is no token
-metric yet and nothing consumes `usage`. My reason was speculative; theirs is
-present in the repository today.
+- `inbox/needs-human.md:69` (Q2, the budget unit) already reads a provider
+  reporting `0` as having an unlimited budget. So criterion 23 makes criterion 21
+  undecidable under a token budget: a real zero and a fabricated zero are the
+  same value with opposite meanings.
+- `plugins/loopkit/loopkit_core/loop_metrics.py:78-79` already returns `None`,
+  not `0`, when there is nothing to count, and `fmt` at `:91` never prints a
+  bare `None`. On this question the specification is the outlier, not the code.
 
-- **Change criterion 23 to absent-never-zero.** Cost: a merged criterion is
-  edited, and every future provider must express "no count" rather than "zero".
-- **Keep it and change the providers.** Cost: criterion 21 stays undecidable
-  until Q2 is also answered, and the two criteria contradict each other in the
-  meantime.
+### The two options, and what each costs
 
-The code currently implements absent. Nothing is blocked either way; the
-providers are not merged.
+**Option A — change criterion 23 to absent-never-zero.**
+
+- Criterion 23 itself is edited: a merged criterion changes meaning, not
+  wording.
+- Criterion 24 (`specs/loopkit-runtime.md:373-376`) moves with it. It journals a
+  `provider_error` and **no** `result` for any value failing 23, so today a
+  provider that omits `usage` is a runtime error; after the change the same
+  value is valid. The set of things criterion 24 rejects is redefined.
+- Criterion 23's own Check line names
+  `python3 -m loopkit_core.conformance --check-provider <name>` as the shape
+  assertion. That module does not exist on any branch yet, and neither do the
+  provider fixtures behind it, so this is specification and conformance work
+  that has to be respecified before it is written — cheaper than rewriting a
+  running check, but not free, and not a wording edit.
+- Every future Provider must express "no count" as an absent key rather than a
+  zero, which is the less obvious of the two conventions.
+
+**Option B — keep criterion 23 and change the Providers.**
+
+- Criterion 21 stays undecidable under a token budget until Q2 above is also
+  answered, and the two criteria contradict each other in the meantime.
+- PR #27's provider code, which implements absent today, is rewritten to
+  fabricate `0`.
+- The open partial-usage fix (`PR #27 review §partial-usage`, in flight now) is
+  being written towards absent and would have to be re-aimed.
+
+### Which way I lean, having given you the costs first
+
+Option A. Criterion 21 is the criterion that cannot be decided while 23 stands,
+and the repository's only existing precedent — `loop_metrics.py` — already
+distinguishes "nothing to count" from "counted zero". But Option A does cost
+two criteria and a conformance check, not one line, and Option B costs no
+specification change at all. Both are defensible.
+
+**Nothing ships either way today**: the providers are not merged. A triage row
+at `blocked` counts this decision — see `state/triage.md`, source
+`inbox 2026-09-07 §criterion-23-usage-0-or-absent`.
