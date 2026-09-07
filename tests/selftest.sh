@@ -227,6 +227,17 @@ out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
 grep -q 'no row in TOOLS.md' <<<"$out" && ok "check-tools: server without a row" || fail "tools row: $out"
 grep -q 'relative path' <<<"$out" && ok "check-tools: relative command" || fail "tools relative: $out"
 grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'ghp_0123' <<<"$out" && ok "check-tools: secret flagged by key, value never printed" || fail "tools secret: $out"
+printf '{"mcpServers":{"ghost":{"command":"./bin/server","args":["--token","gho_SYNTHETIC0000000000000000000000000"]}}}' > "$F/.mcp.json"
+out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
+# `gho_` is the prefix `gh auth token` hands out, so it is the token an agent in
+# this repo is likeliest to be holding — and it was NOT in the scanner until a
+# real one was exposed in a process table on 2026-09-07 and had to be revoked.
+# Two assertions, not one: flagged by KEY, and the value never echoed. A scanner
+# that matches perfectly and then prints the match puts the secret in a log,
+# which is the same failure by a different route.
+grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'gho_SYNTHETIC' <<<"$out" \
+  && ok "check-tools: a gh-cli OAuth token is flagged by key, value never printed" \
+  || fail "tools gho_ secret: $out"
 expect_rc 1 "check-tools --strict fails" python3 "$P/scripts/check-tools.py" --root "$F" --strict
 mkdir -p "$F/.claude"; printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 .claude/hooks/block_dangerous.py"}]}]}}' > "$F/.claude/settings.json"
 out="$(python3 "$P/scripts/check-duplicate-hooks.py" --root "$F" --plugin "$P")"
