@@ -73,7 +73,7 @@ remains exactly as it is.
 ## Which way I lean, having given the costs first
 
 **Option C.** The rot is in findings, not in the queue: a triage row says
-`status=fixing`, which cannot go stale the way `store.py:633` can. Option B pays
+`status=fixing`, which cannot go stale the way a finding naming a code location can. Option B pays
 its largest cost — rebuilding a parser five review rounds deep — to fix a class
 of problem the queue does not have. Option A leaves verification forgeable,
 which makes the trust tiers decorative.
