@@ -1,0 +1,91 @@
+diff --git a/.github/workflows/selftest.yml b/.github/workflows/selftest.yml
+index aa2899a..34e800b 100644
+--- a/.github/workflows/selftest.yml
++++ b/.github/workflows/selftest.yml
+@@ -1,5 +1,11 @@
+-# The plugin's own gate on Linux. Runs the selftest only — install.sh is not
+-# exercised here (docs/GETTING-STARTED.md §Platforms).
++# The plugin's own gate on Linux.
++#
++# It runs the selftest AND installs the three model checkers, because the
++# runtime model's invariants are only proved where the engines exist. Without
++# them tests/pins/model-invariants-live.sh skips — loudly, but it still leaves
++# CI green while proving nothing, and "the macOS laptop verified it" is not a
++# gate. The install is cached on the pinned versions in install.sh, so a normal
++# run pays a cache restore, not a 350 MB download.
+ name: selftest
+ on:
+   push:
+@@ -8,6 +14,7 @@ on:
+ jobs:
+   selftest:
+     runs-on: ubuntu-latest
++    timeout-minutes: 15
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+@@ -16,5 +23,46 @@ jobs:
+       - uses: actions/setup-python@v5
+         with:
+           python-version: "3.11"
++      # TLC runs in a JVM. install.sh refuses to start without `java`.
++      - uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: "17"
++
++      # Keyed on install.sh itself: every engine version is pinned in that file,
++      # so a version bump invalidates the cache and nothing else does.
++      - name: cache model checkers
++        id: model-checkers
++        uses: actions/cache@v4
++        with:
++          path: ~/.loopkit/tools
++          key: loopkit-model-checkers-${{ runner.os }}-${{ hashFiles('plugins/loopkit/skills/run-state-model/install.sh') }}
++
++      - name: install model checkers
++        if: steps.model-checkers.outputs.cache-hit != 'true'
++        run: bash plugins/loopkit/skills/run-state-model/install.sh
++
++      # Existence is not health — doctor probes each engine's output.
++      - name: model checkers are healthy
++        run: node plugins/loopkit/skills/run-state-model/driver.mjs doctor
++
+       - name: selftest
+         run: bash tests/selftest.sh
++
++      # The pin above runs inside the selftest too, but there it may SKIP and
++      # still report ok. This step exists to fail the build if it skipped: a
++      # suite that reports success by running nothing is the defect this repo
++      # names, and it would be one committed into the gate itself.
++      - name: model invariants were proved here, not skipped
++        run: |
++          set +e
++          out="$(bash tests/pins/model-invariants-live.sh 2>&1)"
++          rc=$?
++          set -e
++          printf '%s\n' "$out"
++          case "$out" in
++            *"skip model checkers not installed"*)
++              echo "::error::the model-invariant pin SKIPPED — this run proved nothing about the runtime model"
++              exit 1 ;;
++          esac
++          exit "$rc"
+
+--- the selftest pin that must land WITH the workflow above ---
+
+# The engines are the difference between proving the model and reporting that
+# you did. CI must install them AND refuse a skipped pin.
+echo "== CI proves the runtime model rather than skipping it"
+mi_wf="$REPO/.github/workflows/selftest.yml"
+# Match the RUN line, not the filename: the cache key names install.sh too, so
+# a grep for the path alone stays green after the install step is deleted. That
+# near miss is this repo's own "verification that cannot fail" class, caught by
+# deleting the step and watching the check pass.
+grep -qE '^ *run: *bash plugins/loopkit/skills/run-state-model/install\.sh *$' "$mi_wf" && ok "CI runs the model-checker installer" || fail "CI no longer runs the model-checker installer"
+if grep -q 'model-invariants-live.sh' "$mi_wf" && grep -q 'skip model checkers not installed' "$mi_wf"; then
+  ok "CI fails the build if the model-invariant pin skips"
+else
+  fail "CI would accept a skipped model-invariant pin"
+fi
+
