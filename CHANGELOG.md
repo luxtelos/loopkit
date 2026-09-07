@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+The guard rail that was only a sentence.
+
+### Added
+
+- **A real driver lock.** `scripts/driver_lock.py` holds an `flock` on
+  `<worktree>/.loopkit/driver.lock` — the worktree, because the thing actually
+  shared is the git INDEX, one file per worktree and process-global within it.
+  The kernel releases it when the holder exits, including on a `SIGKILL`, so
+  there is no stale lock to reap. `driver_lock.py run -- <cmd>` puts any command
+  under it; `driver_lock.py status` says who holds it.
+- **`scripts/loop-commit.sh`** — the one way a loop process commits. It stages
+  and commits the paths you name inside ONE critical section, and uses the
+  `git commit -- <paths>` pathspec form as a second line of defence. There is
+  deliberately no "commit everything" spelling.
+- **`hooks/require_commit_lock.py`** (PreToolUse, Bash) refuses a bare
+  `git commit` in a LoopKit project, naming the wrapper. Passive where there is
+  no `.loopkit/`; openable with `LOOPKIT_COMMIT_UNLOCKED=1` (inline or in the
+  environment) or by naming `commit-without-lock` in
+  `.loopkit/block-disabled.txt`.
+- `scripts/test_driver_lock.py` and `hooks/test_require_commit_lock.py`, wired
+  into `tests/selftest.sh`. The first carries a CONTROL that reproduces the
+  original index sweep before measuring the fixed case, plus mutual exclusion
+  under six concurrent holders, release after a `SIGKILL`, re-entrancy, and the
+  `EX_TEMPFAIL` timeout. The selftest also asserts ten concurrent
+  `triage_state.py upsert` calls keep all ten rows.
+
+### Changed
+
+- `triage_state.py` takes the driver lock around `upsert`, `update` and
+  `ensure-schema` — every one of them was parse-then-write with nothing
+  serialising it. `list` stays lock-free: a status question must never block on
+  a driver mid-commit.
+- `loopkit-init.sh` adds `.loopkit/driver.lock` to `.gitignore` (once, then it
+  respects the project's decision, like every other ignore line it writes).
+- COMMANDS.md, the `CLAUDE.md` standing rules, TOOLS.md, the `loop-tick` skill
+  and the implementer/reviewer agents now point at the mechanism. The old row
+  read "never run two loop drivers concurrently against `state/triage.md`; the
+  state file is the lock", which named the wrong resource and enforced nothing.
+
+### Why
+
+On 2026-09-07, in a downstream project, a reviewer staged exactly one file by
+name and a concurrent driver ran `git add … && git commit` in the same
+worktree. The driver's commit published the reviewer's file under its own
+message; the reviewer's own commit reported "nothing added to commit". Nothing
+was lost and the provenance is wrong — a review verdict sits inside a commit
+about something else. "Name the files" could not have prevented it: the race is
+between an agent's own add and its own commit, and no prose rule can hold a
+lock.
+
 ## 0.2.2 — 2026-09-07
 
 The governance guard, fixed three times in one day. Each defect was found by the

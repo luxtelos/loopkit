@@ -32,7 +32,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance; do
+for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
@@ -40,6 +40,9 @@ echo "== script tests"
 expect_rc 0 "test_loop_next_pick" python3 "$P/scripts/test_loop_next_pick.py"
 expect_rc 0 "test_loop_scan" python3 "$P/scripts/test_loop_scan.py"
 expect_rc 0 "test_inbox_to_triage" python3 "$P/scripts/test_inbox_to_triage.py"
+# Carries its own CONTROL: it reproduces the 2026-09-07 index-sweep first, so
+# the locked case is measured against a race that demonstrably still bites.
+expect_rc 0 "test_driver_lock" python3 "$P/scripts/test_driver_lock.py"
 
 echo "== model-checker driver selftest (stub engines)"
 expect_rc 0 "driver selftest" node "$P/skills/run-state-model/driver.mjs" selftest
@@ -52,6 +55,7 @@ expect_rc 0 "init (first run)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 expect_rc 0 "init (second run, idempotent)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 n="$(grep -c 'loopkit:begin' "$T/CLAUDE.md")"; [ "$n" = 1 ] && ok "CLAUDE.md block appended exactly once" || fail "CLAUDE.md block count=$n"
 grep -qxF '.loopkit/config.env' "$T/.gitignore" && ok ".gitignore ignores config.env" || fail ".gitignore"
+grep -qxF '.loopkit/driver.lock' "$T/.gitignore" && ok ".gitignore ignores the driver lock" || fail "driver.lock not ignored"
 
 # An ignore line init added once is init's LAST word on it. A project that
 # deletes the line and keeps the marker has decided; the old check ("is the
@@ -108,6 +112,22 @@ python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status
 # exits on the first match and the script takes SIGPIPE on its next echo.
 out="$(bash "$P/scripts/loop-next.sh")"
 grep -q '^STAGE: spec-draft' <<<"$out" && ok "transition recorded, stage moves" || fail "update did not move the stage"
+
+# Concurrent writers must not lose a row. Before the driver lock, every mutating
+# command here was parse-then-write with nothing serialising it, and COMMANDS.md's
+# "the state file is the lock" enforced nothing. Ten writers, ten rows, or the
+# lock is not doing its job.
+echo "== state/triage.md survives concurrent writers"
+C="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-conc.XXXXXX")"; mkdir -p "$C/state" "$C/.loopkit"
+python3 "$TS" ensure-schema --state "$C/state/triage.md" >/dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  python3 "$TS" upsert --state "$C/state/triage.md" --finding "row $i" \
+    --source "src $i" --priority low --status new >/dev/null &
+done
+wait
+n="$(python3 "$TS" list --state "$C/state/triage.md" | grep -c 'src ')"
+[ "$n" = 10 ] && ok "10 concurrent upserts kept all 10 rows" || fail "lost rows under concurrency: $n/10"
+find "$C" -delete
 
 # inbox bridge
 printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
