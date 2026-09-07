@@ -398,6 +398,16 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    reader reaches for, and because "it is a hook, so it must be sound" is how
    the shape gets bought a third time.
 
+   The same review offered a second suggestion — "assert on the evaluator's
+   imports" — and that one was right, in the direction if not the unit. The
+   check above is that idea generalised from imports to **names**, and the
+   generalisation is load-bearing rather than tidy-minded: `_BOOT =
+   time.time()` at module level imports nothing inside the function, and
+   `_now=time.time()` in a parameter default imports nothing at all. Both are
+   invisible to an import assertion and both are caught by a name assertion.
+   Imports are a subset of names; the two evaluators that live in the gap are
+   the two nobody had written yet.
+
    **Six more, written to attack this check rather than the old one.** The
    seventeen above were mostly inherited from two rounds of review, which makes
    them a test of the previous check as much as this one. These were chosen by
