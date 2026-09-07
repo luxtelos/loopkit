@@ -272,3 +272,33 @@ What I would fix before submitting, and would rather you decide on:
 
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
+
+## Criterion 23 is wrong and should change: usage absent, never zero (2026-09-07)
+
+A reviewer ruled on the conflict I created between the merged specification and
+the M2 brief, and ruled against the specification — on better grounds than the
+brief itself offered. Recording it here because changing a merged criterion is
+your call, not the loop's.
+
+The specification's criterion 23 says a provider's `usage` SHALL be `0` when the
+upstream reports no count. The reviewer's argument for absent instead:
+
+- `inbox/needs-human.md` Q2 already treats a provider reporting 0 as having an
+  UNLIMITED budget. So criterion 23 makes criterion 21 undecidable: a real zero
+  and a fabricated zero are the same value with opposite meanings.
+- `loop-metrics.py` already returns `None`, not 0, when there is nothing to
+  count. The specification is the outlier, not the code.
+
+Notably the reviewer REJECTED the reason I gave in the brief — that a fabricated
+zero corrupts the tokens-per-task metric — after tracing it: there is no token
+metric yet and nothing consumes `usage`. My reason was speculative; theirs is
+present in the repository today.
+
+- **Change criterion 23 to absent-never-zero.** Cost: a merged criterion is
+  edited, and every future provider must express "no count" rather than "zero".
+- **Keep it and change the providers.** Cost: criterion 21 stays undecidable
+  until Q2 is also answered, and the two criteria contradict each other in the
+  meantime.
+
+The code currently implements absent. Nothing is blocked either way; the
+providers are not merged.
