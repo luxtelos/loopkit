@@ -211,6 +211,52 @@ with tempfile.TemporaryDirectory() as t:
     check(commit_files(root) == {"mine.md"}, f"committed only mine ({commit_files(root)})")
     check(staged(root) == {"theirs.md"}, f"their file is still staged ({staged(root)})")
 
+# --------------------------------------------------------------------------
+# The other shared thing is state/triage.md, and every mutating command there is
+# parse-then-write. Same shape as the git case, so it gets the same treatment: a
+# CONTROL that loses a row without the lock, then the locked run.
+print("== CONTROL: the queue loses a row without the lock, keeps both with it")
+WORKER = """
+import contextlib, importlib.util, sys, time
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("ts", sys.argv[1])
+ts = importlib.util.module_from_spec(spec)
+sys.modules["ts"] = ts        # @dataclass resolves the class's module through
+spec.loader.exec_module(ts)   # sys.modules; without this, exec_module raises
+state, src, locked = Path(sys.argv[2]), sys.argv[3], sys.argv[4] == "lock"
+with (ts.write_lock(state) if locked else contextlib.nullcontext()):
+    table = ts.parse_table(state)
+    time.sleep(0.3)           # the window the lock closes
+    table.rows.append({"finding": src, "source": src, "priority": "low",
+                       "spec": "", "status": "new"})
+    ts.write_table(state, table)
+"""
+TS = str(HERE / "triage_state.py")
+with tempfile.TemporaryDirectory() as t:
+    root = Path(t)
+    (root / ".loopkit").mkdir()
+    for mode, want in (("nolock", 1), ("lock", 2)):
+        state = root / f"{mode}.md"
+        subprocess.run([PY, TS, "ensure-schema", "--state", str(state)],
+                       capture_output=True, cwd=root)
+        ps = [subprocess.Popen([PY, "-c", WORKER, TS, str(state), f"{who}-{mode}", mode],
+                               cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True)
+              for who in ("A", "B")]
+        errs = [p.communicate()[1] for p in ps]
+        check(not any(e.strip() for e in errs),
+              f"{mode}: both writers ran clean" + ("" if not any(errs) else f" ({errs})"))
+        out = subprocess.run([PY, TS, "list", "--state", str(state)],
+                             capture_output=True, text=True, cwd=root).stdout
+        # count ROWS, not occurrences: each row carries the marker twice, once
+        # as the finding and once as the source.
+        got = len([l for l in out.splitlines() if f"-{mode}\t" in l])
+        if mode == "nolock":
+            check(got == want,
+                  f"unlocked: {got}/2 rows survived — the queue race is real too")
+        else:
+            check(got == want, f"locked: {got}/2 rows survived")
+
 print("== loop-commit.sh refuses the shapes that caused this")
 with tempfile.TemporaryDirectory() as t:
     root = new_repo(Path(t), "usage")

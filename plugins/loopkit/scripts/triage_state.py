@@ -271,7 +271,7 @@ def _root_for(state: Path) -> Path:
     return resolved.parent.parent if resolved.parent.name == "state" else resolved.parent
 
 
-def _write_lock(state: Path):
+def write_lock(state: Path):
     """The driver lock, around a read-modify-write of the queue.
 
     Every mutating command here is parse-then-write: two drivers interleaving
@@ -320,7 +320,7 @@ def main() -> int:
     mutating = args.command in {"ensure-schema", "upsert", "update"}
 
     try:
-        with (_write_lock(state_path) if mutating else contextlib.nullcontext()):
+        with (write_lock(state_path) if mutating else contextlib.nullcontext()):
             if args.command == "ensure-schema":
                 ensure_schema(state_path)
                 return 0

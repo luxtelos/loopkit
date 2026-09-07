@@ -127,6 +127,22 @@ done
 wait
 n="$(python3 "$TS" list --state "$C/state/triage.md" | grep -c 'src ')"
 [ "$n" = 10 ] && ok "10 concurrent upserts kept all 10 rows" || fail "lost rows under concurrency: $n/10"
+
+# The inbox bridge is the OTHER writer of this file, and it does not go through
+# triage_state's CLI — it calls upsert_row directly, in a loop, after its own
+# parse. So it has to take the same lock itself or an --apply run racing a
+# direct upsert drops one of them on the next write_table.
+mkdir -p "$C/inbox"
+printf '# needs-human\n\n## Decide the retry budget (2026-01-01)\n\nText.\n' > "$C/inbox/needs-human.md"
+python3 "$P/scripts/inbox_to_triage.py" --inbox "$C/inbox/needs-human.md" --state "$C/state/triage.md" --apply >/dev/null &
+python3 "$TS" upsert --state "$C/state/triage.md" --finding "racer" --source "src 11" --priority low --status new >/dev/null &
+wait
+rows="$(python3 "$TS" list --state "$C/state/triage.md")"
+case "$rows" in *"src 11"*) has_upsert=1 ;; *) has_upsert=0 ;; esac
+case "$rows" in *"retry budget"*) has_bridge=1 ;; *) has_bridge=0 ;; esac
+[ "$has_upsert$has_bridge" = "11" ] \
+  && ok "a bridge --apply racing an upsert loses neither row" \
+  || fail "bridge/upsert race lost a row (upsert=$has_upsert bridge=$has_bridge)"
 find "$C" -delete
 
 # inbox bridge
