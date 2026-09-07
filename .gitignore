@@ -21,3 +21,7 @@ MC.*
 /tmp/
 
 # LoopKit: this repo's gate config is tracked (no webhook, no secrets); see .loopkit/config.env
+# The marker below is what tells loopkit-init.sh that the missing
+# `.loopkit/config.env` line is a decision and not an omission. Delete the
+# marker and the next init will add the line back.
+# loopkit:decided .loopkit/config.env — init wrote this line once and will not re-add it. To opt out, delete the line and keep this comment.

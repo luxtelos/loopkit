@@ -29,26 +29,54 @@ Pins are the load-bearing half. Add one whenever a doc cites a line as evidence
 that a rule is enforced; skip it for incidental pointers, or this becomes
 busywork nobody runs.
 
+WHAT A RUN THAT CHECKS NOTHING REPORTS
+
+A citation checker over a project with no citations used to print
+"Checked 0 citation(s) ... PASS" — a green line for having verified nothing,
+which is the shape this repo names as a defect: a gate that reports success by
+running nothing. Two wrong answers were available. Failing on zero would break
+a project that legitimately cites no line numbers, and there is nothing wrong
+with being such a project. Passing on zero hides a scanned set that no longer
+matches where the docs live — the actual bug found here, where `scanned` missed
+`specs/` and `docs/` entirely.
+
+So the verdict word tracks what was verified, and the exit code is the
+project's decision:
+
+    PASS    at least one citation was checked and every one holds.
+    EMPTY   zero citations and zero pins. Printed loudly, never as PASS.
+    FAIL    a citation is wrong, or a pin no longer holds.
+
+EMPTY exits 0 by default, so adopting the plugin does not turn a citation-free
+repo red on day one. A project that means to keep citations honest sets
+`"allow_empty": false` in its config (or CI passes --fail-on-empty) and EMPTY
+becomes exit 1 — the day the scan stops seeing the docs, the gate says so.
+
 CONFIG  <project>/.loopkit/citations.json (optional):
 
     {
       "scanned": ["CLAUDE.md", "docs/*.md", ".claude/agents/*.md"],
+      "allow_empty": true,
       "pins": [
         ["CLAUDE.md", ".claude/hooks/block_dangerous.py", "gh\\\\s+pr\\\\s+merge", "the merge refusal"]
       ]
     }
 
 `scanned` entries may be globs. Without a config the defaults below apply and
-there are no pins. Dated records (state/, inbox/) are deliberately never
-scanned: they describe what was true when written, and "correcting" them
-would falsify the record.
+there are no pins. The defaults cover the instruction files, the docs tree and
+`specs/` — a spec is the source of truth in this loop, so a citation there
+carries as much weight as one in CLAUDE.md. Dated records (state/, inbox/,
+CHANGELOG.md) are deliberately never scanned: they describe what was true when
+written, and "correcting" them would falsify the record.
 
 USAGE
 
     python3 check-citations.py [--root DIR]     # check
     python3 check-citations.py --list           # show every citation found
+    python3 check-citations.py --fail-on-empty  # EMPTY is a failure in CI
 
-Exit 0 = all good. Exit 1 = at least one citation is wrong.
+Exit 0 = all good. Exit 1 = at least one citation is wrong, or the run was
+EMPTY and the project asked for that to be a failure.
 """
 
 from __future__ import annotations
@@ -61,17 +89,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Where citations live. The first version of this list named the seven files a
+# fresh init creates and nothing else, so on a repo whose docs sit in docs/ and
+# whose truth sits in specs/ it scanned seven files and found nothing to check.
+# Widened to the whole docs tree, specs/, and the plugin-shaped layout (a repo
+# that SHIPS agents and skills keeps them under plugins/<name>/, not .claude/).
 DEFAULT_SCANNED = [
     "CLAUDE.md",
+    "AGENTS.md",
     "constitution.md",
     "README.md",
+    "ROADMAP.md",
     "FILES.md",
     "TOOLS.md",
     "COMMANDS.md",
-    "docs/MUTATION_POLICY.md",
+    "docs/*.md",
+    "docs/*/*.md",
+    "specs/*.md",
     ".claude/agents/*.md",
     ".claude/skills/*/SKILL.md",
     ".claude/skills/*/references/*.md",
+    "plugins/*/agents/*.md",
+    "plugins/*/commands/*.md",
+    "plugins/*/skills/*/SKILL.md",
+    "plugins/*/skills/*/references/*.md",
 ]
 
 # A citation looks like `path/to/file.ext:123`, usually inside backticks.
@@ -96,9 +137,10 @@ def project_root() -> Path:
     return Path.cwd()
 
 
-def load_config(root: Path) -> tuple[list[str], list[tuple[str, str, str, str]]]:
+def load_config(root: Path) -> tuple[list[str], list[tuple[str, str, str, str]], bool]:
     scanned = list(DEFAULT_SCANNED)
     pins: list[tuple[str, str, str, str]] = []
+    allow_empty = True   # adopting the plugin must not turn a citation-free repo red
     cfg = root / ".loopkit" / "citations.json"
     if cfg.is_file():
         try:
@@ -108,10 +150,12 @@ def load_config(root: Path) -> tuple[list[str], list[tuple[str, str, str, str]]]
             sys.exit(1)
         if isinstance(raw.get("scanned"), list):
             scanned = [str(s) for s in raw["scanned"]]
+        if isinstance(raw.get("allow_empty"), bool):
+            allow_empty = raw["allow_empty"]
         for entry in raw.get("pins", []) or []:
             if isinstance(entry, list) and len(entry) == 4:
                 pins.append(tuple(str(x) for x in entry))  # type: ignore[arg-type]
-    return scanned, pins
+    return scanned, pins, allow_empty
 
 
 def expand(root: Path, patterns: list[str]) -> list[str]:
@@ -149,10 +193,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=None)
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--fail-on-empty", action="store_true",
+                    help="exit 1 when the run finds no citations and no pins")
     args = ap.parse_args()
 
     root = Path(args.root).resolve() if args.root else project_root()
-    scanned_patterns, pins = load_config(root)
+    scanned_patterns, pins, allow_empty = load_config(root)
+    if args.fail_on_empty:
+        allow_empty = False
     docs = expand(root, scanned_patterns)
     citations = find_citations(root, docs)
 
@@ -231,6 +279,40 @@ def main() -> int:
             "mechanism is gone."
         )
         return 1
+
+    if not citations and not pins:
+        print(
+            "\nEMPTY — this run verified nothing: no citation and no pin was "
+            "found in the scanned set."
+        )
+        print(
+            "  A project with no `file:line` citations is a legitimate project, "
+            "so this is not a failure by default. It is not a clean bill of "
+            "health either: the same output appears when `scanned` has drifted "
+            "away from where the docs actually live, which is the bug that "
+            "produced this verdict word."
+        )
+        print(f"  Scanned: {', '.join(scanned_patterns) or '(nothing)'}")
+        if allow_empty:
+            print(
+                "  To make this bite, set \"allow_empty\": false in "
+                ".loopkit/citations.json, or run with --fail-on-empty."
+            )
+            return 0
+        print(
+            "\nFAIL — the project set allow_empty=false: it expects citations "
+            "here and there are none. Either the docs lost them, or `scanned` "
+            "no longer points at the docs."
+        )
+        return 1
+
+    if not pins:
+        print(
+            "PASS — every citation resolves (structural only: 0 pins, so no "
+            "cited line was checked for CONTENT. A citation used as evidence "
+            "that a rule is enforced deserves a pin)."
+        )
+        return 0
 
     print("PASS — every citation points at what it claims.")
     return 0
