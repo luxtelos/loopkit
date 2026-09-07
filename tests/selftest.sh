@@ -358,7 +358,7 @@ import json, sys, pathlib
 p = pathlib.Path(sys.argv[1]) / ".loopkit" / "memory.json"
 d = json.loads(p.read_text()); d["knowledge"]["enabled"] = True; p.write_text(json.dumps(d))
 PYX
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "knowledge/ is guarded when enabled" || fail "knowledge guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | env -u GOVERNANCE_EDIT_OK python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "knowledge/ is guarded when enabled" || fail "knowledge guard"
 printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | KNOWLEDGE_EDIT_OK=1 python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 0 ] && ok "KNOWLEDGE_EDIT_OK=1 is the door" || fail "knowledge override"
 python3 - "$T" <<'PYX'
 import json, sys, pathlib
@@ -400,8 +400,12 @@ grep -q 'type: Gate' <<<"$out" && ok "knowledge get prints the concept" || fail 
 out="$($MEM recall "merge" --root "$T")"
 grep -q '^CONCEPTS:' <<<"$out" && grep -q 'never-merge' <<<"$out" && ok "recall spans notes and concepts" || fail "recall+concepts: $out"
 
+# Every probe below that expects a BLOCK runs under `env -u GOVERNANCE_EDIT_OK`.
+# A suite run from a shell carrying the override otherwise reports success while
+# measuring an open door — which it did on 2026-09-07, turning twelve blocked-write
+# assertions green at once.
 echo "== knowledge: guard, queue-source refusal, enqueue+drain a Trap"
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "hand edit of the bundle is refused after init" || fail "bundle guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/knowledge/loop/x.md","content":"y"}}' "$T" | env -u GOVERNANCE_EDIT_OK python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "hand edit of the bundle is refused after init" || fail "bundle guard"
 out="$($MEM knowledge enqueue --target /rulings/bad.md --reason "cites a queue" --type Decision --title "bad" --sources inbox/needs-human.md --body "x" --root "$T" 2>&1)"; rc=$?
 grep -q 'refused' <<<"$out" && [ "$rc" = 3 ] && ok "a queue as a source is refused at enqueue (rc=3)" || fail "queue source: rc=$rc $out"
 out="$($MEM knowledge enqueue --target /billing/period-end-trap.md --reason "trap: period end null on free to paid" --type Trap --title "period_end is NULL after a free-to-paid activation" --tags "lane/billing,domain/billing" --sources constitution.md --body "Observed 4 Sep. Control case: paid firms unaffected." --root "$T" 2>&1)"; rc=$?
@@ -475,7 +479,7 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo sk_live_abcdefg
 [ "$rc" = 2 ] && grep -q 'ruling: no-live-keys' <<<"$err" && ok "a live key literal is refused" || fail "live key: rc=$rc"
 err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe customers list --limit 3"}}' | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/block_dangerous.py" 2>&1 >/dev/null)"; rc=$?
 [ "$rc" = 0 ] && ok "a read-only test-mode call passes" || fail "read-only call blocked: $err"
-printf '{"tool_name":"Write","tool_input":{"file_path":"%s/pricing/plans.json","content":"{}"}}' "$T" | CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "pricing/ is protected under the profile" || fail "pricing guard"
+printf '{"tool_name":"Write","tool_input":{"file_path":"%s/pricing/plans.json","content":"{}"}}' "$T" | env -u GOVERNANCE_EDIT_OK CLAUDE_PROJECT_DIR="$T" python3 "$P/hooks/protect_governance.py" >/dev/null 2>&1; [ $? = 2 ] && ok "pricing/ is protected under the profile" || fail "pricing guard"
 expect_rc 0 "check-snapshot: the template passes" python3 "$P/scripts/check-snapshot.py" --root "$T" --strict
 printf '{"id":"bad","transcript":[{"role":"user","content":"x"}],"state_before":{},"expected_state_after":{"steps":["call refund"]},"cap":1}' > "$T/evals/commerce/bad.json"
 out="$(python3 "$P/scripts/check-snapshot.py" --root "$T")"
@@ -500,6 +504,32 @@ grep -q 'FANOUT: 2/2 briefs exited 0' <<<"$out" && ok "fan-out ran one claude pe
 grep -q -- '--max-turns 3 --allowedTools Read,Grep' "$T/state/fanout/selftest/two.json" && ok "turns and tools are scoped per run" || fail "fanout flags: $(cat "$T/state/fanout/selftest/two.json")"
 [ -z "$(git -C "$T" worktree list | grep fanout-selftest || true)" ] && ok "fan-out worktrees removed" || fail "worktrees left behind"
 grep -q 'nothing was merged' <<<"$out" && ok "fan-out says it merged nothing" || fail "fanout merge line"
+
+# --- criterion 33: prompt bytes per tick, against a real ceiling ------------
+# The brief is the only free-text instruction a Run carries, so the bytes on a
+# brief's stdin ARE that tick's prompt budget. Criterion 33 named this check
+# before it existed: until 2026-09-07 the block above asserted only that
+# `brief_bytes` was PRESENT, never that it was under anything, so the spec
+# cited a ceiling no command applied. It is still a PROXY — a byte count
+# cannot tell prose from a serialised Concept, so it catches growth and misses
+# a smuggled instruction that stays under the cap — but a proxy that can fail.
+BRIEF_CEILING=8192
+brief_bytes_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["brief_bytes"])' "$1"; }
+over=0
+for r in "$T"/state/fanout/selftest/*.json; do
+  b="$(brief_bytes_of "$r")"
+  [ "$b" -le "$BRIEF_CEILING" ] || { over=$((over+1)); echo "   over: $(basename "$r") = $b bytes"; }
+done
+[ "$over" -eq 0 ] && ok "every brief is under the ${BRIEF_CEILING}-byte prompt ceiling (criterion 33)" || fail "$over brief(s) over the ${BRIEF_CEILING}-byte ceiling"
+
+# The control case, measured through the SAME path. Without it the assertion
+# above compares two ~40-byte briefs against 8192 and would pass however
+# broken the comparison was — a gate that cannot fail is not a gate.
+mkdir -p "$T/briefs-over"
+python3 -c 'import sys; sys.stdout.write("# oversized brief\n\n" + "x" * 9000 + "\n")' > "$T/briefs-over/big.md"
+(cd "$T" && PATH="$T/bin:$PATH" bash "$P/scripts/fanout.sh" --briefs "$T/briefs-over" --run-id ceiling --max-turns 1 --allowed-tools "Read") >/dev/null 2>&1
+big="$(brief_bytes_of "$T/state/fanout/ceiling/big.json")"
+[ "$big" -gt "$BRIEF_CEILING" ] && ok "the ceiling can fail: a ${big}-byte brief is measured as over ${BRIEF_CEILING}" || fail "control: oversized brief measured ${big}, not over ${BRIEF_CEILING}"
 
 echo "== judge with a stub claude (specs/pairwise-judge-verdicts.md)"
 J="$P/scripts/judge.py"; JD="$T/judge"; mkdir -p "$JD/bin"
