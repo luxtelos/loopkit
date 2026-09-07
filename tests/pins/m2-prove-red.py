@@ -14,50 +14,90 @@ string; if the target is no longer in the file the run FAILS rather than
 passing quietly, so a module that drifts away from its own pin is caught
 instead of silently losing cover.
 
-SAFETY, because this script WRITES TO SOURCE FILES
+MUTATE A COPY, NEVER THE TRACKED TREE.
 
-Two of these running at once corrupt each other: the second captures its
-"originals" while the first has the file mutated, and then restores that
-mutated text as if it were pristine. Observed for real on 2026-09-07 while
-timing this script beside a suite run, so it is guarded rather than
-documented:
+This script used to write the mutations straight into
+plugins/loopkit/loopkit_core/*.py and restore them a moment later. That is the
+exact shape that put a mutated stop_gate.sh into commit 62943e3 on 2026-09-07:
+tests/pins/stop-gate-prove-red.sh edited a tracked file in place and restored
+it, and a concurrent `git add` landed inside the window. This script's window
+is WIDER than that one -- a selftest subprocess per mutation, nineteen of them,
+about three minutes in total with a tracked source file wrong on disk for most
+of it. The tracked-tree watcher added to tests/selftest.sh caught this script
+red-handed on its first run: "a harness altered the tracked tree DURING the run
+and restored it -- M plugins/loopkit/loopkit_core/provider.py".
 
-  * an exclusive `flock`, anchored to the CHECKOUT (`<repo>/tmp/`, gitignored)
-    and NOT to `TMPDIR`, means a second run REFUSES instead of interleaving.
-    It was TMPDIR-scoped until the third review pointed out that this repo
-    tells people to change TMPDIR on macOS, so the guard's first layer was
-    bypassed by following the instructions;
-  * a pre-flight check refuses to start if any mutation's replacement text is
-    already present, which is what a previous killed run would leave behind;
-  * SIGINT and SIGTERM restore before exiting.
+A restore-afterwards is not a guarantee, it is a race with anything else that
+reads the file. The old docstring's own recovery instructions ("restore with
+`git checkout -- ...provider.py store.py`") were the tell: a harness that needs
+a recovery command is one that can leave the tree wrong.
 
-SIGKILL still cannot be caught -- nothing can -- but the pre-flight check
-turns the wreckage into a loud refusal on the next run instead of a mutated
-file that could be committed. If you ever see that refusal, restore with
-`git checkout -- plugins/loopkit/loopkit_core/provider.py
-plugins/loopkit/loopkit_core/store.py`.
+So nothing under the repo is written now. A scratch skeleton gets a copy of
+plugins/ and every mutation happens there, exactly as stop-gate-prove-red.sh
+and targets-prove-red.sh do it. run_selftest already ran the module with
+cwd=PKG and PYTHONPATH=PKG, so pointing PKG at the copy is all it takes for the
+mutations to keep biting -- and __pycache__ now lands in the scratch dir
+instead of the tracked one. The tracked files are checksummed before and after
+and the run FAILS if they moved, which is the assertion the two sibling scripts
+carry and the only thing standing between a future edit and another mutated
+commit.
+
+The run lock this script used to take is GONE with the hazard it guarded. It
+existed because two concurrent runs mutated the SAME source files and restored
+each other's mutated text as if it were pristine; two runs now mutate two
+private scratch directories and cannot see each other at all. Keeping it would
+have meant a refusal message that describes a race that can no longer happen,
+and a second run of the suite blocked for no reason. The pre-flight check
+stays, and now means something stronger: replacement text found in the TRACKED
+file is no longer "a previous run was killed mid-mutation" but "these sources
+are wrong in git", which is worth refusing over.
 
 usage: python3 tests/pins/m2-prove-red.py [repo-root]
 exit 0 == every mutation went red and every file was restored.
 """
 from __future__ import annotations
 
+import atexit
+import hashlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
-# `tempfile` is deliberately NOT imported any more: the run lock is anchored
-# to the checkout, not to TMPDIR. See lock_path().
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.abspath(
     os.path.join(HERE, "..", "..")
 )
-PKG = os.path.join(ROOT, "plugins", "loopkit")
+
+# The tracked package. READ ONLY, from here to the end of the file -- the only
+# thing that ever touches these paths is a checksum.
+SRC_PKG = os.path.join(ROOT, "plugins", "loopkit")
+
+# The scratch package. Everything below mutates THIS one. The directory is
+# created at import so that PKG is a real path before MUTATIONS is built, and
+# the copy itself is made in main(); `mkdtemp` mode 0700 means no other user
+# can plant a file in the tree a selftest is about to import. `atexit` is the
+# Python equivalent of the `trap ... EXIT` the two sibling prove-red scripts
+# use; the signal handlers below raise SystemExit so it fires on Ctrl-C too.
+SKEL = tempfile.mkdtemp(prefix="m2-prove-red.")
+atexit.register(shutil.rmtree, SKEL, True)
+PKG = os.path.join(SKEL, "plugins", "loopkit")
 PROVIDER = os.path.join(PKG, "loopkit_core", "provider.py")
 STORE = os.path.join(PKG, "loopkit_core", "store.py")
 REDACT = os.path.join(PKG, "loopkit_core", "redact.py")
 NETHTTP = os.path.join(PKG, "loopkit_core", "nethttp.py")
+
+
+def tracked_counterpart(scratch_path: str) -> str:
+    """The tracked file a scratch path is a copy of."""
+    return os.path.join(SRC_PKG, os.path.relpath(scratch_path, PKG))
+
+
+def sha256(path: str) -> str:
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
 
 # The two redirect mutations below both need the SAME opener edit, so it is
 # named once here rather than retyped: two copies of a mutation's target
@@ -402,102 +442,17 @@ def run_selftest(module: str) -> int:
     return proc.returncode
 
 
-def lock_path() -> str:
-    """Where the run lock lives: beside the SOURCE FILES this script mutates.
-
-    It used to be `tempfile.gettempdir()`, which is TMPDIR-scoped -- and this
-    repository's documented macOS workaround is to SET TMPDIR, so two runs
-    following the instructions did not exclude each other at all and only the
-    pre-flight check stood between them and a corrupted tree (2026-09-07 third
-    review, finding 4). The identity that matters is the CHECKOUT whose files
-    get mutated, and ROOT is exactly that: it cannot differ between two runs of
-    the same checkout, and it correctly does NOT serialise two runs in
-    different worktrees, which mutate different files.
-
-    `tmp/` at the repo root is already in .gitignore (`/tmp/`), so the lock
-    leaves `git status` clean -- which the harness's own tree-clean check
-    depends on.
-    """
-    return os.path.join(ROOT, "tmp", "m2-prove-red.lock")
-
-
-# The ONE way to run this script without a lock, and it has to be typed.
-# See `acquire_lock` for why there is exactly one.
-UNLOCKED_ENV = "M2_PROVE_RED_ALLOW_UNLOCKED"
-
-
-def _no_lock(why: str, path: str):
-    """One answer for every reason the lock is unavailable: refuse.
-
-    Round 4 review, finding 2: this script had TWO ways to end up without a
-    lock and gave them OPPOSITE answers -- an uncreatable lock file was a
-    `SystemExit(1)`, while a platform with no `fcntl` printed a warning and
-    ran on. No reason was stated for the difference, and there is not one.
-    The hazard is identical in both cases and is the hazard the lock exists
-    for: two concurrent runs rewrite the SAME source files and restore each
-    other's mutated text as if it were pristine, which leaves a corrupted
-    working tree that the tree-clean check then reports as clean. Whether the
-    lock is missing because the platform has no flock or because the path is
-    unwritable changes nothing about that. Loud is not the same as safe, and a
-    lock that is sometimes advisory is a lock nobody can reason about.
-
-    So: refuse in both, and offer ONE deliberate escape hatch covering both,
-    which a human has to type. An env var is a decision with a name on it; a
-    printed warning in a 14-mutation run is a line nobody reads.
-    """
-    if os.environ.get(UNLOCKED_ENV) == "1":
-        print(
-            "  UNLOCKED BY REQUEST (%s=1): %s\n"
-            "  Two concurrent runs will corrupt each other's source files.\n"
-            "  The pre-flight check is the only guard left." % (UNLOCKED_ENV, why)
-        )
-        return None
-    print(
-        "REFUSED: %s (lock path: %s).\n"
-        "  This script rewrites source files in place and will not do it\n"
-        "  without a lock: two runs restore each other's mutated text as if\n"
-        "  it were pristine, and the tree-clean check then passes on a\n"
-        "  corrupted tree.\n"
-        "  If you accept that risk, re-run with %s=1." % (why, path, UNLOCKED_ENV)
-    )
-    raise SystemExit(1)
-
-
-def acquire_lock():
-    """Refuse to run beside another instance. Returns the held fd, or None.
-
-    Every path out of here is a REFUSAL except a lock actually held (or the
-    explicit `M2_PROVE_RED_ALLOW_UNLOCKED=1` opt-out). `None` is returned only
-    on that opt-out, never as a silent fallback.
-    """
-    path = lock_path()
-    try:
-        import fcntl
-    except ImportError:  # pragma: no cover - not POSIX
-        return _no_lock("this platform has no fcntl, so no lock can be taken", path)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    except OSError as exc:
-        return _no_lock(
-            "cannot create the run lock (%s)" % exc.strerror, path
-        )
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        print(
-            "REFUSED: another m2-prove-red run holds %s.\n"
-            "  Two runs mutate the same source files and restore each other's\n"
-            "  mutated text as if it were pristine. Wait for the other run."
-            % path
-        )
-        raise SystemExit(1)
-    return fd
-
-
 def preflight(originals) -> list:
-    """Refuse to start on a tree a previous run left mutated."""
+    """Refuse to start when a mutation's replacement text is already there.
+
+    This used to mean "a previous run of this script was killed mid-mutation",
+    which was the only way it could happen while the script wrote to the
+    tracked tree. It cannot happen that way any more -- `originals` is read
+    from a scratch copy made this second from git-tracked content -- so a hit
+    here now says the TRACKED source carries the defect the mutation exists to
+    reintroduce. That is a louder finding than the one it was written for, and
+    still the right answer: refuse, and say which file.
+    """
     dirty = []
     for mut_id, _module, _why, edits in MUTATIONS:
         for path, _old, new in edits:
@@ -512,10 +467,29 @@ def preflight(originals) -> list:
 
 
 def main() -> int:
-    lock_fd = acquire_lock()
+    # Stage the scratch copy. The WHOLE plugin, not just the four files that
+    # get mutated: the modules import their siblings, and run_selftest runs
+    # them with cwd=PKG. A copy, never a symlink -- an import through a
+    # symlinked package writes __pycache__ back into the tracked tree, which
+    # is the thing this rewrite exists to stop.
+    if not os.path.isdir(SRC_PKG):
+        print("no plugin to copy at %s" % SRC_PKG)
+        return 2
+    os.makedirs(os.path.dirname(PKG), exist_ok=True)
+    shutil.copytree(SRC_PKG, PKG)
+
     # Derived from MUTATIONS, not hardcoded: a mutation naming a file the
     # restore loop did not know about would leave that file mutated on disk.
     targets = sorted({path for _id, _m, _w, edits in MUTATIONS for path, _o, _n in edits})
+    for path in targets:
+        if not os.path.isfile(path):
+            print("mutation target missing from the staged copy: %s" % path)
+            return 2
+    # The assertion the two sibling prove-red scripts carry: the tracked files
+    # are not written to. Cheap, and the only thing standing between a future
+    # edit of this script and another mutated commit.
+    tracked = {path: tracked_counterpart(path) for path in targets}
+    tracked_sums = {src: sha256(src) for src in tracked.values()}
     originals = {path: open(path).read() for path in targets}
 
     dirty = preflight(originals)
@@ -525,10 +499,10 @@ def main() -> int:
         return 1
 
     def restore_and_die(signum, _frame):  # pragma: no cover - signal path
-        for path, text in originals.items():
-            with open(path, "w") as handle:
-                handle.write(text)
-        print("\n  interrupted (signal %d) -- source files restored" % signum)
+        # Nothing tracked is ever wrong on disk now, so there is nothing to
+        # put back. SystemExit is still raised rather than os._exit, because
+        # that is what runs the atexit hook that removes the scratch tree.
+        print("\n  interrupted (signal %d) -- scratch copy discarded" % signum)
         raise SystemExit(130)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -587,8 +561,15 @@ def main() -> int:
         if open(path).read() != text:
             print("  RESTORE FAILED: %s" % path)
             return 1
-    if lock_fd is not None:
-        os.close(lock_fd)
+    # The rule this script now follows, asserted rather than trusted.
+    moved = [src for src, want in tracked_sums.items() if sha256(src) != want]
+    if moved:
+        for src in moved:
+            print("  NOT RED  THIS SCRIPT MODIFIED THE TRACKED %s. Restore it"
+                  % os.path.relpath(src, ROOT))
+            print("           from git before committing anything.")
+        return 1
+    print("  ok — the tracked loopkit_core sources were never written to")
     return 0
 
 

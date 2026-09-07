@@ -21,6 +21,113 @@ expect_rc() {  # <want> <label> <cmd...>
   if [ "$got" = "$want" ]; then ok "$label (rc=$got)"; else fail "$label (rc=$got, want $want)"; fi
 }
 
+# --------------------------------------------------------------------------
+# A HARNESS MAY NOT WRITE TO THE TRACKED TREE. Watched, not asked.
+#
+# On 2026-09-07 tests/pins/stop-gate-prove-red.sh mutated the tracked
+# plugins/loopkit/hooks/stop_gate.sh in place and restored it a second later. A
+# concurrent `git add` landed inside that window and the mutation went into
+# commit 62943e3 — the very bug the commit claimed to fix, shipped inside the
+# fix. tests/pins/targets-prove-red.sh had the identical shape against the
+# tracked spec fixtures and was missed on the first sweep, because the sweep was
+# a person reading scripts.
+#
+# Both are fixed to mutate scratch copies, and each asserts its own checksums.
+# This is the guard that does not depend on remembering: it samples the tracked
+# tree twice a second for the whole run and reports ANY deviation from the state
+# the suite started in. Twice a second is chosen against the observed window —
+# seconds per mutation, not milliseconds.
+#
+# The baseline is the tree AS FOUND, not a clean tree, because a developer runs
+# this suite with uncommitted work. What is asserted is that the suite changes
+# nothing, which is true whether the tree started clean or dirty.
+#
+# WHAT COUNTS AS A DEVIATION, and why it is not raw string inequality.
+#
+# The first version compared `git status --porcelain` verbatim against the
+# baseline, and that fires on things the suite did not do. Observed on
+# 2026-09-07: a run started with a merge STAGED but not committed, the commit
+# landed from another shell mid-run, and the watcher reported a "deviation"
+# that was simply the baseline with the committed paths gone. Nothing had
+# written to the tree; three paths had stopped being dirty. Agents run this
+# suite mid-merge all day, and a guard that cries wolf is a guard somebody
+# switches off -- which is how the class comes back.
+#
+# So the comparison is over the SET OF PATHS that are dirty, and only paths
+# that are dirty NOW and were CLEAN at the baseline count. A harness writing to
+# the tracked tree can only make it dirtier, so that is the direction worth
+# watching; a path leaving the dirty set means somebody outside the suite
+# committed, stashed or restored it, which is not this suite's business. It
+# also stops an external `git add` counting, because staging moves ` M path` to
+# `M  path` without touching the path set.
+#
+# On a clean tree -- CI, and any release run -- the baseline path set is empty
+# and this is exactly as strict as comparing the whole string. Two things it
+# gives up, stated rather than discovered: a harness that WRITES to a file the
+# developer had already dirtied is missed, and an edit made from another shell
+# to a clean file during the run is still blamed on the suite. The first is a
+# path where the watcher could never have told you anything trustworthy; the
+# second fails loud, which is the safe direction.
+#
+# `sed 's/^...//'`: porcelain v1 is `XY <path>`, so the path starts at column 4.
+# `s/^.* -> //`: a rename reads `R  old -> new` and the destination is the
+# entry that is dirty. A path that literally contains " -> " would be truncated
+# to its tail -- it would still be a stable key, which is all this needs.
+tw_paths() { sed -e 's/^...//' -e 's/^.* -> //' -e '/^$/d' | LC_ALL=C sort -u; }
+# The paths dirty in $2 that were not dirty in $1. Empty output == no deviation.
+tw_newly_dirty() {
+  comm -13 <(printf '%s\n' "$1" | tw_paths) <(printf '%s\n' "$2" | tw_paths)
+}
+
+# A guard nobody has seen fail is not a guard, and this one only ever speaks up
+# when something is wrong -- so its comparator is fed known inputs here, at the
+# top, where a broken comparator is reported instead of quietly passing the
+# whole suite. Cheap: no git, no subshell loop, just the two rules.
+echo "== the tracked-tree watcher's own comparator"
+tw_t_base="$(printf 'M  a.json\n M b.md\nM  c.md')"
+[ "$(tw_newly_dirty "$tw_t_base" "$(printf 'M  a.json\n M b.md\nM  c.md\n M src/new.py')")" = "src/new.py" ] \
+  && ok "a newly dirty path is a deviation (this is the 62943e3 shape)" \
+  || fail "comparator does NOT flag a newly dirty path — the watcher below cannot catch anything"
+[ -z "$(tw_newly_dirty "$tw_t_base" "$(printf 'M  a.json')")" ] \
+  && ok "paths leaving the dirty set are not a deviation (an outside commit)" \
+  || fail "comparator flags an outside commit — the watcher below will cry wolf"
+[ -z "$(tw_newly_dirty "$tw_t_base" "$(printf 'MM a.json\nM  b.md\nM  c.md')")" ] \
+  && ok "restaging a path already dirty is not a deviation" \
+  || fail "comparator flags an outside git add"
+[ "$(tw_newly_dirty "" "$(printf ' M plugins/loopkit/loopkit_core/provider.py')")" = "plugins/loopkit/loopkit_core/provider.py" ] \
+  && ok "on a clean tree any dirty path is a deviation" \
+  || fail "comparator is blind on a clean tree — the CI case"
+
+TREEWATCH_PID=""; TREEWATCH_LOG=""; TREEWATCH_BASE=""
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  TREEWATCH_BASE="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+  TREEWATCH_LOG="$(mktemp "${TMPDIR:-/tmp}/loopkit-treewatch.XXXXXX")"
+  # --no-optional-locks: a poller must never take the index lock out from under
+  # anything else, and must never write the index it is only reading.
+  (
+    while :; do
+      now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+      if [ "$now" != "$TREEWATCH_BASE" ]; then
+        # Judged HERE, not at the end: the deviation is transient by
+        # definition, so the sample that saw it is the only place it exists.
+        tw_new="$(tw_newly_dirty "$TREEWATCH_BASE" "$now")"
+        [ -z "$tw_new" ] || printf '%s\n' "$tw_new" >> "$TREEWATCH_LOG"
+      fi
+      sleep 0.5
+    done
+  ) &
+  TREEWATCH_PID=$!
+  # This watcher never exits on its own, and the suite below calls a BARE `wait`
+  # twice (the concurrent-writer sections). A bare wait waits for EVERY job in
+  # the table, so without this line the suite hangs at the first one until it is
+  # killed — observed, not theorised. `disown` takes the watcher out of the job
+  # table; it is still a child, so `kill` still reaches it.
+  disown "$TREEWATCH_PID" 2>/dev/null || true
+else
+  echo "  NOTE tracked-tree watch is OFF — $REPO is not a git checkout, so this"
+  echo "       run cannot tell you whether a harness dirtied it."
+fi
+
 echo "== syntax and manifests"
 for f in "$P"/hooks/*.sh "$P"/scripts/*.sh "$P"/skills/run-state-model/install.sh; do
   bash -n "$f" && ok "bash -n $(basename "$f")" || fail "bash -n $f"
@@ -853,6 +960,16 @@ else
   fail "tests/pins/fixture-derivable.py is missing"
 fi
 
+# And that pin must be able to fail. `targets` was recomputed from a hand-written
+# reading of an undefined noun and agreed with every fixture by construction;
+# agreement is only evidence when disagreement was possible. This ran nowhere
+# until 2026-09-07 — a prove-red nothing invokes proves nothing.
+echo "== M1 runtime spec: the targets derivation can disagree with a fixture"
+tpr_out="$(bash "$REPO/tests/pins/targets-prove-red.sh" "$REPO" 2>&1)"; tpr_rc=$?
+printf '%s\n' "$tpr_out" | grep -E '^  (NOT RED|  NOT RED)' || true
+[ "$tpr_rc" = 0 ] && ok "every fixture with targets goes red when its targets are perturbed" \
+  || fail "targets mutations: $(printf '%s' "$tpr_out" | tail -1)"
+
 echo "== M1 runtime spec: every model assertion can fail"
 if [ -f "$REPO/tests/pins/model-invariants-live.sh" ]; then
   mi_out="$(bash "$REPO/tests/pins/model-invariants-live.sh" 2>&1)"
@@ -1002,6 +1119,40 @@ notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
 
+echo "== stop gate: every branch shape gates, and a missing base is announced"
+# Detached HEAD, a trunk not called main, a CI checkout with no local main, and
+# orphan branches each used to revert the gate to working-tree-only — the exact
+# bug the gate was fixed for, restored silently.
+bs_out="$(bash "$REPO/tests/pins/stop-gate-branch-shapes.sh" "$REPO" 2>&1)"; bs_rc=$?
+printf '%s\n' "$bs_out" | grep -E '^  FAIL' || true
+[ "$bs_rc" = 0 ] && ok "every branch shape gates, and no-base is announced out loud" \
+  || fail "branch shapes: $(printf '%s' "$bs_out" | tail -1)"
+# And that pin must be able to fail.
+bsr_out="$(bash "$REPO/tests/pins/stop-gate-prove-red.sh" "$REPO" 2>&1)"
+bsr_n="$(printf '%s' "$bsr_out" | grep -c 'RED, as required' || true)"
+bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
+[ "$bsr_n" = 4 ] && [ "$bsr_not" = 0 ] && ok "all four halves of the branch-shape fix are provably catchable" \
+  || fail "branch-shape mutations: $bsr_n/4 red, $bsr_not not red"
+
+echo "== remote gate runner: its verdict can be false"
+# `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
+# tools/remote-gate.sh exited 0 on a suite printing "FAILURE: 3 checks failed".
+# A runner whose verdict cannot be false is not a verdict.
+rg_out="$(bash "$REPO/tests/pins/remote-gate-status.sh" "$REPO" 2>&1)"; rg_rc=$?
+printf '%s\n' "$rg_out" | grep -E '^  FAIL' || true
+[ "$rg_rc" = 0 ] && ok "the remote gate runner goes red on a failing suite and green on a passing one" \
+  || fail "remote gate status: $(printf '%s' "$rg_out" | tail -1)"
+
+echo "== remote gate runner: its verdict is about the tree you have"
+# An add/add merge kept the version that clones from GitHub inside the
+# container, so the gate judged PUSHED state only: `REMOTE GATE: PASS` on a
+# dirty worktree that was never sent, silently. An honest verdict about the
+# wrong tree is no better than a dishonest one, and nothing in the tree could
+# see the difference until this pin.
+rgt_out="$(bash "$REPO/tests/pins/remote-gate-sends-working-tree.sh" "$REPO" 2>&1)"; rgt_rc=$?
+printf '%s\n' "$rgt_out" | grep -E '^  FAIL' || true
+[ "$rgt_rc" = 0 ] && ok "the remote gate sends the working tree, says so, and keeps bare-host mode" \
+  || fail "remote gate tree: $(printf '%s' "$rgt_out" | tail -1)"
 
 # The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
 # all four unreviewed" and handed the owner all four in the same breath. The
@@ -1090,6 +1241,35 @@ for c in "ssh host \"echo \$CODEX_GITHUB_PAT\"" \
   run_hook "$c"
   [ "$HOOK_RC" = 0 ] && ok "allowed: ${c:0:44}" || fail "FALSE POSITIVE (rc=$HOOK_RC): $c"
 done
+
+# The verdict of the watcher started at the top of this file. Deliberately the
+# LAST check, so it covers every harness above it. It fails on two distinct
+# things and says which: residue (a harness left the tree changed) and a window
+# (a harness changed the tree and put it back). The second is the one that put
+# a mutated stop_gate.sh into a commit, and the only one an end-of-run
+# `git status` cannot see.
+echo "== no harness wrote to the tracked tree"
+if [ -n "$TREEWATCH_PID" ]; then
+  kill "$TREEWATCH_PID" 2>/dev/null || true
+  # It is disowned, so `wait` cannot be used. Give a sample already in flight
+  # longer than one poll interval to finish appending before the log is read.
+  sleep 0.7
+  tw_now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+  # Same rule as the sampler, or the two verdicts would disagree about what a
+  # deviation is: newly dirty paths only, so a commit landing from another
+  # shell mid-run is not reported as residue this suite left behind.
+  tw_residue="$(tw_newly_dirty "$TREEWATCH_BASE" "$tw_now")"
+  if [ -n "$tw_residue" ]; then
+    fail "the suite DIRTIED tracked paths and left them dirty: $(printf '%s' "$tw_residue" | tr '\n' ' ' | cut -c1-200)"
+  elif [ -s "$TREEWATCH_LOG" ]; then
+    fail "a harness dirtied tracked paths DURING the run and restored them — a concurrent git add inside that window is how 62943e3 happened. First seen: $(sort -u "$TREEWATCH_LOG" | head -3 | tr '\n' ' ')"
+  else
+    ok "the tracked tree was never observed to differ from the state this run started in"
+  fi
+  rm -f "$TREEWATCH_LOG"
+else
+  echo "  NOTE no tracked-tree verdict: this run is not in a git checkout."
+fi
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
