@@ -121,7 +121,20 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
+# The redactor is shared with store.py rather than copied. Two copies of one
+# redactor drift, and the copy that drifts is the one nobody re-reads: that is
+# exactly how `S3Store._scrub` ended up two reviews behind this file's defence
+# against the same `%r` escaping.
+#
+# This file is run BOTH ways: `python3 -m loopkit_core.provider --selftest`
+# and `python3 plugins/loopkit/loopkit_core/provider.py --selftest`. Under the
+# second, sys.path[0] is the package DIRECTORY, so `loopkit_core` is not
+# importable until its parent is on the path.
+if __package__ in (None, ""):  # pragma: no cover - exercised by the path gate
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from loopkit_core.redact import Redactor, url_secrets  # noqa: E402
 
 __all__ = [
     "Provider",
@@ -341,14 +354,10 @@ def _url_secrets(url: str) -> List[str]:
     """The userinfo an operator put in a URL, so the redactor can know it too.
 
     Structural scrubbing (`_safe_url`) is the primary defence; registering
-    these with the `_Redactor` is the backstop for text this module did not
+    these with the `Redactor` is the backstop for text this module did not
     compose itself -- an exception raised inside urllib, say.
     """
-    try:
-        parts = urllib.parse.urlsplit(url)
-        return [p for p in (parts.username, parts.password) if p]
-    except ValueError:
-        return []
+    return url_secrets(url)
 
 
 def _safe_url(url: str) -> str:
@@ -384,26 +393,16 @@ def _safe_url(url: str) -> str:
     return "%s://%s" % (scheme or "?", host or "?")
 
 
-class _Redactor:
-    """Scrubs known secret substrings out of anything on its way to a human."""
-
-    def __init__(self, secrets: Iterable[Optional[str]] = ()) -> None:
-        self._secrets = sorted(
-            {s for s in secrets if isinstance(s, str) and len(s) >= 4},
-            key=len,
-            reverse=True,
-        )
-
-    def add(self, secret: Optional[str]) -> None:
-        if isinstance(secret, str) and len(secret) >= 4 and secret not in self._secrets:
-            self._secrets.append(secret)
-            self._secrets.sort(key=len, reverse=True)
-
-    def scrub(self, text: str) -> str:
-        for secret in self._secrets:
-            if secret in text:
-                text = text.replace(secret, "***")
-        return text
+# `_Redactor` used to live here as a literal-substring scrubber:
+#
+#     if secret in text: text = text.replace(secret, "***")
+#
+# Any `%r` defeats that -- a newline in a credential becomes backslash-n, so
+# the secret in the text is no longer the secret in memory. It has been
+# replaced by the shared, escape-robust `Redactor` in loopkit_core/redact.py,
+# which matches the parts of a secret that survive ANY character-escaping
+# instead of enumerating escapers. Pinned by P9.
+_Redactor = Redactor
 
 
 def _no_proxy_opener() -> urllib.request.OpenerDirector:
@@ -495,10 +494,33 @@ class _HttpProvider:
         # base URL. Registering the URL's credentials is what makes the
         # scrubber cover text this module did not compose -- an exception
         # raised inside urllib, for instance.
-        self._redact = _Redactor([api_key] + _url_secrets(base_url))
+        self._redact = Redactor([api_key] + _url_secrets(base_url))
         self._api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # REFUSE every scheme but http(s), decided rather than left open
+        # (2026-09-07 review). `build_opener` keeps urllib's default handler
+        # set, `FileHandler` and `FTPHandler` included, so a `file://` base URL
+        # makes `complete()` READ A LOCAL FILE and return its contents as model
+        # output -- no network call, no error, and `_safe_url` renders it as
+        # `file://?`, which hides WHICH file. An LLM endpoint is http(s) by
+        # definition, so nothing legitimate is lost. Checked here rather than
+        # in each subclass: both of them end __init__ with this super() call,
+        # so this is the one place every base URL passes through.
+        scheme = ""
+        try:
+            scheme = urllib.parse.urlsplit(self.base_url).scheme
+        except ValueError:  # pragma: no cover - urlsplit is lazy, but be safe
+            scheme = ""
+        if scheme not in ("http", "https"):
+            raise ProviderError(
+                self._redact.scrub(
+                    "base URL scheme %r is not supported: providers speak http "
+                    "and https only. urllib would otherwise serve file:// and "
+                    "ftp:// from its default handlers and return local bytes as "
+                    "model output." % scheme
+                )
+            )
         self._opener = _no_proxy_opener()
 
     def _post_json(
@@ -556,8 +578,17 @@ class _HttpProvider:
                 self._redact.scrub("%s %s: unusable endpoint URL (%s)" % (where, label, type(exc).__name__))
             ) from None
         except Exception as exc:  # timeouts, socket errors
+            # NAME THE TYPE, NEVER THE TEXT. This is the catch-all: by
+            # definition it holds the exceptions nobody enumerated, so it is
+            # the one branch that must not interpolate an unknown message. The
+            # `ValueError` branch above has worked this way since the first
+            # review; `store.py`'s equivalent did not, and leaked a whole
+            # signed Authorization header for two more reviews.
             raise ProviderTransportError(
-                self._redact.scrub("%s %s failed: %s" % (where, label, exc))
+                self._redact.scrub(
+                    "%s %s failed: %s (message withheld: catch-all)"
+                    % (where, label, type(exc).__name__)
+                )
             ) from None
         try:
             return json.loads(payload.decode("utf-8"))
@@ -1474,6 +1505,306 @@ def _pin_leak_sweep() -> None:
     server.server_close()
 
 
+def _pin_leak_sweep_nasty() -> None:
+    """PIN P9: the same hunt as P8, with a sentinel P8's could not have caught.
+
+    P8's sentinel is plain ASCII (`ZZ-LEAK-SENTINEL-9911-ZZ`). Every redactor
+    in this package matched it by literal substring, so P8 could pass while the
+    redactor was defeated by ANY escaping -- which is exactly what happened in
+    `store.py`, where an access key carrying a trailing newline made
+    `putheader` raise `ValueError("Invalid header value %r" % value)` and `%r`
+    turned the newline into backslash-n, so the literal `in` test was False and
+    the whole signed `Authorization` header reached the operator.
+
+    So P9's sentinel carries a newline, a tab, both quote characters and two
+    non-ASCII characters, and detection asks the question `%r` cannot make
+    false: is any part of the secret that SURVIVES escaping present?
+    """
+    import base64 as _b64
+    import shlex
+    import xml.sax.saxutils as _saxutils
+
+    sentinel = "ZZ-PROV-LEAK-9911-c0ffee\n\tq\"'éΩ-ZZ"
+    # The escape-invariant core. Written as a literal, not computed from
+    # redact.py, so the pin does not grade the implementation with the
+    # implementation's own ruler.
+    core = "ZZ-PROV-LEAK-9911-c0ffee"
+    raw = sentinel.encode("utf-8")
+    forms = sorted(
+        {
+            f
+            for f in {
+                sentinel,
+                core,
+                repr(sentinel)[1:-1],
+                repr(raw)[2:-1],
+                json.dumps(sentinel)[1:-1],
+                json.dumps(sentinel, ensure_ascii=False)[1:-1],
+                urllib.parse.quote(sentinel, safe=""),
+                sentinel.encode("unicode_escape").decode("ascii"),
+                sentinel.encode("ascii", "backslashreplace").decode("ascii"),
+                shlex.quote(sentinel),
+                _saxutils.escape(sentinel),
+                _b64.b64encode(raw).decode("ascii"),
+                raw.hex(),
+            }
+            if len(f) >= 8
+        },
+        key=len,
+        reverse=True,
+    )
+
+    def hits(text: str) -> List[str]:
+        return [f[:24] for f in forms if f in text]
+
+    seen_headers: List[Dict[str, str]] = []
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            seen_headers.append(
+                dict({k.lower(): v for k, v in self.headers.items()}, _path=self.path)
+            )
+            # Echo the credential straight back: the one path where the
+            # REDACTOR, not the shape of the message, is all that stands
+            # between the key and a human.
+            body = json.dumps(
+                {
+                    "error": {
+                        "message": "rejected: %s %s"
+                        % (self.headers.get("Authorization", ""), self.headers.get("x-api-key", ""))
+                    }
+                }
+            ).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    live = "http://127.0.0.1:%d" % server.server_address[1]
+
+    endpoints = [
+        ("dead host", "http://127.0.0.1:9"),
+        ("live upstream echoing the key back", live),
+        ("userinfo, dead host", "http://u:%s@127.0.0.1:9" % sentinel),
+        ("credential in the PATH", "http://127.0.0.1:9/%s" % sentinel),
+        ("credential in the QUERY", "http://127.0.0.1:9/x?token=%s" % sentinel),
+        ("malformed port", "http://u:%s@127.0.0.1:99999999" % sentinel),
+        ("non-numeric port", "http://u:%s@127.0.0.1:notaport" % sentinel),
+        ("scheme-less", "//u:%s@127.0.0.1:9" % sentinel),
+        ("file:// base URL", "file:///etc/hosts"),
+        ("unknown scheme", "gopher://u:%s@127.0.0.1:9" % sentinel),
+    ]
+    keys = [
+        ("api key + trailing newline", core + "\n"),
+        ("api key IS the sentinel", sentinel),
+        ("api key + embedded tab", core + "\t"),
+        ("api key + embedded quote", core + '"'),
+        ("no key", None),
+    ]
+
+    leaked: List[str] = []
+    calls = 0
+    try:
+        for factory_name, factory in (
+            ("openai-compat", OpenAICompatProvider),
+            ("anthropic", AnthropicProvider),
+        ):
+            for where, base_url in endpoints:
+                for key_label, key in keys:
+                    label = "%s / %s / %s" % (factory_name, where, key_label)
+
+                    def drive(f=factory, b=base_url, k=key):
+                        return f(base_url=b, api_key=k, model="pin-model").complete(
+                            [{"role": "user", "content": "x"}],
+                            tools=[{"name": "grep", "parameters": {"type": "object"}}],
+                            response_schema={"type": "object", "title": "answer"},
+                        )
+
+                    calls += 1
+                    result, error, streams = _capture(drive)
+                    for kind, text in (("traceback", error), ("stdout/stderr", streams)):
+                        hit = hits(text)
+                        if hit:
+                            leaked.append("%s -> %s %r: %s" % (label, kind, hit, text.strip()[:100]))
+                    if result is not None and hits(canonical_json(result)):
+                        leaked.append("%s -> returned value" % label)
+                    if error and not error.split(":")[0].startswith("Provider"):
+                        leaked.append(
+                            "%s -> raised %s, not a ProviderError" % (label, error.split(":")[0])
+                        )
+        _check(
+            "P9a a sentinel carrying a newline, a tab, both quotes and non-ASCII "
+            "reaches no traceback, stream or return value, and every raise is a "
+            "ProviderError (%d paths, %d escaped renderings checked)" % (calls, len(forms)),
+            not leaked,
+            " | ".join(leaked[:3]),
+        )
+
+        # The wire. An API KEY belongs in `Authorization`/`x-api-key` -- that is
+        # what a key IS -- so the property pinned is the narrower true one: a
+        # DAMAGED key never reaches the wire in a header it does not belong in,
+        # and URL userinfo is never promoted onto the wire at all.
+        seen_headers.clear()
+        control = OpenAICompatProvider(base_url=live, api_key="sk-live-decoy", model="pin-model")
+        _capture(lambda: control.complete([{"role": "user", "content": "x"}]))
+        _check(
+            "P9b-control the observation channel works: a plain request IS seen",
+            len(seen_headers) == 1 and "authorization" in seen_headers[0],
+            "seen=%r" % (seen_headers,),
+        )
+
+        seen_headers.clear()
+        _capture(
+            lambda: OpenAICompatProvider(
+                base_url="http://%s:%s@127.0.0.1:%d" % (sentinel, sentinel, server.server_address[1]),
+                api_key="sk-live-decoy",
+                model="pin-model",
+            ).complete([{"role": "user", "content": "x"}])
+        )
+        on_wire = [
+            "%s=%s" % (name, value[:40])
+            for headers in seen_headers
+            for name, value in headers.items()
+            if name != "_path" and hits(value)
+        ] + ["path=%s" % h["_path"] for h in seen_headers if hits(h["_path"])]
+        # HONEST NOTE, or this assertion reads stronger than it is: urllib
+        # never RESOLVES a userinfo URL -- it treats `user:pw@host` as one
+        # hostname and DNS fails -- so `len(seen_headers)` here is 0 and "no
+        # leak reached the server" and "the pin never fired" print the same.
+        # P9b-control is what keeps it from being vacuous, and P9c2 below adds
+        # a wire assertion that DOES fire.
+        _check(
+            "P9c URL userinfo is never promoted onto the wire, even carrying a "
+            "newline (%d requests reached the server; urllib refuses to resolve "
+            "a userinfo URL at all, so see P9c2)" % len(seen_headers),
+            not on_wire,
+            "%r" % on_wire[:3],
+        )
+
+        # A wire assertion that really fires. A TAB in an API key is accepted
+        # by `putheader` (only CR and LF are rejected), so this request does
+        # reach the server -- and the property worth pinning is that the key
+        # lands ONLY where a key belongs. If a future edit ever composed the
+        # key into the Host header, the request line or a second header, this
+        # goes red with a real request on the wire to point at.
+        seen_headers.clear()
+        damaged = core + "\t"
+        _capture(
+            lambda: OpenAICompatProvider(
+                base_url=live, api_key=damaged, model="pin-model"
+            ).complete([{"role": "user", "content": "x"}])
+        )
+        misplaced = [
+            "%s=%s" % (name, value[:40])
+            for headers in seen_headers
+            for name, value in headers.items()
+            if core in value and name not in ("authorization",)
+        ] + ["path=%s" % h["_path"] for h in seen_headers if core in h["_path"]]
+        _check(
+            "P9c2 a key carrying a tab DOES reach the wire, and lands ONLY in "
+            "Authorization -- not in Host, not in the request line, not in any "
+            "other header (%d requests reached the server)" % len(seen_headers),
+            len(seen_headers) == 1 and not misplaced,
+            "seen=%d misplaced=%r" % (len(seen_headers), misplaced[:3]),
+        )
+
+        # The redactor itself, driven over escapers redact.py does not
+        # enumerate. This is the pin `store.py` did not have, which is why a
+        # leak survived two reviews there.
+        redactor = _Redactor([sentinel])
+        survived = []
+        for label, text in (
+            ("raw", sentinel),
+            ("repr(str)", repr(sentinel)),
+            ("repr(bytes)", repr(raw)),
+            ("putheader ValueError", "Invalid header value %r" % ("Bearer " + sentinel).encode()),
+            ("json", json.dumps(sentinel)),
+            ("percent-encoded", urllib.parse.quote(sentinel, safe="")),
+            ("shell-quoted", shlex.quote(sentinel)),
+            ("XML entities", _saxutils.escape(sentinel)),
+            ("base64", _b64.b64encode(raw).decode("ascii")),
+            ("hex", raw.hex()),
+        ):
+            if hits(redactor.scrub("upstream said: " + text)):
+                survived.append(label)
+        _check(
+            "P9d the redactor survives repr-, JSON-, percent-, shell-, entity-, "
+            "base64- and hex-encoding of the same secret (10 renderings)",
+            not survived,
+            "%r" % survived,
+        )
+        _check(
+            "P9e-control the redactor is not simply blanking everything",
+            _Redactor([sentinel]).scrub("http://127.0.0.1:9 endpoint unreachable")
+            == "http://127.0.0.1:9 endpoint unreachable",
+        )
+
+        # The redactor is a BACKSTOP. `_post_json`'s catch-all must compose no
+        # untrusted exception text at all, pinned with a marker that is not a
+        # secret so it stays red even if the redactor is perfect.
+        marker = "MARKER-CATCHALL-77123-DO-NOT-ECHO"
+
+        class _Exploding:
+            def open(self, *_args, **_kwargs):
+                raise RuntimeError(marker)
+
+        provider = OpenAICompatProvider(base_url=live, api_key="sk-live-decoy", model="pin-model")
+        provider._opener = _Exploding()
+        _result, error, streams = _capture(
+            lambda: provider.complete([{"role": "user", "content": "x"}])
+        )
+        _check(
+            "P9f _post_json's catch-all names the exception TYPE and never its "
+            "text (the catch-all is where store.py's header leak lived)",
+            marker not in (error + streams) and "RuntimeError" in error,
+            "%r" % (error + streams)[:200],
+        )
+
+        # file:// and friends are refused, not served by urllib's default
+        # handlers. Left open, `complete()` would read a local file and return
+        # its contents as model output, with no network call and no error.
+        refused, accepted = 0, []
+        for base in (
+            "file://" + os.path.abspath(__file__),
+            "file:///etc/hosts",
+            "ftp://127.0.0.1:9",
+            "gopher://127.0.0.1:9",
+            "//127.0.0.1:9",
+        ):
+            try:
+                OpenAICompatProvider(base_url=base, api_key="sk-x", model="pin-model")
+            except ProviderError:
+                refused += 1
+            else:
+                accepted.append(base)
+        _check(
+            "P9g every non-http(s) base URL is refused at construction "
+            "(file://, ftp://, gopher://, scheme-less)",
+            refused == 5,
+            "accepted: %r" % accepted,
+        )
+        _check(
+            "P9h-control http(s) base URLs still build",
+            OpenAICompatProvider(base_url=live, api_key="sk-x", model="pin-model").name
+            == "openai-compat"
+            and AnthropicProvider(api_key="sk-x", model="pin-model").name == "anthropic",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def _selftest() -> int:
     server, base = _mock_server()
     try:
@@ -1485,6 +1816,7 @@ def _selftest() -> int:
         _pin_malformed_is_an_error(base)
         _pin_no_secret_leak(base)
         _pin_leak_sweep()
+        _pin_leak_sweep_nasty()
     finally:
         server.shutdown()
         server.server_close()

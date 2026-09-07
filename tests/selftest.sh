@@ -832,12 +832,19 @@ printf '%s\n' "$store_out" | grep '^ *SKIP' | sed 's/^ */  UNVERIFIED: /' | awk 
 [ "$store_rc" = 0 ] && ok "store.py pins ($(printf '%s' "$store_out" | grep -c '^PASS' || true) PASS)" \
   || fail "store.py pins: $(printf '%s' "$store_out" | grep '^FAIL' | head -1)"
 
-# And those pins must be able to FAIL. Six mutations reintroduce, one at a
-# time, each defect the 2026-09-07 hostile review found — including MUT-R1,
-# which was GREEN across all sixteen of the original pins.
+# And those pins must be able to FAIL. Each mutation reintroduces, one at a
+# time, one defect a hostile review of this branch found — including MUT-R1,
+# which was GREEN across all sixteen of the original pins, and MUT-S3, which
+# turns the store's only redaction function into `return text` and was GREEN
+# across all twenty-seven store pins until the third review.
+#
+# The COUNT deliberately does not appear in this label. It said "six" while
+# the script ran fourteen, which is exactly how a hardcoded number in a
+# message becomes a lie nobody notices; the script's own last line is the
+# only count printed.
 m2red_out="$(python3 "$REPO/tests/pins/m2-prove-red.py" "$REPO" 2>&1)"; m2red_rc=$?
 printf '%s\n' "$m2red_out" | grep 'NOT RED' || true
-[ "$m2red_rc" = 0 ] && ok "all six M2 mutations are provably catchable ($(printf '%s' "$m2red_out" | tail -1))" \
+[ "$m2red_rc" = 0 ] && ok "every M2 mutation is provably catchable ($(printf '%s' "$m2red_out" | tail -1))" \
   || fail "M2 mutations: $(printf '%s' "$m2red_out" | tail -1)"
 
 echo "== dogfood: .loopkit/config.env sources clean"

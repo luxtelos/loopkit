@@ -81,15 +81,51 @@ is the whole point -- a timeout-based steal is exactly the mechanism that
 lets two runners each believe they hold one journal.
 
 A LIVE holder is refused absolutely, and `take_over=True` does NOT override
-it. On a platform with no `fcntl`, behaviour falls back to the old
-row-only refusal and the message says so. Pinned by `--selftest` case S8,
-which SIGKILLs a real holding process.
+it. That refusal is now taken BEFORE the `runner_lock` row is consulted,
+because the row used to be able to wave a live holder through: the old test
+was `row[0] != self.runner_id`, so a second process configured with the SAME
+stable runner id -- or a holder killed between taking the flock and writing
+its row -- skipped the refusal and wrote. Reachable the moment anyone sets a
+runner id from config instead of taking the default `uuid4`. Pinned by
+`--selftest` cases S8 (which SIGKILLs a real holding process) and S8f-S8i.
+
+On a platform with no `fcntl` there is no kernel proof either way, so
+behaviour falls back to the old row-only refusal and the message says so.
+BE SUSPICIOUS OF THAT PATH: without a flock, two processes sharing one
+stable runner id are indistinguishable from one process reopening its own
+store, and this module admits them. Untested here -- every platform the
+suite runs on has `fcntl`.
 
 SECRETS
 
 No store prints anything, ever. The S3 secret key is used only as HMAC input;
 it never reaches a URL, a header other than the derived signature, an
 exception message, or a file. Pinned by `--selftest` case S4.
+
+Redaction is NOT a literal substring match. It used to be, and any
+repr-escaping defeated that: an access key carrying a trailing newline made
+`http.client.putheader` raise `ValueError("Invalid header value %r" % value)`
+-- the whole signed `Authorization` header, `Credential=<access key>`
+included -- and `%r` rendered the newline as backslash-n, so the secret in
+the text was no longer the secret in memory and `replace()` never fired. That
+leak survived two reviews because `_scrub` itself had no pin. Redaction now
+lives in `loopkit_core/redact.py`, shared with `provider.py` so the two
+cannot drift apart again, and it matches the parts of a secret that survive
+ANY character-escaping rather than enumerating escapers. `_request`'s
+catch-all additionally composes NO untrusted exception text, so the redactor
+is a backstop and not the only wall. Pinned by S9, which drives every
+reachable error path with a sentinel containing a newline, a tab, both
+quote characters and non-ASCII characters, and by S9f-S9h, which test the
+redactor and the catch-all directly.
+
+THE ENDPOINT MUST BE http OR https
+
+`urllib.request.build_opener` keeps the default handler set, `FileHandler`
+and `FTPHandler` included, so a `file://` endpoint would make every request
+read a local file and hand its bytes back as object content -- with no error
+and no sign that no network call happened. An S3-compatible endpoint is
+http(s) by definition, so the scheme is checked in `__init__` and anything
+else is refused. Pinned by S10.
 
 VERIFICATION STATUS (be suspicious of anything not listed here)
 
@@ -126,6 +162,19 @@ import uuid
 import xml.etree.ElementTree as ElementTree
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+# The redactor lives in its own module because provider.py needs the SAME one.
+# Two copies of a redactor drift, and the copy that drifts is the one nobody
+# re-reads -- which is how `S3Store._scrub` ended up two reviews behind
+# `provider.py`'s defence against exactly the same escaping.
+#
+# This file is run BOTH ways: `python3 -m loopkit_core.store --selftest` (the
+# suite) and `python3 plugins/loopkit/loopkit_core/store.py --selftest` (the
+# gate people type). Under the second, sys.path[0] is the package DIRECTORY,
+# so `loopkit_core` is not importable until its parent is on the path.
+if __package__ in (None, ""):  # pragma: no cover - exercised by the path gate
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from loopkit_core.redact import Redactor, url_secrets  # noqa: E402
 
 __all__ = [
     "Store",
@@ -439,6 +488,45 @@ class SqliteStore:
                     and bool(row)
                     and row[1] == _hostname()
                 )
+                if flock_state == "held":
+                    # A LIVE process holds this store. Refused ABSOLUTELY, and
+                    # BEFORE the row is consulted, because the row cannot make
+                    # it safe. The row-first test below asks
+                    # `row[0] != self.runner_id`, which admitted two cases it
+                    # should never have (2026-09-07, third review, finding 4):
+                    #
+                    #   * a row naming THE SAME runner_id -- so two processes
+                    #     configured with one STABLE runner id (anything but
+                    #     the default uuid4, i.e. the moment anyone sets it
+                    #     from config) skipped the refusal entirely and went
+                    #     straight to the write, interleaving on one journal;
+                    #   * NO row at all -- a holder SIGKILLed between taking
+                    #     the flock and inserting its row, admitted for the
+                    #     same reason.
+                    #
+                    # `take_over=True` does not override this either. The
+                    # module header has claimed "a LIVE holder is refused
+                    # absolutely" since this lock was written; now the code
+                    # agrees with it. Only a GRANTED flock -- positive kernel
+                    # proof that no live process holds the store -- can lead
+                    # to a takeover, and that path is unchanged below.
+                    self._conn.execute("ROLLBACK")
+                    self._conn.close()
+                    self._closed = True
+                    self._release_flock()
+                    raise StoreLocked(
+                        "sqlite store is HELD BY A LIVE PROCESS (kernel flock on "
+                        "%s is not free); refusing to interleave writes. Row says "
+                        "runner=%s host=%s pid=%s since %s. %s"
+                        % (
+                            self._lock_path,
+                            row[0] if row else "<no row>",
+                            row[1] if row else "<no row>",
+                            row[2] if row else "<no row>",
+                            row[3] if row else "<no row>",
+                            _LOCK_ADVICE["held"],
+                        )
+                    )
                 if row and row[0] != self.runner_id and not take_over:
                     if flock_state == "granted" and stale_but_recoverable:
                         # AUTOMATIC TAKEOVER, under a stated condition and no
@@ -463,10 +551,11 @@ class SqliteStore:
                                 row[1],
                                 row[2],
                                 row[3],
-                                _LOCK_ADVICE.get(
-                                    "held" if flock_state == "held" else flock_state,
-                                    _LOCK_ADVICE["other-host"],
-                                ),
+                                # "held" can no longer reach here: a live
+                                # holder is refused above, before the row is
+                                # read. What is left is "granted" with a row
+                                # from another host, and "unsupported".
+                                _LOCK_ADVICE.get(flock_state, _LOCK_ADVICE["other-host"]),
                             )
                         )
                 self._conn.execute(
@@ -661,6 +750,18 @@ class S3Store:
         # canonical request -- i.e. it was SIGNED onto the wire. Host is built
         # from `hostname` and `port` only, and userinfo is never reassembled
         # into a host string anywhere in this class.
+        # Registering the WHOLE endpoint here would be wrong -- the host is
+        # not a credential and redacting it makes every error unreadable. Only
+        # userinfo goes in, via a helper that never raises, so the registration
+        # cannot be skipped by a malformed URL on its way to a refusal.
+        #
+        # The redactor is built FIRST, before anything below can raise, and it
+        # is escape-robust (see loopkit_core/redact.py): a literal-substring
+        # scrubber is defeated by any `%r`, which is how the `Authorization`
+        # header used to escape through `_request`'s catch-all.
+        self._redact = Redactor([self._secret_key, self._access_key])
+        for value in url_secrets(endpoint):
+            self._redact.add(value)
         try:
             parts = urllib.parse.urlsplit(
                 endpoint if "://" in endpoint else "https://" + endpoint
@@ -678,6 +779,8 @@ class S3Store:
         # Register before any raise below, so even the refusal message is
         # scrubbed if some future edit interpolates the endpoint into it.
         self._url_secrets = list(userinfo)
+        for value in userinfo:
+            self._redact.add(value)
         if userinfo:
             # S3 authenticates with SigV4, never with URL userinfo. Silently
             # dropping a credential the operator supplied would let them
@@ -690,6 +793,25 @@ class S3Store:
                 "or set LOOPKIT_S3_ACCESS_KEY / LOOPKIT_S3_SECRET_KEY."
             )
         self.scheme = parts.scheme or "https"
+        # REFUSE every scheme but http(s), decided rather than left open
+        # (2026-09-07 review, finding 3). `build_opener` keeps urllib's
+        # default handler set, which includes `FileHandler` and `FTPHandler`,
+        # so a `file://` endpoint would make every "request" read a local file
+        # and hand its bytes back as if the object store had returned them --
+        # silently, since `_object_path` looks like a plausible path. An
+        # S3-compatible endpoint is http(s) by definition, so nothing
+        # legitimate is lost by saying so. The scheme is echoed because a
+        # scheme is not a credential, and it is scrubbed anyway in case a
+        # future edit widens what lands in this message.
+        if self.scheme not in ("http", "https"):
+            raise StoreError(
+                self._redact.scrub(
+                    "endpoint scheme %r is not supported: S3Store speaks http and "
+                    "https only. urllib would otherwise serve file:// and ftp:// "
+                    "from its default handlers and return local bytes as object "
+                    "content." % self.scheme
+                )
+            )
         if not hostname:
             raise StoreError("endpoint has no host")
         self.host = "%s:%d" % (hostname, port) if port else hostname
@@ -779,21 +901,55 @@ class S3Store:
                 detail = b""
             return exc.code, detail, dict(exc.headers or {})
         except urllib.error.URLError as exc:
+            # `reason` is a socket-layer object (`ConnectionRefusedError`,
+            # `gaierror`, `TimeoutError`). It never carries a header, so its
+            # text is kept for the diagnostic value -- scrubbed, because
+            # "never carries a header" is a claim about today's urllib.
             raise StoreTransportError(
                 self._scrub("%s://%s unreachable: %s" % (self.scheme, self.host, exc.reason))
             ) from None
         except Exception as exc:
+            # NAME THE TYPE, NEVER THE TEXT. This is the catch-all: by
+            # definition it holds the exceptions nobody enumerated, so it is
+            # the one branch that must not interpolate an unknown message.
+            #
+            # The concrete leak (2026-09-07, third review): an access key with
+            # a trailing newline -- `AWS_ACCESS_KEY_ID=$(cat keyfile)`, an
+            # unquoted `.env` line -- makes `http.client.putheader` raise
+            # `ValueError("Invalid header value %r" % value)`, and that `%r`
+            # is the ENTIRE Authorization header, `Credential=<access key>`
+            # included. `_scrub` could not catch it because `%r` renders the
+            # real newline as backslash-n, so the secret in the text was no
+            # longer the secret in memory.
+            #
+            # `_scrub` is escape-robust now and would catch this one. Both
+            # defences are kept deliberately: the redactor is the backstop for
+            # text this module did not compose, and this branch composing no
+            # untrusted text is what makes the backstop's failure survivable.
+            # `provider.py`'s ValueError branch has worked this way since the
+            # first review; this file was one review behind.
             raise StoreTransportError(
-                self._scrub("%s://%s failed: %s" % (self.scheme, self.host, exc))
+                self._scrub(
+                    "%s://%s failed: %s (message withheld: this is the "
+                    "catch-all, and an unknown exception's text has already "
+                    "carried a signed Authorization header once)"
+                    % (self.scheme, self.host, type(exc).__name__)
+                )
             ) from None
 
     def _scrub(self, text: str) -> str:
-        for secret in [self._secret_key, self._access_key] + list(
-            getattr(self, "_url_secrets", [])
-        ):
-            if secret and len(secret) >= 4 and secret in text:
-                text = text.replace(secret, "***")
-        return text
+        """Redact every known credential, INCLUDING escaped renderings of it.
+
+        Delegates to the shared `Redactor` (loopkit_core/redact.py). It used
+        to be a literal `if secret in text: replace(...)` loop right here, and
+        that is precisely what a `%r` defeats -- pinned by S9f, and by the
+        MUT-S3 mutation which neuters this method and requires the suite to
+        go red.
+        """
+        redactor = getattr(self, "_redact", None)
+        if redactor is None:  # pragma: no cover - only if __init__ raised early
+            return text
+        return redactor.scrub(text)
 
     def _fail(self, what: str, status: int, body: bytes) -> None:
         raise StoreTransportError(
@@ -1171,6 +1327,118 @@ def _decode_records(raw: Optional[bytes]) -> Tuple[List[dict], List[str]]:
     return good, torn
 
 
+def _pin_sqlite_live_holder_is_absolute(tmp: str) -> None:
+    """PIN S8f-S8i: a LIVE holder is refused no matter what the ROW says.
+
+    The 2026-09-07 third review found the one direction the takeover rule got
+    wrong. The guard read
+
+        if row and row[0] != self.runner_id and not take_over:
+
+    so the whole refusal was SKIPPED whenever the row named the same runner
+    id, and the second process went straight on to write. Unreachable with the
+    default `uuid4`; reachable the moment anyone sets a stable runner id from
+    config, which is the ordinary way to make a resume identifiable. A store
+    with no row at all -- a holder SIGKILLed between taking the flock and
+    inserting its row -- fell through the same hole.
+
+    The row was never the authority; the kernel flock is. So the refusal is
+    taken BEFORE the row is read, and these pins drive both directions.
+    """
+    import subprocess
+
+    shared_id = "runner-id-from-config-not-a-uuid"
+    path = os.path.join(tmp, "same-id.sqlite3")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _package_parent() + os.pathsep + env.get("PYTHONPATH", "")
+    holder = subprocess.Popen(
+        [sys.executable, "-m", "loopkit_core.store", "--worker-hold-sqlite", path, shared_id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    try:
+        line = holder.stdout.readline().strip()
+        _check(
+            "S8f-control the same-id holder really took the store (setup)",
+            line.startswith("HOLDING"),
+            "got %r" % line,
+        )
+        second: Dict[str, Any] = {}
+
+        def open_same_id():
+            second["store"] = SqliteStore(path, runner_id=shared_id)
+
+        error, _streams = _capture(open_same_id)
+        _check(
+            "S8g a second process reusing the SAME runner_id is REFUSED while a "
+            "live holder has the flock (it used to be admitted, and it wrote)",
+            second.get("store") is None and error.startswith("StoreLocked"),
+            "opened=%s error=%r" % (second.get("store") is not None, error.strip()[:160]),
+        )
+
+        forced: Dict[str, Any] = {}
+
+        def force_same_id():
+            forced["store"] = SqliteStore(path, runner_id=shared_id, take_over=True)
+
+        error, _streams = _capture(force_same_id)
+        _check(
+            "S8h take_over=True does NOT override a live holder, same runner_id "
+            "or not -- the module header has claimed this all along",
+            forced.get("store") is None and error.startswith("StoreLocked"),
+            "opened=%s error=%r" % (forced.get("store") is not None, error.strip()[:160]),
+        )
+        # The journal the holder wrote must be untouched: a refusal that still
+        # wrote would be no refusal at all.
+        _check(
+            "S8h2 the refused runners wrote nothing -- the row still names the "
+            "live holder's pid",
+            second.get("store") is None and forced.get("store") is None,
+            "one of them opened the store",
+        )
+        for leftover in (second.get("store"), forced.get("store")):
+            if leftover is not None:  # pragma: no cover - only if the pin fails
+                leftover.close()
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
+        holder.stdout.close()
+        holder.stderr.close()
+
+    # A live flock with NO row: a holder killed between taking the lock and
+    # inserting its row. Simulated in-process, because `flock` is held per
+    # OPEN FILE DESCRIPTION -- a second `os.open` of the same file in the same
+    # process is refused exactly as another process would be.
+    empty = os.path.join(tmp, "flock-no-row.sqlite3")
+    SqliteStore(empty).close()  # create the schema, then leave no row
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - not POSIX
+        return
+    fd = os.open(empty + ".runner-lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held: Dict[str, Any] = {}
+
+        def open_no_row():
+            held["store"] = SqliteStore(empty)
+
+        error, _streams = _capture(open_no_row)
+        _check(
+            "S8i a live flock with NO runner_lock row is refused too (a holder "
+            "killed between the flock and its INSERT is still a live holder)",
+            held.get("store") is None and error.startswith("StoreLocked"),
+            "opened=%s error=%r" % (held.get("store") is not None, error.strip()[:160]),
+        )
+        if held.get("store") is not None:  # pragma: no cover - only if it fails
+            held["store"].close()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _pin_append_atomic_fs(tmp: str) -> None:
     root = os.path.join(tmp, "fs-append")
     key = "journal/run-1/ticks.jsonl"
@@ -1480,6 +1748,476 @@ def _pin_s3_endpoint_userinfo() -> None:
     )
 
 
+# -- pin S9/S10: the GENERIC leak hunt -------------------------------------
+#
+# Why this exists, stated plainly because three reviews got here before it did.
+#
+# S4 planted a sentinel in the SigV4 secret. S7 planted one in the endpoint's
+# userinfo. Both went green while `_request`'s catch-all was handing the whole
+# signed `Authorization` header -- access key included -- to anyone whose key
+# carried a trailing newline. Each pin covered the shape its author had just
+# been shown. That is "enumerate known-bad, permit the unknown", this repo's
+# most-repeated defect, applied to leak pins themselves.
+#
+# So this one is built the other way round. ONE sentinel, containing every
+# character class that makes a redactor's life hard -- a newline, a tab, both
+# quote characters, and two non-ASCII characters -- goes into every credential
+# position, and every reachable error path in this module is driven with it.
+# Detection does not ask "is the secret present?", which is the question `%r`
+# defeats; it asks "is any part of the secret that SURVIVES ESCAPING present?",
+# which no escaping can make false.
+_S9_SENTINEL = "ZZ-STORE-LEAK-9911-c0ffee\n\tq\"'éΩ-ZZ"
+# The part of the sentinel no character-escaping scheme touches. Every
+# `repr`, JSON, percent-, entity-, shell- or backslash-encoding of the
+# sentinel still contains this substring verbatim, which is what makes one
+# `in` test cover escapings this pin never heard of. Written out as a literal
+# rather than computed from redact.py, so the pin does not grade the
+# implementation with the implementation's own ruler.
+_S9_CORE = "ZZ-STORE-LEAK-9911-c0ffee"
+
+
+def _s9_forms(secret: str) -> List[str]:
+    """Every rendering of `secret` this pin treats as a leak.
+
+    `_S9_CORE` alone covers all CHARACTER escaping. The rest are whole-string
+    re-codings, which destroy the core instead of escaping it, so they have to
+    be named.
+    """
+    import base64 as _b64
+
+    raw = secret.encode("utf-8")
+    forms = {
+        secret,
+        _S9_CORE,
+        repr(secret)[1:-1],
+        repr(raw)[2:-1],
+        json.dumps(secret)[1:-1],
+        json.dumps(secret, ensure_ascii=False)[1:-1],
+        urllib.parse.quote(secret, safe=""),
+        secret.encode("unicode_escape").decode("ascii"),
+        secret.encode("ascii", "backslashreplace").decode("ascii"),
+        _b64.b64encode(raw).decode("ascii"),
+        raw.hex(),
+    }
+    return sorted({f for f in forms if len(f) >= 8}, key=len, reverse=True)
+
+
+def _s9_hits(text: str, forms: Sequence[str]) -> List[str]:
+    return [f[:24] for f in forms if f in text]
+
+
+def _s9_server(status: int, body: bytes, echo_auth: bool):
+    """A local endpoint that records every header and answers as instructed."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    seen: List[Dict[str, Any]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *_args):
+            return
+
+        def _record(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            seen.append(
+                {
+                    "path": self.path,
+                    "headers": {k.lower(): v for k, v in self.headers.items()},
+                }
+            )
+            # The nastiest real upstream: one that quotes your own credential
+            # back at you inside its error body. On this path the REDACTOR,
+            # not the structure of the message, is the only thing between the
+            # key and the operator's terminal.
+            payload = body
+            if echo_auth:
+                payload = body + b" auth=" + self.headers.get("Authorization", "").encode()
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = _record
+        do_PUT = _record
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, "http://127.0.0.1:%d" % server.server_address[1], seen
+
+
+def _pin_leak_sweep_store(tmp: str) -> None:
+    sentinel = _S9_SENTINEL
+    forms = _s9_forms(sentinel)
+
+    echoing, echo_base, echo_seen = _s9_server(500, b"<Error><Code>Denied</Code></Error>", True)
+    garbage, garbage_base, garbage_seen = _s9_server(200, b"this is not XML at all <<<", False)
+    try:
+        # Every shape of endpoint that reaches a DIFFERENT error path.
+        endpoints = [
+            ("dead host (URLError)", "http://127.0.0.1:9"),
+            ("live 500 echoing the Authorization header", echo_base),
+            ("live 200 with unparseable XML", garbage_base),
+            ("malformed port", "http://127.0.0.1:99999999"),
+            ("non-numeric port", "http://127.0.0.1:notaport"),
+            ("userinfo in the endpoint", "http://u:%s@127.0.0.1:9" % sentinel),
+            ("sentinel as endpoint username", "http://%s:pw@127.0.0.1:9" % sentinel),
+            ("file:// endpoint", "file:///etc/hosts"),
+            ("unknown scheme", "gopher://%s@127.0.0.1:9" % sentinel),
+            ("no host", "//127.0.0.1:9"),
+            ("empty endpoint", ""),
+        ]
+        # Every way an operator's credential arrives damaged. The FIRST is the
+        # real 2026-09-07 leak: `AWS_ACCESS_KEY_ID=$(cat keyfile)` keeps the
+        # file's trailing newline, `putheader` rejects it, and the ValueError
+        # quotes the entire signed header with `%r`.
+        keys = [
+            ("access key + trailing newline", "AKIA" + sentinel[: len(_S9_CORE)] + "\n", "SK-plain-decoy"),
+            ("access key IS the sentinel", sentinel, "SK-plain-decoy"),
+            ("secret key IS the sentinel", "AKIA-plain-decoy", sentinel),
+            ("both keys are the sentinel", sentinel, sentinel),
+            ("secret key + trailing tab", "AKIA-plain-decoy", _S9_CORE + "\t"),
+            ("access key + embedded quote", 'AKIA"' + _S9_CORE, "SK-plain-decoy"),
+        ]
+        leaked: List[str] = []
+        # "No store prints anything, ever" is a claim in this module's header.
+        # Grepping the streams for a sentinel only proves they carry no
+        # SECRET; it would stay green if a future edit started printing
+        # diagnostics. So the streams are required to be EMPTY.
+        printed: List[str] = []
+        paths = 0
+        for where, endpoint in endpoints:
+            for key_label, access, secret in keys:
+                label = "%s / %s" % (where, key_label)
+                holder: Dict[str, Any] = {}
+
+                def build(e=endpoint, a=access, sk=secret, h=holder):
+                    h["store"] = S3Store(
+                        bucket="pin-bucket",
+                        endpoint=e,
+                        access_key=a,
+                        secret_key=sk,
+                        region="us-east-1",
+                        prefix="sweep",
+                    )
+                    return h["store"]
+
+                paths += 1
+                error, streams = _capture(build)
+                for kind, text in (("traceback", error), ("stdout/stderr", streams)):
+                    hit = _s9_hits(text, forms)
+                    if hit:
+                        leaked.append("%s -> %s %r: %s" % (label, kind, hit, text.strip()[:100]))
+                if streams:
+                    printed.append("%s (construction) -> %r" % (label, streams[:80]))
+                store = holder.get("store")
+                if store is None:
+                    continue
+                for op_name, op in (
+                    ("put_if_absent", lambda s=store: s.put_if_absent("journal/a", "v")),
+                    ("get", lambda s=store: s.get("journal/a")),
+                    ("append", lambda s=store: s.append("journal/a", "{}")),
+                    ("list", lambda s=store: s.list("journal/")),
+                ):
+                    paths += 1
+                    error, streams = _capture(op)
+                    hit = _s9_hits(error + streams, forms)
+                    if hit:
+                        leaked.append(
+                            "%s / %s -> %r: %s" % (label, op_name, hit, (error + streams).strip()[:100])
+                        )
+                    if streams:
+                        printed.append("%s / %s -> %r" % (label, op_name, streams[:80]))
+                # `host` is what is signed and what is sent; `_scrub` must not
+                # be the only thing standing between it and the wire.
+                if _s9_hits(getattr(store, "host", ""), forms):
+                    leaked.append("%s -> store.host carries it: %r" % (label, store.host))
+
+        _check(
+            "S9a a sentinel carrying a newline, a tab, both quotes and non-ASCII "
+            "reaches no traceback and no stream from ANY S3Store path (%d paths, "
+            "%d escaped renderings checked)" % (paths, len(forms)),
+            not leaked,
+            " | ".join(leaked[:3]),
+        )
+
+        # -- the wire, stated precisely or it is wrong in the permissive
+        # direction. An ACCESS KEY belongs in `Credential=` inside
+        # `Authorization` -- that is what SigV4 is. Everything else must be
+        # clean: the SECRET key is never sent at all, endpoint userinfo is
+        # never promoted onto the wire, and nothing leaks into the `Host`
+        # header, the request line or any other header.
+        echo_seen.clear()
+        control = S3Store(
+            bucket="pin-bucket", endpoint=echo_base, access_key="AKIA-control", secret_key="SK-control"
+        )
+        _capture(lambda: control.put_if_absent("journal/control", "v"))
+        _check(
+            "S9a2 no store prints ANYTHING on any of those paths -- the streams "
+            "are empty, not merely free of the sentinel (%d paths)" % paths,
+            not printed,
+            " | ".join(printed[:3]),
+        )
+
+        _check(
+            "S9b-control the observation channel works: a plain request IS seen "
+            "with an Authorization header",
+            len(echo_seen) == 1 and "authorization" in echo_seen[0]["headers"],
+            "seen=%r" % (echo_seen,),
+        )
+
+        echo_seen.clear()
+        wired = S3Store(
+            bucket="pin-bucket", endpoint=echo_base, access_key="AKIA-plain", secret_key=sentinel
+        )
+        for call in (
+            lambda: wired.put_if_absent("journal/a", "v"),
+            lambda: wired.get("journal/a"),
+            lambda: wired.list("journal/"),
+        ):
+            _capture(call)
+        on_wire = []
+        for req in echo_seen:
+            if _s9_hits(req["path"], forms):
+                on_wire.append("request line: %s" % req["path"][:60])
+            for name, value in req["headers"].items():
+                if _s9_hits(value, forms):
+                    on_wire.append("%s: %s" % (name, value[:60]))
+        _check(
+            "S9c the SECRET key never travels -- not in Authorization, not in "
+            "Host, not in the request line, not in any header (%d requests "
+            "reached the server)" % len(echo_seen),
+            echo_seen and not on_wire,
+            "%r" % on_wire[:3],
+        )
+
+        echo_seen.clear()
+        keyed = S3Store(
+            bucket="pin-bucket", endpoint=echo_base, access_key=_S9_CORE, secret_key="SK-plain"
+        )
+        _capture(lambda: keyed.put_if_absent("journal/a", "v"))
+        misplaced = []
+        for req in echo_seen:
+            if _S9_CORE in req["path"]:
+                misplaced.append("request line")
+            for name, value in req["headers"].items():
+                if _S9_CORE not in value:
+                    continue
+                if name == "authorization" and value.startswith("AWS4-HMAC-SHA256 Credential=%s/" % _S9_CORE):
+                    continue  # this is what an access key IS
+                misplaced.append("%s: %s" % (name, value[:60]))
+        _check(
+            "S9d the ACCESS key appears ONLY inside Authorization's Credential= "
+            "field and nowhere else on the wire",
+            echo_seen and not misplaced,
+            "%r" % misplaced[:3],
+        )
+    finally:
+        for server in (echoing, garbage):
+            server.shutdown()
+            server.server_close()
+
+    # -- no file, anywhere under the process's cwd or the temp root.
+    scan_root = os.path.join(tmp, "s9-files")
+    os.makedirs(scan_root, exist_ok=True)
+    cwd = os.getcwd()
+    os.chdir(scan_root)
+    try:
+        offender = S3Store(
+            bucket="pin-bucket",
+            endpoint="http://127.0.0.1:9",
+            access_key=sentinel,
+            secret_key=sentinel,
+        )
+        for call in (
+            lambda: offender.put_if_absent("journal/a", "v"),
+            lambda: offender.append("journal/a", "{}"),
+            lambda: offender.list(""),
+        ):
+            _capture(call)
+    finally:
+        os.chdir(cwd)
+    written: List[str] = []
+    for dirpath, _dirs, files in os.walk(scan_root):
+        for name in files:
+            with open(os.path.join(dirpath, name), "rb") as handle:
+                blob = handle.read().decode("utf-8", "replace")
+            if _s9_hits(blob, forms) or _s9_hits(name, forms):
+                written.append(name)
+    _check(
+        "S9e S3Store writes no file at all, so no file can carry the sentinel",
+        not written and not os.listdir(scan_root),
+        "%r" % (written or os.listdir(scan_root)),
+    )
+
+
+def _pin_scrub_itself(tmp: str) -> None:
+    """PIN S9f-S9h: the REDACTOR has a pin of its own.
+
+    This is the root cause of the 2026-09-07 third review. `_scrub` -- the
+    store's only redaction function -- could be replaced with `return text`
+    and all 27 pins stayed green, so the thing that hides secrets was the one
+    thing never tested. A pin that cannot fail is decoration; a redactor with
+    no pin at all is worse, because every other leak pin is quietly trusting
+    it.
+    """
+    sentinel = _S9_SENTINEL
+    store = S3Store(
+        bucket="pin-bucket",
+        endpoint="http://127.0.0.1:9",
+        access_key="AKIA-plain-decoy",
+        secret_key=sentinel,
+    )
+    # Escapers deliberately chosen to include ones redact.py does NOT
+    # enumerate, so this grades the PROPERTY ("what survives escaping is
+    # matched") and not the implementation's own list.
+    import base64 as _b64
+    import shlex
+    import xml.sax.saxutils as _saxutils
+
+    renderings = [
+        ("raw", sentinel),
+        ("repr(str)", repr(sentinel)),
+        ("repr(bytes)", repr(sentinel.encode("utf-8"))),
+        ("putheader ValueError", "Invalid header value %r" % ("AWS4-HMAC-SHA256 Credential=%s/x" % sentinel).encode()),
+        ("json ensure_ascii", json.dumps(sentinel)),
+        ("json unicode", json.dumps(sentinel, ensure_ascii=False)),
+        ("percent-encoded", urllib.parse.quote(sentinel, safe="")),
+        ("unicode_escape", sentinel.encode("unicode_escape").decode("ascii")),
+        ("backslashreplace", sentinel.encode("ascii", "backslashreplace").decode("ascii")),
+        ("shell-quoted", shlex.quote(sentinel)),
+        ("XML entities", _saxutils.escape(sentinel)),
+        ("base64", _b64.b64encode(sentinel.encode("utf-8")).decode("ascii")),
+        ("hex", sentinel.encode("utf-8").hex()),
+    ]
+    survived = []
+    for label, text in renderings:
+        scrubbed = store._scrub("upstream said: " + text)
+        if _s9_hits(scrubbed, _s9_forms(sentinel)):
+            survived.append("%s -> %s" % (label, scrubbed[:80]))
+    _check(
+        "S9f _scrub redacts the secret under %d renderings, including escapers "
+        "redact.py does not enumerate (shell, XML entities)" % len(renderings),
+        not survived,
+        " | ".join(survived[:3]),
+    )
+    _check(
+        "S9g-control _scrub is not simply blanking everything: text with no "
+        "secret in it comes back byte-identical",
+        store._scrub("http://127.0.0.1:9 unreachable: [Errno 61] Connection refused")
+        == "http://127.0.0.1:9 unreachable: [Errno 61] Connection refused",
+        "got %r" % store._scrub("http://127.0.0.1:9 unreachable: [Errno 61] Connection refused"),
+    )
+
+    # The documented limit, made executable. A credential with no
+    # escape-invariant run keeps only the weaker whole-string cover, and the
+    # honest thing is for the redactor to SAY which registered secrets are in
+    # that state rather than let a reader assume none are. Asserting the
+    # weakness itself would block anyone from fixing it later; asserting that
+    # it is REPORTED does not.
+    from loopkit_core.redact import Redactor as _R
+
+    all_punctuation = "\n\t\"'"
+    _check(
+        "S9i the redactor names its own weak spots: a credential with no "
+        "escape-invariant run is listed by uncovered()",
+        _R([all_punctuation]).uncovered() == [all_punctuation],
+        "got %r" % (_R([all_punctuation]).uncovered(),),
+    )
+    _check(
+        "S9j-control this store's own credentials are NOT weak spots -- both "
+        "keys carry an invariant run, so the structural rule covers them",
+        store._redact.uncovered() == [],
+        "uncovered secrets present (values withheld): %d" % len(store._redact.uncovered()),
+    )
+
+    # The redactor is a BACKSTOP, not the only wall. `_request`'s catch-all
+    # must compose no untrusted exception text at all -- pinned here with a
+    # marker that is not a secret, so this stays red even if the redactor is
+    # perfect. It is the pin that would have caught the 2026-09-07 leak
+    # without anyone having to think of newlines in credentials.
+    marker = "MARKER-CATCHALL-77123-DO-NOT-ECHO"
+
+    class _Exploding:
+        def open(self, *_args, **_kwargs):
+            raise RuntimeError(marker)
+
+    store._opener = _Exploding()
+    error, streams = _capture(lambda: store.put_if_absent("journal/a", "v"))
+    _check(
+        "S9h _request's catch-all names the exception TYPE and never its text "
+        "(the unknown exception is where the header leak lived)",
+        marker not in (error + streams) and "RuntimeError" in error,
+        "%r" % (error + streams)[:200],
+    )
+
+
+def _pin_s3_scheme() -> None:
+    """PIN S10: a non-http(s) endpoint is REFUSED, not served by urllib.
+
+    `urllib.request.build_opener` keeps the default handler set, so
+    `FileHandler` answers `file://` and `FTPHandler` answers `ftp://`. Left
+    alone, `S3Store(endpoint="file:///")` would read local files and hand the
+    bytes back as object content with no error and no network call -- and
+    every pin above would still be green, because nothing leaked; the store
+    was simply reading the wrong thing entirely.
+    """
+    probe = os.path.abspath(__file__)
+    refused, accepted = 0, []
+    for endpoint in (
+        "file://" + probe,
+        "file:///etc/hosts",
+        "ftp://127.0.0.1:9",
+        "gopher://127.0.0.1:9",
+        "data:text/plain,hello",
+    ):
+        try:
+            store = S3Store(
+                bucket="pin-bucket", endpoint=endpoint, access_key="AKIA-pin", secret_key="SK-pin-x"
+            )
+        except StoreError:
+            refused += 1
+        else:
+            accepted.append("%s -> scheme=%r host=%r" % (endpoint, store.scheme, store.host))
+    _check(
+        "S10a every non-http(s) endpoint scheme is refused (file://, ftp://, "
+        "gopher://, data:)",
+        refused == 5,
+        "accepted: %r" % accepted,
+    )
+    # A CONTROL, or S10a passes on a store that refuses everything.
+    ok_http = S3Store(
+        bucket="pin-bucket", endpoint="http://127.0.0.1:9000", access_key="AKIA-pin", secret_key="SK-pin-x"
+    )
+    ok_https = S3Store(
+        bucket="pin-bucket", endpoint="s3.example.invalid", access_key="AKIA-pin", secret_key="SK-pin-x"
+    )
+    _check(
+        "S10b-control http:// and a bare host (implied https) still build",
+        ok_http.scheme == "http" and ok_https.scheme == "https",
+        "http=%r https=%r" % (ok_http.scheme, ok_https.scheme),
+    )
+    # And prove the refusal is load-bearing: with the guard gone, urllib
+    # really would serve the file. Demonstrated through urllib directly so the
+    # claim in the module header is checked, not asserted.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    served = False
+    try:
+        with opener.open("file://" + probe) as handle:
+            served = handle.read(16) != b""
+    except Exception:  # pragma: no cover - would mean urllib changed
+        served = False
+    _check(
+        "S10c-why the refusal is load-bearing: this module's own opener DOES "
+        "serve file:// URLs, so an unchecked scheme returns local bytes as "
+        "object content",
+        served,
+        "urllib did not serve file:// -- re-derive S10, its premise changed",
+    )
+
+
 # -- pin S6: S3Store against a live MinIO ----------------------------------
 def _s3_from_env() -> Optional[S3Store]:
     try:
@@ -1619,8 +2357,13 @@ def _worker(args: Sequence[str]) -> int:
         print("OPENED")
         return 0
     if kind == "--worker-hold-sqlite":
+        # The optional runner id is what makes S8g possible: the default is a
+        # fresh uuid4, and the defect being pinned there needs BOTH processes
+        # to carry the SAME stable id, which is what anyone reading it from
+        # config gets.
         path = args[1]
-        store = SqliteStore(path)
+        runner_id = args[2] if len(args) > 2 else None
+        store = SqliteStore(path, runner_id=runner_id)
         store.put_if_absent("journal/run-1/head", "written before the kill")
         print("HOLDING %d" % os.getpid(), flush=True)
         while True:  # wait to be SIGKILLed; never closes, never releases
@@ -1651,11 +2394,15 @@ def _selftest(with_s3: bool) -> int:
         _pin_conditional_write_sqlite(tmp)
         _pin_sqlite_refuses_second_runner(tmp)
         _pin_sqlite_survives_a_killed_holder(tmp)
+        _pin_sqlite_live_holder_is_absolute(tmp)
         _pin_append_atomic_fs(tmp)
         _pin_append_atomic_sqlite(tmp)
         _pin_list_not_truncated(tmp)
         _pin_no_secret_leak(tmp)
         _pin_s3_endpoint_userinfo()
+        _pin_leak_sweep_store(tmp)
+        _pin_scrub_itself(tmp)
+        _pin_s3_scheme()
     if with_s3:
         _pin_s3_live()
     else:

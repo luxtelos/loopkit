@@ -22,7 +22,11 @@ mutated text as if it were pristine. Observed for real on 2026-09-07 while
 timing this script beside a suite run, so it is guarded rather than
 documented:
 
-  * an exclusive `flock` means a second run REFUSES instead of interleaving;
+  * an exclusive `flock`, anchored to the CHECKOUT (`<repo>/tmp/`, gitignored)
+    and NOT to `TMPDIR`, means a second run REFUSES instead of interleaving.
+    It was TMPDIR-scoped until the third review pointed out that this repo
+    tells people to change TMPDIR on macOS, so the guard's first layer was
+    bypassed by following the instructions;
   * a pre-flight check refuses to start if any mutation's replacement text is
     already present, which is what a previous killed run would leave behind;
   * SIGINT and SIGTERM restore before exiting.
@@ -42,7 +46,8 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
+# `tempfile` is deliberately NOT imported any more: the run lock is anchored
+# to the checkout, not to TMPDIR. See lock_path().
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.abspath(
@@ -51,6 +56,7 @@ ROOT = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.abspath(
 PKG = os.path.join(ROOT, "plugins", "loopkit")
 PROVIDER = os.path.join(PKG, "loopkit_core", "provider.py")
 STORE = os.path.join(PKG, "loopkit_core", "store.py")
+REDACT = os.path.join(PKG, "loopkit_core", "redact.py")
 
 # (id, module, why it matters, [(file, old, new), ...])
 MUTATIONS = [
@@ -162,6 +168,138 @@ MUTATIONS = [
             )
         ],
     ),
+    # ---- added after the THIRD review, 2026-09-07 -------------------------
+    # Every one of these mutates something that was UNPINNED when the third
+    # reviewer found it. `MUT-S3` is the root cause of that review: `_scrub`
+    # could be replaced with `return text` and all 27 store pins stayed green,
+    # so the one function whose job is hiding secrets was the one function
+    # nothing tested -- and that is why a leak survived two rounds of fixes.
+    (
+        "MUT-S3",
+        "store",
+        "S3Store._scrub is a no-op. The store's ONLY redaction function, "
+        "deletable with every pin still green before S9 existed.",
+        [
+            (
+                STORE,
+                '        redactor = getattr(self, "_redact", None)\n'
+                "        if redactor is None:  # pragma: no cover - only if __init__ raised early\n"
+                "            return text\n"
+                "        return redactor.scrub(text)",
+                # The marker comment is not decoration: the pre-flight check
+                # looks for each replacement string in the pristine file to
+                # spot a killed run, and a bare `return text` occurs all over
+                # store.py legitimately. The comment makes the mutation's
+                # fingerprint unique without changing what it does.
+                "        return text  # MUT-S3: _scrub neutered",
+            )
+        ],
+    ),
+    (
+        "MUT-S4",
+        "store",
+        "S3Store._request's catch-all interpolates the exception again, so a "
+        "ValueError from putheader hands over the whole signed Authorization "
+        "header. (The third reviewer's leak 1.)",
+        [
+            (
+                STORE,
+                '                self._scrub(\n'
+                '                    "%s://%s failed: %s (message withheld: this is the "\n'
+                '                    "catch-all, and an unknown exception\'s text has already "\n'
+                '                    "carried a signed Authorization header once)"\n'
+                "                    % (self.scheme, self.host, type(exc).__name__)\n"
+                "                )",
+                '                self._scrub("%s://%s failed: %s" % (self.scheme, self.host, exc))',
+            )
+        ],
+    ),
+    (
+        "MUT-S5",
+        "store",
+        "S3Store accepts any URL scheme again, so a file:// endpoint makes "
+        "urllib's FileHandler return local bytes as object content.",
+        [
+            (
+                STORE,
+                '        if self.scheme not in ("http", "https"):',
+                "        if False:",
+            )
+        ],
+    ),
+    (
+        "MUT-S6",
+        "store",
+        "the runner lock consults the ROW before the kernel again, so a second "
+        "process reusing the same runner_id is admitted past a LIVE holder and "
+        "writes.",
+        [
+            (
+                STORE,
+                '                if flock_state == "held":',
+                "                if False:",
+            )
+        ],
+    ),
+    (
+        "MUT-L3",
+        "provider",
+        "providers accept any base URL scheme again, so a file:// base URL "
+        "makes complete() read a local file and return it as model output.",
+        [
+            (
+                PROVIDER,
+                '        if scheme not in ("http", "https"):',
+                "        if False:",
+            )
+        ],
+    ),
+    (
+        "MUT-L4",
+        "provider",
+        "_post_json's catch-all interpolates the exception again -- the same "
+        "shape as MUT-S4, in the file that got it right first.",
+        [
+            (
+                PROVIDER,
+                "                self._redact.scrub(\n"
+                '                    "%s %s failed: %s (message withheld: catch-all)"\n'
+                "                    % (where, label, type(exc).__name__)\n"
+                "                )",
+                '                self._redact.scrub("%s %s failed: %s" % (where, label, exc))',
+            )
+        ],
+    ),
+    (
+        "MUT-RD1",
+        "store",
+        "the redactor's STRUCTURAL rule is gone, so it matches only the whole "
+        "secret again and any repr-escaping walks straight through it.",
+        [
+            (
+                REDACT,
+                "        needles.update(run for run in invariant_runs(secret) if len(run) >= _MIN_RUN)",
+                "        needles.update(())",
+            )
+        ],
+    ),
+    (
+        "MUT-RD2",
+        "provider",
+        "Redactor.scrub is a no-op, proving the PROVIDER's pins would notice "
+        "too -- both callers share one redactor, so both must hold it.",
+        [
+            (
+                REDACT,
+                "        text = text if isinstance(text, str) else str(text)\n"
+                "        for needle in self._needles:\n"
+                "            if needle in text:\n"
+                "                text = text.replace(needle, MASK)\n"
+                "        return text",
+                "        return text if isinstance(text, str) else str(text)",
+            )
+        ],
+    ),
 ]
 
 
@@ -179,14 +317,48 @@ def run_selftest(module: str) -> int:
     return proc.returncode
 
 
+def lock_path() -> str:
+    """Where the run lock lives: beside the SOURCE FILES this script mutates.
+
+    It used to be `tempfile.gettempdir()`, which is TMPDIR-scoped -- and this
+    repository's documented macOS workaround is to SET TMPDIR, so two runs
+    following the instructions did not exclude each other at all and only the
+    pre-flight check stood between them and a corrupted tree (2026-09-07 third
+    review, finding 4). The identity that matters is the CHECKOUT whose files
+    get mutated, and ROOT is exactly that: it cannot differ between two runs of
+    the same checkout, and it correctly does NOT serialise two runs in
+    different worktrees, which mutate different files.
+
+    `tmp/` at the repo root is already in .gitignore (`/tmp/`), so the lock
+    leaves `git status` clean -- which the harness's own tree-clean check
+    depends on.
+    """
+    return os.path.join(ROOT, "tmp", "m2-prove-red.lock")
+
+
 def acquire_lock():
     """Refuse to run beside another instance. Returns the held fd, or None."""
     try:
         import fcntl
     except ImportError:  # pragma: no cover - not POSIX
+        print(
+            "  WARNING: no fcntl on this platform, so two concurrent runs are\n"
+            "  NOT excluded. The pre-flight check is the only guard left."
+        )
         return None
-    path = os.path.join(tempfile.gettempdir(), "loopkit-m2-prove-red.lock")
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    path = lock_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as exc:
+        # Carrying on unlocked is how two runs restore each other's mutated
+        # text as if it were pristine. Refuse instead.
+        print(
+            "REFUSED: cannot create the run lock at %s (%s). This script "
+            "rewrites source files and will not do it without a lock."
+            % (path, exc.strerror)
+        )
+        raise SystemExit(1)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -218,7 +390,10 @@ def preflight(originals) -> list:
 
 def main() -> int:
     lock_fd = acquire_lock()
-    originals = {path: open(path).read() for path in (PROVIDER, STORE)}
+    # Derived from MUTATIONS, not hardcoded: a mutation naming a file the
+    # restore loop did not know about would leave that file mutated on disk.
+    targets = sorted({path for _id, _m, _w, edits in MUTATIONS for path, _o, _n in edits})
+    originals = {path: open(path).read() for path in targets}
 
     dirty = preflight(originals)
     if dirty:
