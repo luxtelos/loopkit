@@ -25,32 +25,26 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Token shapes worth refusing on sight.
+# `plugins/loopkit`, the directory that CONTAINS the package — the same route
+# the `scripts/` shims use to reach it.
+_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
+
+# The token-shape table lives in `loopkit_core.secrets` and is imported, never
+# copied. It used to be written out here, and that was fine while this file was
+# the only scanner. It is not any more: `hooks/block_dangerous.py` now runs the
+# same table over Bash command text, because the 2026-09-07 token never touched
+# a `.mcp.json` — it was passed inline on an SSH command line. Two scanners
+# reading one table stay in step; two scanners each holding a copy of a regex
+# are two different scanners by the end of the month.
 #
-# `gho_` was MISSING until 2026-09-07, and that is the one that leaked: an agent
-# passed the output of `gh auth token` as an inline assignment on a remote SSH
-# command line, where it entered the host's process table and was echoed back
-# into a session. The scanner was blind to the single most likely token for an
-# agent on a developer's machine to be holding.
-#
-# So the whole GitHub family is here now, not just the one that bit us:
-#   ghp_ personal   gho_ OAuth (gh auth token)   ghu_ user-to-server
-#   ghs_ server-to-server   ghr_ refresh   github_pat_ fine-grained
-# Provider keys are here too, ahead of need, because the runtime plan ships an
-# OpenAI-compatible and an Anthropic provider and an agent will handle both.
-SECRET = re.compile(
-    r"\b("
-    r"sk_(live|test)_[A-Za-z0-9]{8,}"          # Stripe
-    r"|gh[pousr]_[A-Za-z0-9]{20,}"             # GitHub: ghp gho ghu ghs ghr
-    r"|github_pat_[A-Za-z0-9_]{20,}"           # GitHub fine-grained
-    r"|xox[abp]-[A-Za-z0-9-]{10,}"             # Slack
-    r"|ctx7sk-[A-Za-z0-9-]{8,}"                # Context7
-    r"|AKIA[0-9A-Z]{16}"                       # AWS access key id
-    r"|sk-ant-[A-Za-z0-9_-]{20,}"              # Anthropic
-    r"|sk-proj-[A-Za-z0-9_-]{20,}"             # OpenAI project
-    r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"  # JWT
-    r")"
-)
+# `SECRET` stays a module attribute of this file on purpose:
+# `tests/pins/secret-shapes.py` reaches for `ct.SECRET`, and asserts it is the
+# SAME OBJECT as the table's — so a re-declared copy here would fail the pin
+# rather than drift quietly.
+from loopkit_core.secrets import SECRET  # noqa: E402,F401
+
 MAX_SERVERS = 10
 
 
