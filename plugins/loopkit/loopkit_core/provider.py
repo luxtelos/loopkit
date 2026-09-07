@@ -33,6 +33,31 @@ touch the spec; the disagreement is for a human to settle. Until then:
   * `usage_is_reported(result)` is how a metric decides to skip a call rather
     than add zero to its denominator.
 
+The disagreement is routed to the owner as Q5 of `inbox/needs-human.md`, with
+the reasoning and both costs. This module does NOT edit `specs/`.
+
+PARTIAL USAGE -- ALL OR NOTHING, AND WHY THE TWO HALVES DIFFER
+
+`{"input_tokens": 11}` with no output count is not a smaller measurement; it
+is not a measurement. There is no true value for the missing half, and
+filling it with 0 is the fabricated zero this whole rule exists to prevent.
+So a partial usage is never carried:
+
+  * `_coerce_usage` -- the VENDOR-facing half. A partial (or empty, or
+    non-integer, or negative) upstream usage object becomes `None`: absent.
+    We cannot fix a vendor's wire format, so recording "not reported" is the
+    honest answer and the run continues.
+  * `normalise_result` -- the CONTRACT-facing half. A Provider handing this
+    module a partial usage is violating the contract, and unlike a vendor the
+    offender is reachable, so it RAISES `ProviderResponseError`. Criterion 24
+    then journals a `provider_error` and no `result`, which is what makes the
+    defect visible instead of silently downgrading it to "absent".
+
+Consequence a caller can rely on: `result["usage"]` is either `None` or a
+mapping with BOTH counts as non-negative ints. `usage_is_reported()` is
+therefore true only of a real measurement, and `usage_or_zero()` is all-or-
+nothing -- it never returns one real count beside a fabricated one.
+
 HOW A FIXTURE CARRIES A STUB SCRIPT
 
 `StubProvider` is the conformance control case: no clock, no network, no
@@ -183,9 +208,25 @@ def request_digest(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:length]
 
 
+def _is_count(value: Any) -> bool:
+    """A token count is a non-negative int. `True` is not a count."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def usage_is_reported(result: Mapping[str, Any]) -> bool:
-    """True when the upstream actually reported token counts."""
-    return isinstance(result.get("usage"), Mapping)
+    """True only when BOTH token counts were really reported.
+
+    A partial usage is not a measurement (see PARTIAL USAGE in the header), so
+    it can never reach here: the shape is either complete or `None`. This
+    checks both counts anyway, because a caller may hand in a mapping this
+    module did not build.
+    """
+    usage = result.get("usage")
+    return (
+        isinstance(usage, Mapping)
+        and _is_count(usage.get("input_tokens"))
+        and _is_count(usage.get("output_tokens"))
+    )
 
 
 def usage_or_zero(result: Mapping[str, Any]) -> Dict[str, int]:
@@ -193,38 +234,53 @@ def usage_or_zero(result: Mapping[str, Any]) -> Dict[str, int]:
 
     Calling this asserts "for my purpose an unreported count is zero". Do not
     call it from anything that aggregates tokens per task.
+
+    It is all-or-nothing: a mapping that is not a complete measurement yields
+    two zeros rather than one real count beside a fabricated one. Mixing the
+    two produced a number that looked measured and was not -- the exact
+    failure this module exists to prevent.
     """
-    usage = result.get("usage")
-    if isinstance(usage, Mapping):
+    if usage_is_reported(result):
+        usage = result["usage"]
         return {
-            "input_tokens": int(usage.get("input_tokens") or 0),
-            "output_tokens": int(usage.get("output_tokens") or 0),
+            "input_tokens": int(usage["input_tokens"]),
+            "output_tokens": int(usage["output_tokens"]),
         }
     return {"input_tokens": 0, "output_tokens": 0}
 
 
 def _coerce_usage(raw: Any, input_key: str, output_key: str) -> Optional[Dict[str, int]]:
-    """Map an upstream usage object onto the contract, or None if it reported none.
+    """Map an UPSTREAM usage object onto the contract, or None if it reported none.
 
-    A usage object that is present but carries neither count is treated as
-    "not reported" -- the same rule, one level down: an empty envelope is not
-    a measurement.
+    All or nothing. A usage object carrying only one of the two counts is
+    treated as "not reported", exactly like an empty envelope and like no
+    envelope at all. Half a measurement cannot be completed honestly -- there
+    is no true value for the missing half, and filling it with 0 is the
+    fabricated zero this module exists to prevent -- so the only honest
+    answer is absent.
+
+    This is the vendor-facing half of the rule; `normalise_result` is the
+    contract-facing half and RAISES instead. See PARTIAL USAGE in the header
+    for why the two differ.
     """
     if not isinstance(raw, Mapping):
         return None
     got_in = raw.get(input_key)
     got_out = raw.get(output_key)
-    if got_in is None and got_out is None:
+    if got_in is None or got_out is None:
         return None
     out: Dict[str, int] = {}
     for name, value in (("input_tokens", got_in), ("output_tokens", got_out)):
-        if value is None:
-            continue
+        if isinstance(value, bool):
+            return None
         try:
-            out[name] = int(value)
+            count = int(value)
         except (TypeError, ValueError):
             return None
-    return out or None
+        if count < 0:
+            return None
+        out[name] = count
+    return out
 
 
 def normalise_result(raw: Any) -> Dict[str, Any]:
@@ -251,28 +307,81 @@ def normalise_result(raw: Any) -> Dict[str, Any]:
     if usage is not None:
         if not isinstance(usage, Mapping):
             raise ProviderResponseError("provider result 'usage' is not a mapping")
-        clean: Dict[str, int] = {}
-        for name in ("input_tokens", "output_tokens"):
-            value = usage.get(name)
-            if value is None:
-                continue
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ProviderResponseError("usage '%s' is not an integer" % name)
-            clean[name] = value
-        usage = clean or None
+        present = [n for n in ("input_tokens", "output_tokens") if usage.get(n) is not None]
+        if not present:
+            # An empty envelope is not a measurement. Absent, NEVER {0, 0}:
+            # zero-filling here is mutation MUT-R1, and it is pinned red.
+            usage = None
+        elif len(present) == 1:
+            # HALF a measurement. Unlike an upstream wire payload -- which
+            # this module cannot fix, so `_coerce_usage` records it as absent
+            # -- a provider handing back a partial usage is violating THIS
+            # module's contract, and the offender is reachable. Raise, so
+            # criterion 24 journals a `provider_error` rather than letting a
+            # half-real number into the tokens-per-task metric.
+            raise ProviderResponseError(
+                "provider result 'usage' reports only '%s': a partial usage is "
+                "not a measurement -- report both counts or omit usage entirely"
+                % present[0]
+            )
+        else:
+            clean: Dict[str, int] = {}
+            for name in ("input_tokens", "output_tokens"):
+                value = usage.get(name)
+                if not _is_count(value):
+                    raise ProviderResponseError(
+                        "usage '%s' is not a non-negative integer" % name
+                    )
+                clean[name] = int(value)
+            usage = clean
     return {"text": text, "tool_calls": calls, "usage": usage}
 
 
-def _safe_url(url: str) -> str:
-    """Scheme + host + path. Drops userinfo, query and fragment."""
+def _url_secrets(url: str) -> List[str]:
+    """The userinfo an operator put in a URL, so the redactor can know it too.
+
+    Structural scrubbing (`_safe_url`) is the primary defence; registering
+    these with the `_Redactor` is the backstop for text this module did not
+    compose itself -- an exception raised inside urllib, say.
+    """
     try:
         parts = urllib.parse.urlsplit(url)
+        return [p for p in (parts.username, parts.password) if p]
+    except ValueError:
+        return []
+
+
+def _safe_url(url: str) -> str:
+    """Scheme + host + port. NOTHING else, and this function never raises.
+
+    The PATH is dropped as well as userinfo, query and fragment. That is a
+    deliberate widening after the 2026-09-07 hostile review: a secret in a
+    URL path (`https://gateway/v1/<key>/chat`) is a real deployment shape,
+    it carries no structural marker that would let a redactor find it, and
+    the previous version echoed it back verbatim into every transport error.
+    A path can only be omitted, never scrubbed. Callers name the endpoint
+    with a STATIC label instead -- see `_post_json(..., label=)` -- so the
+    diagnostic value is kept without the caller's bytes.
+
+    It also never raises. `urlsplit` is lazy: `parts.port` parses on access
+    and throws `ValueError` on a malformed port, which previously escaped
+    this helper as a bare non-`ProviderError` from ABOVE the guarded region.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+        scheme = parts.scheme or ""
+        host = parts.hostname or ""
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        if port:
+            host = "%s:%d" % (host, port)
     except ValueError:
         return "<url>"
-    host = parts.hostname or ""
-    if parts.port:
-        host = "%s:%d" % (host, parts.port)
-    return urllib.parse.urlunsplit((parts.scheme, host, parts.path, "", ""))
+    if not scheme and not host:
+        return "<url>"
+    return "%s://%s" % (scheme or "?", host or "?")
 
 
 class _Redactor:
@@ -382,20 +491,43 @@ class _HttpProvider:
     """Shared urllib plumbing: no logging, no ambient proxy, scrubbed errors."""
 
     def __init__(self, api_key: Optional[str], base_url: str, timeout: float) -> None:
-        self._redact = _Redactor([api_key])
+        # The redactor knows the key AND any userinfo the operator put in the
+        # base URL. Registering the URL's credentials is what makes the
+        # scrubber cover text this module did not compose -- an exception
+        # raised inside urllib, for instance.
+        self._redact = _Redactor([api_key] + _url_secrets(base_url))
         self._api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._opener = _no_proxy_opener()
 
-    def _post_json(self, url: str, headers: Mapping[str, str], body: Mapping[str, Any]) -> Any:
-        data = json.dumps(body).encode("utf-8")
-        request = urllib.request.Request(url, data=data, method="POST")
-        for header, value in headers.items():
-            request.add_header(header, value)
-        request.add_header("Content-Type", "application/json")
+    def _post_json(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        body: Mapping[str, Any],
+        label: str = "endpoint",
+    ) -> Any:
+        """POST JSON. NOTHING derived from `url`, `headers` or `body` escapes.
+
+        `label` is a STATIC string supplied by this module (never caller
+        data); `where` is scheme+host+port only. Everything -- including the
+        `Request` construction and the JSON encoding -- happens inside the
+        guarded region, because both can raise carrying their input:
+        `Request("//user:pw@host/x")` raises `ValueError: unknown url type:
+        '//user:pw@host/x'`, which before 2026-09-07 was raised from ABOVE
+        this `try` and reached a human unscrubbed and not even wrapped as a
+        `ProviderError`.
+        """
+        for secret in _url_secrets(url):
+            self._redact.add(secret)
         where = _safe_url(url)
         try:
+            data = json.dumps(body).encode("utf-8")
+            request = urllib.request.Request(url, data=data, method="POST")
+            for header, value in headers.items():
+                request.add_header(header, value)
+            request.add_header("Content-Type", "application/json")
             with self._opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
         except urllib.error.HTTPError as exc:  # non-2xx
@@ -404,21 +536,34 @@ class _HttpProvider:
             except Exception:  # pragma: no cover - body already consumed
                 detail = ""
             raise ProviderTransportError(
-                self._redact.scrub("%s returned HTTP %s: %s" % (where, exc.code, detail))
+                self._redact.scrub(
+                    "%s %s returned HTTP %s: %s" % (where, label, exc.code, detail)
+                )
             ) from None
         except urllib.error.URLError as exc:
             raise ProviderTransportError(
-                self._redact.scrub("%s unreachable: %s" % (where, exc.reason))
+                self._redact.scrub("%s %s unreachable: %s" % (where, label, exc.reason))
+            ) from None
+        except TypeError as exc:
+            # An unserialisable request body. Its repr can quote the object.
+            raise ProviderResponseError(
+                self._redact.scrub("%s %s: request body is not JSON: %s" % (where, label, exc))
+            ) from None
+        except ValueError as exc:
+            # `Request(url)` on a URL with no usable scheme raises this and
+            # quotes the WHOLE url back, userinfo included. Never re-raise it.
+            raise ProviderTransportError(
+                self._redact.scrub("%s %s: unusable endpoint URL (%s)" % (where, label, type(exc).__name__))
             ) from None
         except Exception as exc:  # timeouts, socket errors
             raise ProviderTransportError(
-                self._redact.scrub("%s failed: %s" % (where, exc))
+                self._redact.scrub("%s %s failed: %s" % (where, label, exc))
             ) from None
         try:
             return json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, ValueError) as exc:
             raise ProviderResponseError(
-                self._redact.scrub("%s returned non-JSON: %s" % (where, exc))
+                self._redact.scrub("%s %s returned non-JSON: %s" % (where, label, exc))
             ) from None
 
 
@@ -498,7 +643,9 @@ class OpenAICompatProvider(_HttpProvider):
         headers = {}
         if self._api_key:
             headers["Authorization"] = "Bearer %s" % self._api_key
-        payload = self._post_json(self.base_url + "/chat/completions", headers, body)
+        payload = self._post_json(
+            self.base_url + "/chat/completions", headers, body, label="POST /chat/completions"
+        )
         return self._normalise(payload)
 
     def _normalise(self, payload: Any) -> Dict[str, Any]:
@@ -621,7 +768,9 @@ class AnthropicProvider(_HttpProvider):
         headers = {"anthropic-version": self.api_version}
         if self._api_key:
             headers["x-api-key"] = self._api_key
-        payload = self._post_json(self.base_url + "/v1/messages", headers, body)
+        payload = self._post_json(
+            self.base_url + "/v1/messages", headers, body, label="POST /v1/messages"
+        )
         return self._normalise(payload)
 
     def _normalise(self, payload: Any) -> Dict[str, Any]:
@@ -716,6 +865,10 @@ def _mock_server():
                 }
                 if mode == "emptyusage":
                     payload["usage"] = {}
+                elif mode == "partialusage":
+                    payload["usage"] = {"input_tokens": 11}
+                elif mode == "negusage":
+                    payload["usage"] = {"input_tokens": 11, "output_tokens": -7}
                 elif mode != "nousage":
                     payload["usage"] = {"input_tokens": 11, "output_tokens": 7}
             else:
@@ -738,6 +891,10 @@ def _mock_server():
                 }
                 if mode == "emptyusage":
                     payload["usage"] = {}
+                elif mode == "partialusage":
+                    payload["usage"] = {"prompt_tokens": 11}
+                elif mode == "negusage":
+                    payload["usage"] = {"prompt_tokens": 11, "completion_tokens": -7}
                 elif mode != "nousage":
                     payload["usage"] = {"prompt_tokens": 11, "completion_tokens": 7}
             self._send(200, json.dumps(payload))
@@ -757,8 +914,15 @@ def _mock_server():
 
 
 def _capture(call):
-    """Run `call`, returning (result, error_text, stdout+stderr)."""
+    """Run `call`, returning (result, error_text, stdout+stderr).
+
+    `error_text` carries the FULL formatted traceback, not just `str(exc)`.
+    A leak that only appears in a chained `__context__` or in a frame's
+    exception line is still a leak reaching a human's terminal, and pinning
+    only `str(exc)` is how the 2026-09-07 review found two the pins missed.
+    """
     import contextlib
+    import traceback
 
     out = io.StringIO()
     err = io.StringIO()
@@ -768,7 +932,11 @@ def _capture(call):
         try:
             result = call()
         except BaseException as exc:  # noqa: BLE001 - the pin is about the text
-            error_text = "%s: %s" % (type(exc).__name__, exc)
+            error_text = "%s: %s\n%s" % (
+                type(exc).__name__,
+                exc,
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            )
     return result, error_text, out.getvalue() + err.getvalue()
 
 
@@ -867,6 +1035,122 @@ def _pin_usage_absent_not_zero(base: str) -> None:
             empty["usage"] is None,
             "usage was %r" % (empty["usage"],),
         )
+
+
+def _pin_usage_all_or_nothing(base: str) -> None:
+    """PIN P7: half a measurement is not a measurement.
+
+    This is where mutation MUT-R1 -- zero-filling inside `normalise_result`
+    rather than only in the two HTTP adapters -- goes RED. P2a-P2f drive the
+    adapters and the `usage: None` stub path, and every one of them stays
+    green under MUT-R1 because `normalise_result`'s usage branch is never
+    entered with a mapping. These cases enter it.
+    """
+    # -- the CONTRACT-facing half: normalise_result --------------------------
+    empty = normalise_result({"text": "hi", "tool_calls": [], "usage": {}})
+    _check(
+        "P7a normalise_result: an EMPTY usage envelope is None, never {0, 0}",
+        empty["usage"] is None,
+        "usage was %r (this is mutation MUT-R1)" % (empty["usage"],),
+    )
+    for missing, partial in (
+        ("output_tokens", {"input_tokens": 11}),
+        ("input_tokens", {"output_tokens": 7}),
+    ):
+        _, error, _ = _capture(
+            lambda u=partial: normalise_result({"text": "hi", "tool_calls": [], "usage": u})
+        )
+        _check(
+            "P7b normalise_result REFUSES a usage missing '%s'" % missing,
+            error.startswith("ProviderResponseError"),
+            "expected ProviderResponseError, got %r" % error,
+        )
+    for label, bad in (
+        ("a negative count", {"input_tokens": 11, "output_tokens": -7}),
+        ("a float count", {"input_tokens": 11, "output_tokens": 7.5}),
+        ("a boolean count", {"input_tokens": 11, "output_tokens": True}),
+        ("a string count", {"input_tokens": "11", "output_tokens": "7"}),
+    ):
+        _, error, _ = _capture(
+            lambda u=bad: normalise_result({"text": "hi", "tool_calls": [], "usage": u})
+        )
+        _check(
+            "P7c normalise_result REFUSES %s" % label,
+            error.startswith("ProviderResponseError"),
+            "expected ProviderResponseError, got %r" % error,
+        )
+    kept = normalise_result(
+        {"text": "hi", "tool_calls": [], "usage": {"input_tokens": 11, "output_tokens": 0}}
+    )
+    _check(
+        "P7d normalise_result KEEPS a complete usage, including a real 0",
+        kept["usage"] == {"input_tokens": 11, "output_tokens": 0},
+        "usage was %r" % (kept["usage"],),
+    )
+
+    # A stub whose script carries a partial usage is refused at the boundary,
+    # not silently downgraded -- the offender is reachable, so it is told.
+    stub = StubProvider(default={"text": "x", "tool_calls": [], "usage": {"input_tokens": 5}})
+    _, error, _ = _capture(lambda: stub.complete([{"role": "user", "content": "x"}]))
+    _check(
+        "P7e a stub script with a PARTIAL usage raises rather than inventing 0",
+        error.startswith("ProviderResponseError"),
+        "got %r" % error,
+    )
+
+    # -- the VENDOR-facing half: _coerce_usage over real HTTP ----------------
+    for label, provider in (
+        (
+            "P7f openai-compat",
+            OpenAICompatProvider(
+                base_url=base + "/m/partialusage", api_key=_MOCK_KEY_SENTINEL, model="pin-model"
+            ),
+        ),
+        (
+            "P7g anthropic",
+            AnthropicProvider(
+                base_url=base + "/m/partialusage", api_key=_MOCK_KEY_SENTINEL, model="pin-model"
+            ),
+        ),
+    ):
+        got = provider.complete([{"role": "user", "content": "x"}])
+        _check(
+            "%s: an upstream PARTIAL usage is absent, not half-invented" % label,
+            got["usage"] is None,
+            "usage was %r" % (got["usage"],),
+        )
+    for label, provider in (
+        (
+            "P7h openai-compat",
+            OpenAICompatProvider(
+                base_url=base + "/m/negusage", api_key=_MOCK_KEY_SENTINEL, model="pin-model"
+            ),
+        ),
+        (
+            "P7i anthropic",
+            AnthropicProvider(
+                base_url=base + "/m/negusage", api_key=_MOCK_KEY_SENTINEL, model="pin-model"
+            ),
+        ),
+    ):
+        got = provider.complete([{"role": "user", "content": "x"}])
+        _check(
+            "%s: an upstream NEGATIVE count is absent, not carried" % label,
+            got["usage"] is None,
+            "usage was %r" % (got["usage"],),
+        )
+
+    # -- the consequence a caller relies on ---------------------------------
+    partial_result = {"text": "", "tool_calls": [], "usage": {"input_tokens": 11}}
+    _check(
+        "P7j usage_is_reported() is FALSE for a partial usage",
+        usage_is_reported(partial_result) is False,
+    )
+    _check(
+        "P7k usage_or_zero() never returns one real count beside a fabricated one",
+        usage_or_zero(partial_result) == {"input_tokens": 0, "output_tokens": 0},
+        "got %r" % (usage_or_zero(partial_result),),
+    )
 
 
 def _pin_http_round_trip(base: str) -> None:
@@ -1001,15 +1285,206 @@ def _pin_no_secret_leak(base: str) -> None:
         )
 
 
+def _pin_leak_sweep() -> None:
+    """PIN P8: a SENTINEL planted in every input position reaches nothing.
+
+    Written after the 2026-09-07 hostile review, whose whole finding was that
+    `P3a`/`P3b` covered the two shapes their author thought of. A pin that
+    enumerates known-bad cases permits every case nobody imagined -- this
+    repository's named recurring defect -- so this one is built the other way
+    round: it plants ONE sentinel string in every position an operator can put
+    a credential (key, URL username, URL password, path segment, query value),
+    drives every provider entry point over a grid of malformed and hostile
+    endpoints, and greps EVERYTHING that can reach a human -- the full
+    traceback, stdout, stderr, and every header actually put on the wire.
+
+    Three leaks it catches that a two-case pin did not:
+      * a scheme-less or empty-scheme base URL -- `Request()` raises
+        `ValueError` quoting the whole URL, from ABOVE the guarded region;
+      * a malformed port -- `parts.port` raises inside `_safe_url`, escaping
+        as a bare non-`ProviderError`;
+      * a credential in the URL PATH -- `_safe_url` used to keep `parts.path`
+        and echo it back verbatim into every transport error.
+    """
+    sentinel = "ZZ-LEAK-SENTINEL-9911-ZZ"
+    seen_headers: List[Dict[str, str]] = []
+
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            seen_headers.append(
+                dict({k.lower(): v for k, v in self.headers.items()}, _path=self.path)
+            )
+            # Echo the credential straight back, the nastiest real upstream.
+            body = json.dumps(
+                {
+                    "error": {
+                        "message": "rejected: %s %s"
+                        % (self.headers.get("Authorization", ""), self.headers.get("x-api-key", ""))
+                    },
+                    "seen": raw[:200].decode("utf-8", "replace"),
+                }
+            ).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server_port = server.server_address[1]
+    live = "http://127.0.0.1:%d" % server_port
+
+    # Every position a credential can occupy, x every provider.
+    endpoints = [
+        ("scheme-less base URL", "//u:%s@127.0.0.1:9" % sentinel),
+        ("empty-scheme base URL", ":%s@127.0.0.1:9" % sentinel),
+        ("unknown scheme", "gopher://u:%s@127.0.0.1:9" % sentinel),
+        ("userinfo, dead host", "http://u:%s@127.0.0.1:9" % sentinel),
+        ("userinfo as username", "http://%s:pw@127.0.0.1:9" % sentinel),
+        ("port out of range", "http://u:%s@127.0.0.1:99999999" % sentinel),
+        ("non-numeric port", "http://u:%s@127.0.0.1:notaport" % sentinel),
+        ("credential in the PATH", "http://127.0.0.1:9/%s" % sentinel),
+        ("credential in the QUERY", "http://127.0.0.1:9/x?token=%s" % sentinel),
+        ("credential in the PATH, live host", "%s/%s" % (live, sentinel)),
+        ("trailing-dot host", "http://u:%s@127.0.0.1.:9" % sentinel),
+        ("uppercase scheme", "HTTP://u:%s@127.0.0.1:9" % sentinel),
+    ]
+    keys = [("no key", None), ("key is the sentinel", sentinel), ("live key", "sk-live-decoy")]
+
+    leaked: List[str] = []
+    calls = 0
+    try:
+        for factory_name, factory in (
+            ("openai-compat", OpenAICompatProvider),
+            ("anthropic", AnthropicProvider),
+        ):
+            for where_label, base_url in endpoints:
+                for key_label, key in keys:
+                    label = "%s / %s / %s" % (factory_name, where_label, key_label)
+
+                    def drive(f=factory, b=base_url, k=key):
+                        provider = f(base_url=b, api_key=k, model="pin-model")
+                        return provider.complete(
+                            [{"role": "user", "content": "x"}],
+                            tools=[{"name": "grep", "parameters": {"type": "object"}}],
+                            response_schema={"type": "object", "title": "answer"},
+                        )
+
+                    calls += 1
+                    result, error, streams = _capture(drive)
+                    for kind, text in (("traceback", error), ("stdout/stderr", streams)):
+                        if sentinel in text:
+                            leaked.append("%s -> %s: %s" % (label, kind, text.strip()[:120]))
+                    if result is not None and sentinel in canonical_json(result):
+                        leaked.append("%s -> returned value" % label)
+                    # Every raise must still be a ProviderError, not a bare
+                    # ValueError escaping the guarded region.
+                    if error and not error.split(":")[0].startswith("Provider"):
+                        leaked.append("%s -> raised %s, not a ProviderError" % (label, error.split(":")[0]))
+    finally:
+        pass
+
+    _check(
+        "P8a a sentinel in ANY url position reaches no traceback, stream or return "
+        "value, and every raise is a ProviderError (%d paths)" % calls,
+        not leaked,
+        " | ".join(leaked[:4]),
+    )
+
+    # The wire assertion has to be stated precisely, or it is wrong in the
+    # permissive direction. An API KEY belongs in `Authorization` -- that is
+    # what a key IS -- and a path the operator wrote is the path we must
+    # request. The property worth pinning is narrower and is exactly the one
+    # `S3Store` broke: userinfo an operator put in the URL is NEVER PROMOTED
+    # onto the wire, not into a header, not into the request line.
+    #
+    # A CONTROL first, or the assertion below is vacuous: an identical request
+    # WITHOUT userinfo must actually arrive, proving the observation channel
+    # works. Without it "no leak reached the server" and "the pin never fired"
+    # are the same output -- verification that cannot fail is not verification.
+    seen_headers.clear()
+    control = OpenAICompatProvider(
+        base_url="http://127.0.0.1:%d" % server_port, api_key="sk-live-decoy", model="pin-model"
+    )
+    _capture(lambda: control.complete([{"role": "user", "content": "x"}]))
+    _check(
+        "P8b-control the observation channel works: a plain request IS seen",
+        len(seen_headers) == 1 and "authorization" in seen_headers[0],
+        "seen=%r" % (seen_headers,),
+    )
+
+    seen_headers.clear()
+    userinfo_only = "http://%s:%s@127.0.0.1:%d" % (sentinel, sentinel, server_port)
+    errors: List[str] = []
+    for factory in (OpenAICompatProvider, AnthropicProvider):
+        _, error, streams = _capture(
+            lambda f=factory: f(
+                base_url=userinfo_only, api_key="sk-live-decoy", model="pin-model"
+            ).complete([{"role": "user", "content": "x"}])
+        )
+        if sentinel in error or sentinel in streams:
+            errors.append(error.strip()[:120])
+        if not error.startswith("Provider"):
+            errors.append("raised %s, not a ProviderError" % error.split(":")[0])
+    on_wire = [
+        "%s=%s" % (name, value[:40])
+        for headers in seen_headers
+        for name, value in headers.items()
+        if name != "_path" and sentinel in value
+    ] + ["path=%s" % h["_path"] for h in seen_headers if sentinel in h["_path"]]
+    _check(
+        "P8b URL userinfo is never promoted onto the wire, and the failure it "
+        "causes is a scrubbed ProviderError (%d requests reached the server)"
+        % len(seen_headers),
+        not on_wire and not errors,
+        "wire=%r errors=%r" % (on_wire[:2], errors[:2]),
+    )
+
+    # The sentinel as the API KEY, against a live upstream that echoes it back
+    # inside its own 500 body -- the one path where the redactor, not the
+    # structure, is what saves us.
+    echoing = OpenAICompatProvider(base_url=live, api_key=sentinel, model="pin-model")
+    _, error, streams = _capture(lambda: echoing.complete([{"role": "user", "content": "x"}]))
+    _check(
+        "P8c an upstream ECHOING the key back in its error body is redacted",
+        sentinel not in error and sentinel not in streams,
+        "%r" % error[:200],
+    )
+
+    _check(
+        "P8d _safe_url keeps scheme+host+port and DROPS userinfo, path and query",
+        _safe_url("http://u:%s@example.test:8443/v1/%s?t=%s" % (sentinel, sentinel, sentinel))
+        == "http://example.test:8443",
+        "got %r" % _safe_url("http://u:%s@example.test:8443/v1/%s" % (sentinel, sentinel)),
+    )
+    _check(
+        "P8e _safe_url never raises, even on a malformed port",
+        _safe_url("http://u:%s@127.0.0.1:99999999/x" % sentinel).find(sentinel) == -1,
+    )
+
+    server.shutdown()
+    server.server_close()
+
+
 def _selftest() -> int:
     server, base = _mock_server()
     try:
         _pin_stub_deterministic()
         _pin_stub_refuses_unscripted()
         _pin_usage_absent_not_zero(base)
+        _pin_usage_all_or_nothing(base)
         _pin_http_round_trip(base)
         _pin_malformed_is_an_error(base)
         _pin_no_secret_leak(base)
+        _pin_leak_sweep()
     finally:
         server.shutdown()
         server.server_close()

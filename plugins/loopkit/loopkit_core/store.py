@@ -55,14 +55,35 @@ The only primitive this needs is the conditional write the plan already
 requires. Keys containing `/.part/` are rejected by every store so the three
 stay interchangeable.
 
-STALE SQLITE LOCKS
+STALE SQLITE LOCKS -- RECOVERED AUTOMATICALLY, WITHOUT A TIMEOUT
 
-If a runner dies without closing, its `runner_lock` row survives and the next
-open is refused -- correct, but it needs a human. The row records host and pid
-so the human can check whether that runner is really gone, and
-`SqliteStore(path, take_over=True)` is the explicit override. It is
-deliberately not automatic: a timeout-based steal is exactly the mechanism
-that lets two runners each believe they hold one journal.
+A `runner_lock` ROW cannot tell "held" from "abandoned": it is bytes that
+outlive their writer, so a SIGKILLed runner used to leave the store locked
+forever and criterion 13's resume needed a human with `take_over=True`.
+`close()` could not have fixed that -- SIGKILL never reaches it.
+
+So the row is no longer the authority. The authority is an exclusive
+`flock` on a sidecar file `<path>.runner-lock`, and the kernel releases it
+when the holding process dies, however it dies. The row stays, because it
+carries the host and pid a human needs to read.
+
+Takeover is automatic if and only if BOTH hold:
+
+  1. the kernel GRANTED the exclusive flock -- positive proof that no live
+     process holds this store; and
+  2. the stale row names THIS host -- so the flock was judged by the same
+     kernel that owned the dead runner.
+
+Condition 2 is what keeps this safe on a shared mount, where a local flock
+proves nothing about another machine: a row from another host still refuses
+and still requires `take_over=True`. No duration is guessed anywhere, which
+is the whole point -- a timeout-based steal is exactly the mechanism that
+lets two runners each believe they hold one journal.
+
+A LIVE holder is refused absolutely, and `take_over=True` does NOT override
+it. On a platform with no `fcntl`, behaviour falls back to the old
+row-only refusal and the message says so. Pinned by `--selftest` case S8,
+which SIGKILLs a real holding process.
 
 SECRETS
 
@@ -74,7 +95,8 @@ VERIFICATION STATUS (be suspicious of anything not listed here)
 
   * FsStore      -- pinned with real concurrent PROCESSES.
   * SqliteStore  -- pinned with real concurrent threads, plus a second process
-                    proving the runner lock refuses rather than interleaves.
+                    proving the runner lock refuses rather than interleaves,
+                    plus a SIGKILLed holder proving the store is recoverable.
   * S3Store      -- pinned against a live MinIO only when `--with-s3` is passed
                     and `LOOPKIT_S3_*` is set. Without that run it is
                     WRITTEN BUT UNVERIFIED; say so rather than implying cover.
@@ -96,6 +118,7 @@ import os
 import sqlite3
 import sys
 import threading
+import time as _time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -312,6 +335,25 @@ class FsStore:
 # --------------------------------------------------------------------------
 # SqliteStore
 # --------------------------------------------------------------------------
+_LOCK_ADVICE = {
+    "held": (
+        "A LIVE process holds the kernel lock on the sidecar file, so this is "
+        "not a stale row: find that process before doing anything else. "
+        "take_over=True does NOT override a live holder."
+    ),
+    "other-host": (
+        "The kernel granted the sidecar lock here, but the stale row names a "
+        "DIFFERENT host -- so this file is on a shared mount, where a local "
+        "flock proves nothing about the other machine. Confirm that runner is "
+        "dead on ITS host, then pass take_over=True."
+    ),
+    "unsupported": (
+        "This platform has no fcntl, so automatic recovery of a stale lock is "
+        "unavailable. Confirm the named runner is dead, then pass "
+        "take_over=True."
+    ),
+}
+
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS records ("
     " key TEXT NOT NULL, ord INTEGER NOT NULL, value BLOB NOT NULL,"
@@ -350,25 +392,83 @@ class SqliteStore:
         for statement in _SCHEMA:
             self._conn.execute(statement)
         self._closed = False
+        self._lock_path = self.path + ".runner-lock"
+        self._lock_fd: Optional[int] = None
+        self._took_over = False
         self._claim_runner_lock(take_over)
 
     # -- runner lock --------------------------------------------------------
+    def _acquire_flock(self) -> str:
+        """Take the kernel's exclusive advisory lock on the sidecar file.
+
+        Returns "held" (somebody LIVE has it), "granted", or "unsupported".
+
+        This is what makes a SIGKILLed holder recoverable without a human and
+        WITHOUT inventing a timeout. The kernel drops a `flock` when the
+        holding open-file-description goes away, and it does that however the
+        process died -- SIGKILL, power loss on reboot, anything. So a granted
+        lock is positive proof that no live process holds this store, which a
+        `runner_lock` ROW can never be: a row is just bytes that outlive their
+        writer. No duration is guessed anywhere, which is the point -- a
+        timeout-based steal is exactly the mechanism that lets two runners each
+        believe they hold one journal.
+        """
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - not POSIX
+            return "unsupported"
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return "held"
+        self._lock_fd = fd
+        return "granted"
+
     def _claim_runner_lock(self, take_over: bool) -> None:
+        flock_state = self._acquire_flock()
         with self._guard:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 row = self._conn.execute(
                     "SELECT runner_id, host, pid, acquired_at FROM runner_lock WHERE id = 1"
                 ).fetchone()
+                stale_but_recoverable = (
+                    flock_state == "granted"
+                    and bool(row)
+                    and row[1] == _hostname()
+                )
                 if row and row[0] != self.runner_id and not take_over:
-                    self._conn.execute("ROLLBACK")
-                    self._conn.close()
-                    self._closed = True
-                    raise StoreLocked(
-                        "sqlite store is already held by runner %s (host=%s pid=%s since %s); "
-                        "refusing to interleave writes -- pass take_over=True only after "
-                        "confirming that runner is dead" % (row[0], row[1], row[2], row[3])
-                    )
+                    if flock_state == "granted" and stale_but_recoverable:
+                        # AUTOMATIC TAKEOVER, under a stated condition and no
+                        # timeout: the kernel granted an exclusive flock (so no
+                        # live process holds this store) AND the stale row names
+                        # THIS host (so the flock was judged by the same kernel
+                        # that owned the dead runner). Both halves are required.
+                        # A row from another host means the file is on a shared
+                        # mount, where flock proves nothing about the other
+                        # machine -- that case still falls through and refuses.
+                        self._took_over = True
+                    else:
+                        self._conn.execute("ROLLBACK")
+                        self._conn.close()
+                        self._closed = True
+                        self._release_flock()
+                        raise StoreLocked(
+                            "sqlite store is already held by runner %s (host=%s pid=%s "
+                            "since %s); refusing to interleave writes. %s"
+                            % (
+                                row[0],
+                                row[1],
+                                row[2],
+                                row[3],
+                                _LOCK_ADVICE.get(
+                                    "held" if flock_state == "held" else flock_state,
+                                    _LOCK_ADVICE["other-host"],
+                                ),
+                            )
+                        )
                 self._conn.execute(
                     "INSERT OR REPLACE INTO runner_lock"
                     " (id, runner_id, host, pid, acquired_at) VALUES (1, ?, ?, ?, ?)",
@@ -453,6 +553,22 @@ class SqliteStore:
                 ).fetchall()
         return [row[0] for row in rows]
 
+    def _release_flock(self) -> None:
+        fd = self._lock_fd
+        self._lock_fd = None
+        if fd is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except (ImportError, OSError):  # pragma: no cover
+            pass
+        try:
+            os.close(fd)
+        except OSError:  # pragma: no cover
+            pass
+
     def close(self) -> None:
         if self._closed:
             return
@@ -466,6 +582,7 @@ class SqliteStore:
             pass
         finally:
             self._conn.close()
+            self._release_flock()
 
     def __enter__(self) -> "SqliteStore":
         return self
@@ -538,11 +655,44 @@ class S3Store:
                 "no credentials: pass access_key=/secret_key= or set "
                 "LOOPKIT_S3_ACCESS_KEY / LOOPKIT_S3_SECRET_KEY"
             )
-        parts = urllib.parse.urlsplit(endpoint if "://" in endpoint else "https://" + endpoint)
+        # `parts.netloc` INCLUDES `user:password@`. Assigning it to `self.host`
+        # (what this did before 2026-09-07) put the password into every error
+        # message, into the outgoing `Host:` header, and into the SigV4
+        # canonical request -- i.e. it was SIGNED onto the wire. Host is built
+        # from `hostname` and `port` only, and userinfo is never reassembled
+        # into a host string anywhere in this class.
+        try:
+            parts = urllib.parse.urlsplit(
+                endpoint if "://" in endpoint else "https://" + endpoint
+            )
+            hostname = parts.hostname or ""
+            try:
+                port = parts.port
+            except ValueError:
+                raise StoreError("endpoint has a malformed port") from None
+            userinfo = [v for v in (parts.username, parts.password) if v]
+        except StoreError:
+            raise
+        except ValueError:
+            raise StoreError("endpoint is not a usable URL") from None
+        # Register before any raise below, so even the refusal message is
+        # scrubbed if some future edit interpolates the endpoint into it.
+        self._url_secrets = list(userinfo)
+        if userinfo:
+            # S3 authenticates with SigV4, never with URL userinfo. Silently
+            # dropping a credential the operator supplied would let them
+            # believe it was used; signing it into the Host header is worse.
+            # Refuse, and name no value.
+            raise StoreError(
+                "endpoint URL carries userinfo (user:password@host): S3 "
+                "authenticates with SigV4, not with URL credentials. Remove "
+                "them from LOOPKIT_S3_ENDPOINT and pass access_key=/secret_key= "
+                "or set LOOPKIT_S3_ACCESS_KEY / LOOPKIT_S3_SECRET_KEY."
+            )
         self.scheme = parts.scheme or "https"
-        self.host = parts.netloc
-        if not self.host:
+        if not hostname:
             raise StoreError("endpoint has no host")
+        self.host = "%s:%d" % (hostname, port) if port else hostname
         self.prefix = prefix.strip("/")
         self.timeout = timeout
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -638,7 +788,9 @@ class S3Store:
             ) from None
 
     def _scrub(self, text: str) -> str:
-        for secret in (self._secret_key, self._access_key):
+        for secret in [self._secret_key, self._access_key] + list(
+            getattr(self, "_url_secrets", [])
+        ):
             if secret and len(secret) >= 4 and secret in text:
                 text = text.replace(secret, "***")
         return text
@@ -778,6 +930,7 @@ class S3Store:
 # GREEN again after restoring it. A pin that cannot fail is decoration.
 # --------------------------------------------------------------------------
 _RESULTS: List[str] = []
+_SKIPS: List[str] = []
 _SECRET_SENTINEL = "PINSECRET-do-not-log-9876543210abcdef"
 _ACCESS_SENTINEL = "PINACCESSKEY0001"
 
@@ -928,6 +1081,82 @@ def _pin_sqlite_refuses_second_runner(tmp: str) -> None:
     )
 
 
+def _pin_sqlite_survives_a_killed_holder(tmp: str) -> None:
+    """PIN S8: a SIGKILLed holder does NOT lock the store forever.
+
+    The 2026-09-07 review found that a killed runner left `runner_lock`
+    permanently claimed, so criterion 13's resume could not happen without a
+    human passing `take_over=True`. `close()` is never reached by SIGKILL --
+    that is what SIGKILL means -- so no amount of care in `close()` could fix
+    it, and a timeout would have been a guess. The kernel already knows: it
+    drops a `flock` when the holding process dies, however it died.
+
+    This pin kills a real process with a real SIGKILL. It is the reason the
+    fix is a kernel lock and not a heuristic.
+    """
+    import signal
+    import subprocess
+
+    path = os.path.join(tmp, "killed.sqlite3")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _package_parent() + os.pathsep + env.get("PYTHONPATH", "")
+    holder = subprocess.Popen(
+        [sys.executable, "-m", "loopkit_core.store", "--worker-hold-sqlite", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        text=True,
+    )
+    try:
+        line = holder.stdout.readline().strip()
+        _check(
+            "S8a-control the holder really took the store (setup, not the property)",
+            line.startswith("HOLDING"),
+            "got %r" % line,
+        )
+        # While it lives, a second runner is still refused -- the fix must not
+        # have turned the lock into a no-op.
+        blocked = _capture(lambda: SqliteStore(path).close())[0]
+        _check(
+            "S8b a LIVE holder is still refused (the lock did not become a no-op)",
+            blocked.startswith("StoreLocked"),
+            "got %r" % blocked[:160],
+        )
+        holder.send_signal(signal.SIGKILL)
+        holder.wait(timeout=10)
+    finally:
+        if holder.poll() is None:  # pragma: no cover
+            holder.kill()
+            holder.wait(timeout=10)
+        holder.stdout.close()
+        holder.stderr.close()
+
+    recovered: Dict[str, Any] = {}
+
+    def reopen():
+        recovered["store"] = SqliteStore(path)
+
+    error, _streams = _capture(reopen)
+    _check(
+        "S8c after SIGKILL the next runner opens the store AUTOMATICALLY -- no "
+        "human, no take_over=True, no timeout",
+        recovered.get("store") is not None,
+        "open failed: %s" % error.strip()[:200],
+    )
+    store = recovered.get("store")
+    if store is not None:
+        _check(
+            "S8d the killed runner's journal survives the takeover (criterion 13 resume)",
+            store.get("journal/run-1/head") == b"written before the kill",
+            "value=%r" % (store.get("journal/run-1/head"),),
+        )
+        _check(
+            "S8e the takeover is recorded as one, not silently pretended",
+            getattr(store, "_took_over", False) is True,
+        )
+        store.close()
+
+
 # -- pin S3: append is atomic per record ----------------------------------
 def _decode_records(raw: Optional[bytes]) -> Tuple[List[dict], List[str]]:
     good: List[dict] = []
@@ -1076,7 +1305,13 @@ def _recording_s3_server():
 
 
 def _capture(call):
+    """Run `call`, returning (full traceback text, stdout+stderr).
+
+    The traceback, not just `str(exc)`: a credential that only shows up in a
+    chained `__context__` or a frame line still reaches a human's terminal.
+    """
     import contextlib
+    import traceback
 
     out = io.StringIO()
     err = io.StringIO()
@@ -1085,7 +1320,11 @@ def _capture(call):
         try:
             call()
         except BaseException as exc:  # noqa: BLE001
-            error_text = "%s: %s" % (type(exc).__name__, exc)
+            error_text = "%s: %s\n%s" % (
+                type(exc).__name__,
+                exc,
+                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            )
     return error_text, out.getvalue() + err.getvalue()
 
 
@@ -1155,6 +1394,92 @@ def _pin_no_secret_leak(tmp: str) -> None:
     _check("S4d no store writes a credential into any file it creates", not found, "%r" % found)
 
 
+def _pin_s3_endpoint_userinfo() -> None:
+    """PIN S7: an S3 ENDPOINT carrying userinfo. The gap `S4b` never covered.
+
+    `S4a`/`S4b` planted a sentinel in the SigV4 secret only, so the whole
+    `S3Store.__init__` endpoint path went untested -- and that is where the
+    2026-09-07 review found `self.host = parts.netloc`, which put the
+    operator's password into `self.host`, hence into every error message,
+    into the outgoing `Host:` header, and into the SigV4 canonical request,
+    where it was SIGNED onto the wire.
+
+    Built as a sweep rather than as one case: the sentinel goes in every
+    position an operator can put a credential in an endpoint URL, and the
+    whole traceback is grepped.
+    """
+    sentinel = "ZZ-S3-ENDPOINT-SENTINEL-9911-ZZ"
+    endpoints = [
+        ("userinfo, explicit scheme", "http://u:%s@127.0.0.1:9" % sentinel),
+        ("userinfo, implied https", "u:%s@127.0.0.1:9" % sentinel),
+        ("userinfo as the username", "http://%s:pw@127.0.0.1:9" % sentinel),
+        ("userinfo + malformed port", "http://u:%s@127.0.0.1:99999999" % sentinel),
+        ("userinfo + non-numeric port", "http://u:%s@127.0.0.1:notaport" % sentinel),
+        ("userinfo + trailing path", "http://u:%s@127.0.0.1:9/bucketroot" % sentinel),
+        ("userinfo, no port", "https://u:%s@example.invalid" % sentinel),
+    ]
+    leaked: List[str] = []
+    refused = 0
+    for label, endpoint in endpoints:
+        holder: Dict[str, Any] = {}
+
+        def build(e=endpoint, h=holder):
+            h["store"] = S3Store(
+                bucket="pin-bucket", endpoint=e, access_key="AK-pin", secret_key="SK-pin-secret"
+            )
+            h["store"].put_if_absent("journal/a", "v")
+
+        error, streams = _capture(build)
+        if sentinel in error or sentinel in streams:
+            leaked.append("%s -> %s" % (label, error.strip()[:120]))
+        store = holder.get("store")
+        if store is None:
+            refused += 1
+        else:
+            # If a future edit decides to accept userinfo instead of refusing,
+            # the host it derives must STILL be free of it -- belt and braces,
+            # because `self.host` is what is signed and what is sent.
+            if sentinel in getattr(store, "host", ""):
+                leaked.append("%s -> store.host carries it: %r" % (label, store.host))
+    _check(
+        "S7a an endpoint URL's userinfo reaches no traceback and no stream (%d shapes)"
+        % len(endpoints),
+        not leaked,
+        " | ".join(leaked[:3]),
+    )
+    _check(
+        "S7b every endpoint carrying userinfo is REFUSED, not silently stripped "
+        "(a dropped credential the operator thinks was used is its own bug)",
+        refused == len(endpoints),
+        "refused %d of %d" % (refused, len(endpoints)),
+    )
+
+    # A CONTROL, or S7a/S7b prove nothing: the same endpoint WITHOUT userinfo
+    # must build, and its host must be exactly hostname:port.
+    clean = S3Store(
+        bucket="pin-bucket",
+        endpoint="http://127.0.0.1:9000",
+        access_key="AK-pin",
+        secret_key="SK-pin-secret",
+    )
+    _check(
+        "S7c-control the same endpoint without userinfo builds, host is host:port",
+        clean.host == "127.0.0.1:9000" and clean.scheme == "http",
+        "host=%r scheme=%r" % (clean.host, clean.scheme),
+    )
+    no_port = S3Store(
+        bucket="pin-bucket",
+        endpoint="https://s3.example.invalid",
+        access_key="AK-pin",
+        secret_key="SK-pin-secret",
+    )
+    _check(
+        "S7d a portless endpoint keeps a bare hostname (no ':None')",
+        no_port.host == "s3.example.invalid",
+        "host=%r" % no_port.host,
+    )
+
+
 # -- pin S6: S3Store against a live MinIO ----------------------------------
 def _s3_from_env() -> Optional[S3Store]:
     try:
@@ -1163,13 +1488,49 @@ def _s3_from_env() -> Optional[S3Store]:
         return None
 
 
+def _s3_reachable(store: "S3Store") -> Tuple[bool, str]:
+    """Probe the endpoint once. Never prints, never leaks: the reason is
+    scrubbed through the store's own redactor before it is returned."""
+    try:
+        store._request("GET", "/" + _uri_encode(store.bucket), query=[("max-keys", "0")])
+        return True, ""
+    except StoreError as exc:
+        return False, store._scrub(str(exc))[:120]
+    except Exception as exc:  # noqa: BLE001
+        return False, store._scrub("%s: %s" % (type(exc).__name__, exc))[:120]
+
+
+_S3_UNVERIFIED = (
+    "S3Store.put_if_absent (If-None-Match conditional write), S3Store.append "
+    "(per-record part objects), S3Store.get (base+parts concatenation) and "
+    "S3Store.list (pagination past 1000 keys) are UNVERIFIED against real "
+    "object storage in this run"
+)
+
+
+def _skip_loudly(label: str, why: str) -> None:
+    """A skip that NAMES what went unverified. A silent skip is this repo's
+    named defect: a suite that never ran reports success by running nothing."""
+    line = "SKIP %s -- %s -- %s" % (label, why, _S3_UNVERIFIED)
+    _SKIPS.append(line)
+    print(line)
+
+
 def _pin_s3_live() -> None:
     store = _s3_from_env()
     if store is None:
+        # Asking for --with-s3 and not configuring it is an operator error,
+        # not an absent dependency. That is a FAIL, not a skip.
         _bad(
             "S6 S3Store against a live endpoint",
-            "LOOPKIT_S3_* not set -- S3Store is UNVERIFIED in this run",
+            "--with-s3 was requested but LOOPKIT_S3_* is not set -- " + _S3_UNVERIFIED,
         )
+        return
+    # Configured but unreachable is a different thing: CI without a MinIO must
+    # not go red, but it must not go quiet either.
+    reachable, why = _s3_reachable(store)
+    if not reachable:
+        _skip_loudly("S6 S3Store live pins", "endpoint unreachable (%s)" % why)
         return
     run = "pin-%s" % uuid.uuid4().hex[:8]
     key = "%s/claim" % run
@@ -1257,6 +1618,13 @@ def _worker(args: Sequence[str]) -> int:
         store.close()
         print("OPENED")
         return 0
+    if kind == "--worker-hold-sqlite":
+        path = args[1]
+        store = SqliteStore(path)
+        store.put_if_absent("journal/run-1/head", "written before the kill")
+        print("HOLDING %d" % os.getpid(), flush=True)
+        while True:  # wait to be SIGKILLed; never closes, never releases
+            _time.sleep(3600)
     if kind == "--worker-put-s3":
         key, value = args[1], args[2]
         store = S3Store()
@@ -1282,19 +1650,28 @@ def _selftest(with_s3: bool) -> int:
         _pin_conditional_write_fs(tmp)
         _pin_conditional_write_sqlite(tmp)
         _pin_sqlite_refuses_second_runner(tmp)
+        _pin_sqlite_survives_a_killed_holder(tmp)
         _pin_append_atomic_fs(tmp)
         _pin_append_atomic_sqlite(tmp)
         _pin_list_not_truncated(tmp)
         _pin_no_secret_leak(tmp)
+        _pin_s3_endpoint_userinfo()
     if with_s3:
         _pin_s3_live()
     else:
-        print("SKIP S6 S3Store live pins (pass --with-s3 with LOOPKIT_S3_* to run them)")
+        _skip_loudly("S6 S3Store live pins", "--with-s3 not passed")
     failures = [line for line in _RESULTS if line.startswith("FAIL")]
     print("")
     if failures:
         print("store.py: %d FAIL of %d" % (len(failures), len(_RESULTS)))
         return 1
+    if _SKIPS:
+        # Printed on the SUMMARY line, not only 60 lines up, so a reader who
+        # sees "ALL PASS" also sees what was never checked.
+        print("store.py: ALL PASS (%d pins) -- %d LOUD SKIP:" % (len(_RESULTS), len(_SKIPS)))
+        for line in _SKIPS:
+            print("  " + line)
+        return 0
     print("store.py: ALL PASS (%d pins)" % len(_RESULTS))
     return 0
 
