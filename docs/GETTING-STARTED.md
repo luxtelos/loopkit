@@ -57,7 +57,7 @@ not initialise a project with a plugin that cannot pass its own tests.
 
 The suite also runs `check-citations.py` against **this checkout** — not
 against a fixture — so a `file:line` that has rotted in these documents turns
-the run red before you push. The invocation is at `tests/selftest.sh:270`, and
+the run red before you push. The invocation is at `tests/selftest.sh:332`, and
 CI reaches it by running the whole suite at
 `.github/workflows/selftest.yml:20`. Both lines are pinned in
 `.loopkit/citations.json`: move either one and the gate says so, and prints

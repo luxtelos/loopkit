@@ -41,6 +41,63 @@ expect_rc() {  # <want> <label> <cmd...>
 # The baseline is the tree AS FOUND, not a clean tree, because a developer runs
 # this suite with uncommitted work. What is asserted is that the suite changes
 # nothing, which is true whether the tree started clean or dirty.
+#
+# WHAT COUNTS AS A DEVIATION, and why it is not raw string inequality.
+#
+# The first version compared `git status --porcelain` verbatim against the
+# baseline, and that fires on things the suite did not do. Observed on
+# 2026-09-07: a run started with a merge STAGED but not committed, the commit
+# landed from another shell mid-run, and the watcher reported a "deviation"
+# that was simply the baseline with the committed paths gone. Nothing had
+# written to the tree; three paths had stopped being dirty. Agents run this
+# suite mid-merge all day, and a guard that cries wolf is a guard somebody
+# switches off -- which is how the class comes back.
+#
+# So the comparison is over the SET OF PATHS that are dirty, and only paths
+# that are dirty NOW and were CLEAN at the baseline count. A harness writing to
+# the tracked tree can only make it dirtier, so that is the direction worth
+# watching; a path leaving the dirty set means somebody outside the suite
+# committed, stashed or restored it, which is not this suite's business. It
+# also stops an external `git add` counting, because staging moves ` M path` to
+# `M  path` without touching the path set.
+#
+# On a clean tree -- CI, and any release run -- the baseline path set is empty
+# and this is exactly as strict as comparing the whole string. Two things it
+# gives up, stated rather than discovered: a harness that WRITES to a file the
+# developer had already dirtied is missed, and an edit made from another shell
+# to a clean file during the run is still blamed on the suite. The first is a
+# path where the watcher could never have told you anything trustworthy; the
+# second fails loud, which is the safe direction.
+#
+# `sed 's/^...//'`: porcelain v1 is `XY <path>`, so the path starts at column 4.
+# `s/^.* -> //`: a rename reads `R  old -> new` and the destination is the
+# entry that is dirty. A path that literally contains " -> " would be truncated
+# to its tail -- it would still be a stable key, which is all this needs.
+tw_paths() { sed -e 's/^...//' -e 's/^.* -> //' -e '/^$/d' | LC_ALL=C sort -u; }
+# The paths dirty in $2 that were not dirty in $1. Empty output == no deviation.
+tw_newly_dirty() {
+  comm -13 <(printf '%s\n' "$1" | tw_paths) <(printf '%s\n' "$2" | tw_paths)
+}
+
+# A guard nobody has seen fail is not a guard, and this one only ever speaks up
+# when something is wrong -- so its comparator is fed known inputs here, at the
+# top, where a broken comparator is reported instead of quietly passing the
+# whole suite. Cheap: no git, no subshell loop, just the two rules.
+echo "== the tracked-tree watcher's own comparator"
+tw_t_base="$(printf 'M  a.json\n M b.md\nM  c.md')"
+[ "$(tw_newly_dirty "$tw_t_base" "$(printf 'M  a.json\n M b.md\nM  c.md\n M src/new.py')")" = "src/new.py" ] \
+  && ok "a newly dirty path is a deviation (this is the 62943e3 shape)" \
+  || fail "comparator does NOT flag a newly dirty path — the watcher below cannot catch anything"
+[ -z "$(tw_newly_dirty "$tw_t_base" "$(printf 'M  a.json')")" ] \
+  && ok "paths leaving the dirty set are not a deviation (an outside commit)" \
+  || fail "comparator flags an outside commit — the watcher below will cry wolf"
+[ -z "$(tw_newly_dirty "$tw_t_base" "$(printf 'MM a.json\nM  b.md\nM  c.md')")" ] \
+  && ok "restaging a path already dirty is not a deviation" \
+  || fail "comparator flags an outside git add"
+[ "$(tw_newly_dirty "" "$(printf ' M plugins/loopkit/loopkit_core/provider.py')")" = "plugins/loopkit/loopkit_core/provider.py" ] \
+  && ok "on a clean tree any dirty path is a deviation" \
+  || fail "comparator is blind on a clean tree — the CI case"
+
 TREEWATCH_PID=""; TREEWATCH_LOG=""; TREEWATCH_BASE=""
 if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   TREEWATCH_BASE="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
@@ -50,7 +107,12 @@ if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   (
     while :; do
       now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
-      [ "$now" = "$TREEWATCH_BASE" ] || printf '%s\n=== end of sample ===\n' "$now" >> "$TREEWATCH_LOG"
+      if [ "$now" != "$TREEWATCH_BASE" ]; then
+        # Judged HERE, not at the end: the deviation is transient by
+        # definition, so the sample that saw it is the only place it exists.
+        tw_new="$(tw_newly_dirty "$TREEWATCH_BASE" "$now")"
+        [ -z "$tw_new" ] || printf '%s\n' "$tw_new" >> "$TREEWATCH_LOG"
+      fi
       sleep 0.5
     done
   ) &
@@ -1193,10 +1255,14 @@ if [ -n "$TREEWATCH_PID" ]; then
   # longer than one poll interval to finish appending before the log is read.
   sleep 0.7
   tw_now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
-  if [ "$tw_now" != "$TREEWATCH_BASE" ]; then
-    fail "the suite CHANGED the tracked tree and left it changed — now: $(printf '%s' "$tw_now" | tr '\n' ';' | cut -c1-200)"
+  # Same rule as the sampler, or the two verdicts would disagree about what a
+  # deviation is: newly dirty paths only, so a commit landing from another
+  # shell mid-run is not reported as residue this suite left behind.
+  tw_residue="$(tw_newly_dirty "$TREEWATCH_BASE" "$tw_now")"
+  if [ -n "$tw_residue" ]; then
+    fail "the suite DIRTIED tracked paths and left them dirty: $(printf '%s' "$tw_residue" | tr '\n' ' ' | cut -c1-200)"
   elif [ -s "$TREEWATCH_LOG" ]; then
-    fail "a harness altered the tracked tree DURING the run and restored it — a concurrent git add inside that window is how 62943e3 happened. First deviation: $(head -3 "$TREEWATCH_LOG" | tr '\n' ';')"
+    fail "a harness dirtied tracked paths DURING the run and restored them — a concurrent git add inside that window is how 62943e3 happened. First seen: $(sort -u "$TREEWATCH_LOG" | head -3 | tr '\n' ' ')"
   else
     ok "the tracked tree was never observed to differ from the state this run started in"
   fi
