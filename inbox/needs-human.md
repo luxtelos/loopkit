@@ -247,3 +247,28 @@ deliberately does not compute it. Strike `targets` from that list and add a
 sentence naming it beside `messages` as the second key the pin cannot derive.
 This inconsistency is the unavoidable cost of fixing the pin without being able
 to touch the spec, and it is a plain falsehood until item 1 lands.
+
+## The marketplace submission is ready, and it is yours to send (2026-09-07)
+
+Its precondition is met — 0.2.0 was tagged three releases ago, and the current
+tag is v0.2.2 — so the row is no longer waiting on the repository. It is waiting
+on you for a different reason: submitting to `anthropics/claude-plugins-official`
+means opening a pull request against someone else's repository under your name.
+That is a public, outward-facing act, and it is not mine to perform on your
+behalf.
+
+What is ready now: the plugin validates, the suite passes on macOS and Linux,
+three releases are tagged with notes, and the README, roadmap and getting-started
+guide are current.
+
+What I would fix before submitting, and would rather you decide on:
+
+- The model invariants are proved on macOS only. The continuous integration
+  patch that would prove them on Linux cannot be pushed from here, so a reviewer
+  reading the workflow sees a suite that runs but does not check the model.
+- The citation checker reports EMPTY on this repository — there are no
+  file-and-line citations to check. Honest, but a reviewer may read the feature
+  as unexercised, which it is.
+
+Neither blocks a submission. Both are things I would rather you knew before
+your name is on it.
