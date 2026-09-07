@@ -10,6 +10,12 @@
   everything — name the files. (All four are refused by the plugin's
   `block_dangerous.py`; the rule stands whether or not the hook catches a new
   spelling.)
+- Commit through `loop-commit.sh -m "…" -- <paths>`, never a bare `git commit`.
+  Naming files at `git add` time is not enough: the git index is one file per
+  worktree, shared by every process in it, so between your add and your commit
+  another agent's commit can publish your staged files under its message. The
+  wrapper holds `.loopkit/driver.lock` across both steps. A bare commit is
+  refused by `require_commit_lock.py`.
 - Which stage is next is a lookup: `loop-next.sh`, never a judgement. Advance
   exactly one stage per tick, for every row at it, record each transition keyed
   on `--source`, then stop.
