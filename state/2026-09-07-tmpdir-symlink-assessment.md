@@ -16,6 +16,19 @@ Both arms run on the merge base, in a detached worktree, changing nothing but
 - symlinked with a trailing slash → `3 FAILURE(S)`
 - non-symlinked control → `ALL PASS`
 
+**The control arm is not deterministic, and this document should have said so.**
+`tests/selftest.sh:738` bounds a wall-clock measurement at `< 200 ms`, and what
+that measurement is mostly made of is a Python interpreter starting up on a
+shared CPU. Re-running the control on this tree, changing nothing at all, I
+measured 31 ms to 154 ms across 70 invocations. The reviewer of #28 saw a fourth
+failure, `FAIL timing: 280 hit`, on a run that was otherwise `ALL PASS`, and a
+re-run passed. So `ALL PASS` above is a claim about the three graph checks and
+is reproducible as such; it is not a promise that every run of the suite is
+green, because a load-sensitive pin can add a red line to any arm. That pin is
+its own finding and is already queued on PR #29 as
+`flake 2026-09-07 §offload-timing-budget` — referenced here rather than
+duplicated as a new row.
+
 `/var` is a symlink to `private/var` on this machine, so `Path(tmp).resolve()`
 differs from the raw string. The failing messages quote a `/private/var/...`
 path back, which is the tell.
