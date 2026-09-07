@@ -338,3 +338,104 @@ specification change at all. Both are defensible.
 **Nothing ships either way today**: the providers are not merged. A triage row
 at `blocked` counts this decision — see `state/triage.md`, source
 `inbox 2026-09-07 §criterion-23-usage-0-or-absent`.
+
+## Owner ruling needed: how a dated record should cite live code (2026-09-07)
+
+This is a convention change affecting every future row in `state/` and `inbox/`,
+so it is yours, not mine. I have made the two rows in front of me consistent
+(below) and stopped there.
+
+### The mechanism, not the instance
+
+PRs #28 and #30 have now failed four review rounds, and three of those failures
+arrived the same way:
+
+1. a row in `state/` cites live code as `path:line`,
+2. `main` moves — today it moved several times,
+3. the row is now false about the tree it appears to describe,
+4. nothing catches it.
+
+Step 4 is not a bug. `check-citations.py:68-70` (as of `a63ead6`) deliberately
+never scans dated records: *"they describe what was true when written, and
+'correcting' them would falsify the record."* **That exclusion is correct and I
+am not proposing to change it.** A dated record is a claim about a past tree;
+rewriting it to match today's tree destroys the only thing it was for.
+
+But the two facts together have a consequence nobody wrote down: **a dated row
+carrying a bare `path:line` is a latent falsehood by construction.** A bare line
+number silently means "as of today", and "today" is the day it was written. The
+moment `main` moves the row asserts something false while still looking like a
+statement about the current tree — and by design no gate will ever say so.
+
+Round 3 of #28 is the clean demonstration. `state/…tmpdir-symlink-assessment.md:20`
+cited a `< 200 ms` bound at `tests/selftest.sh:738`. It was true at `72b8c71`.
+A merge-forward replaced that pin with an in-process nanosecond measurement, and
+the row became false *without anyone editing it* — on the one page whose subject
+was "this document should have said the control arm is not deterministic".
+
+### What I propose
+
+**Anchor every citation into live code to the commit it was true at**, so the
+record's scope is explicit and permanently checkable:
+
+    store.py:633 as of f1e0c03
+
+A reader runs `git show f1e0c03:…/store.py` and sees exactly what the writer saw,
+forever. The record stops being a claim about *the* tree and becomes a claim
+about *a* tree — which is what a dated record actually is. A row citing one file
+repeatedly may declare the anchor once for the row rather than on every line.
+
+### What I already changed, and what I did not
+
+Consistency was already broken *inside these two PRs*, which is what convinced me
+this is real rather than tidy-mindedness:
+
+- the S3 row **did** anchor — "Reproduced at `f1e0c03`" — but then cited seven
+  bare `store.py:NNN` line numbers;
+- the provider row directly above it anchored **nothing**;
+- the tmpdir assessment cited `tests/selftest.sh:738` bare, and that is the one
+  that rotted.
+
+All three now carry an explicit `as of <sha>`. I did **not** retro-anchor older
+rows: guessing which commit a past row meant would be inventing a fact, which is
+the same failure in the other direction.
+
+### Option A — convention only
+
+Write the rule into `CLAUDE.md` (or the supplement) and into the `spec-writer`
+and `loop-assess` skills so new rows are written anchored. Roughly 3 files,
+~10 lines. Existing rows are left alone.
+
+- **Cost**: near zero.
+- **Risk**: an unenforced rule, checked by nobody, decaying like every other
+  unenforced rule — and its failure is invisible until a reviewer trips on it,
+  which is precisely the last four rounds.
+
+### Option B — convention plus a gate
+
+Option A, plus `check-citations.py` gains a dated-record mode. Note this is **not**
+the excluded check and does not reintroduce it: it never compares a row against
+the working tree. It (1) requires every `path:line` in `state/`/`inbox/` to carry
+an `as of <sha>`, and (2) resolves that anchor with `git show <sha>:path` and
+verifies the line exists *at that commit*. "Was this true at the commit named"
+is a question whose answer never changes, so the gate can never demand that a
+record be falsified.
+
+- **Cost**: ~80–120 lines in `check-citations.py`, a new selftest section, and
+  pins for it. Call it a day's work with review.
+- **Risk**: it binds a record's checkability to a reachable git object — a row
+  citing a commit that was never pushed, or that is squashed away or GC'd, fails
+  the gate for a reason that is not the writer's fault, so it needs a documented
+  escape hatch. That hatch is then the hole.
+
+### Which way I lean, having given you the costs first
+
+Option A now. The convention has to exist before a gate can check it, and B is a
+strict superset of A that can be added later without rework. But A alone is a
+rule with no teeth, and this repo's own record of the last four rounds is the
+argument that rules without teeth are how these rows rot — so I would not be
+surprised to be overruled, and B is the answer that actually kills the class.
+
+**Nothing is blocked on this today.** Both PRs are correct under either option;
+only future rows are affected. A triage row at `blocked` counts this decision —
+see `state/triage.md`, source `inbox 2026-09-07 §dated-record-citation-anchor`.
