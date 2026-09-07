@@ -199,6 +199,45 @@ printf 'nothing cited\n' > "$CT/docs/thing.md"
 printf 'see `app.py:9`\n' > "$CT/specs/thing.md"
 expect_rc 1 "citations: the default scan reaches specs/" python3 "$P/scripts/check-citations.py" --root "$CT"
 
+# ── the citation gate, pointed at THIS repo ────────────────────────────────
+# Every citation check above runs under `--root` against a tree this script
+# built in a temp dir. That proves the CHECKER works. It proves nothing about
+# this repo's own documents, and the gate was reported green in three
+# consecutive PR reviews on exactly that basis. This is the missing
+# invocation: no `--root`, the real working tree.
+#
+# It is deliberately NOT hermetic, and that is the property being bought — a
+# rotted `file:line` here turns the suite red for whoever runs it, not three
+# review rounds later. It joins the release, doctrine, governance and
+# secret-scanner checks further down, which already read "$REPO".
+#
+# Two ways this block could have been green while checking nothing, both
+# guarded:
+#   1. check-citations.py resolves its root from CLAUDE_PROJECT_DIR FIRST, and
+#      the end-to-end block above exported that to the scratch fixture. A bare
+#      run here would have checked the fixture and said EMPTY. Hence `env -u`,
+#      and hence the scanned-file count assertion below: a fixture root scans
+#      one or two files, this repo scans dozens.
+#   2. EMPTY exits 0 unless the project says otherwise. It now says otherwise
+#      (.loopkit/citations.json, allow_empty=false) because documents here DO
+#      cite file:line — so a scan that stops finding them is red, not silent.
+echo "== citations: this repo's own documents, not a fixture"
+cite_out="$(cd "$REPO" && env -u CLAUDE_PROJECT_DIR python3 "$P/scripts/check-citations.py" 2>&1)"; cite_rc=$?
+cite_files="$(printf '%s\n' "$cite_out" | sed -n 's/.*across \([0-9][0-9]*\) file(s).*/\1/p' | head -1)"
+case "$cite_files" in ''|*[!0-9]*) cite_files=0 ;; esac
+if [ "$cite_files" -lt 10 ]; then
+  printf '%s\n' "$cite_out" | sed 's/^/    /'
+  fail "citations: the run never reached this repo's docs — it scanned $cite_files file(s), so the root resolved somewhere else"
+else
+  ok "the citation run resolved to this checkout ($cite_files scanned file(s))"
+  if [ "$cite_rc" = 0 ]; then
+    ok "every file:line citation in this repo points at what it claims"
+  else
+    printf '%s\n' "$cite_out" | sed 's/^/    /'
+    fail "citations: a citation or pin in this repo no longer holds (rc=$cite_rc)"
+  fi
+fi
+
 # doctrine prints absolute script paths
 out="$(echo '{"prompt":"/loop"}' | python3 "$P/hooks/loop_doctrine.py")"
 grep -q "$P/scripts/loop-next.sh" <<<"$out" && ok "doctrine carries absolute paths" || fail "doctrine paths"
