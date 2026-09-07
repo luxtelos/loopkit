@@ -14,7 +14,7 @@ that transfers.
      server-side fetch we tried, including one identifying as `github-camo` —
      and GitHub fetches README images server-side, so the live badge would very
      likely render broken. This SVG is self-contained (no external references,
-     raster embedded) and cannot fail. Trade-off: the upvote count is frozen at
+     logo embedded as a nested SVG) and cannot fail. Trade-off: the upvote count is frozen at
      export. Swap the `src` back to the embed URL once it serves to camo. -->
 <p>
   <a href="https://peerlist.io/akulmat/project/loopkit-a-finishing-harness">
