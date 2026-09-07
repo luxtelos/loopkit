@@ -952,8 +952,20 @@ echo "== remote gate config: the key has a reader, and never clobbers"
 # working value is a bug.
 rgc_out="$(bash "$REPO/tests/pins/remote-gate-config.sh" "$REPO" 2>&1)"; rgc_rc=$?
 printf '%s\n' "$rgc_out" | grep -E '^  FAIL' || true
-[ "$rgc_rc" = 0 ] && ok "LOOPKIT_REMOTE is read, survives a set -a source, and the agent files point at a present script" \
+[ "$rgc_rc" = 0 ] && ok "LOOPKIT_REMOTE is read, survives a set -a source, and the agent files use the plugin-root idiom" \
   || fail "remote gate config: $(printf '%s' "$rgc_out" | tail -1)"
+
+echo "== shipped instruction files: every path they name exists for a CONSUMER"
+# The agent files ship inside the plugin and told every consuming project to run
+# `bash tools/remote-gate.sh`. `tools/` is this repo's root — not in the plugin,
+# not in the installed cache, not copied by init. The pin that was supposed to
+# catch that resolved the path against the repo root, where it exists, so it
+# would have passed forever. This one never looks at the repo root: it builds an
+# installed plugin and a fresh initialised project and resolves against those.
+sp_out="$(python3 "$REPO/tests/pins/shipped-paths-resolve.py" "$REPO" 2>&1)"; sp_rc=$?
+printf '%s\n' "$sp_out" | grep -E '^  FAIL' || true
+[ "$sp_rc" = 0 ] && ok "every script path and setting the shipped files name resolves for a consumer" \
+  || fail "shipped paths: $(printf '%s' "$sp_out" | tail -1)"
 
 echo "== remote gate runner: its verdict is about the tree you have"
 # An add/add merge kept the version that clones from GitHub inside the

@@ -359,8 +359,14 @@ explained away too. On 2026-09-07 four failures appeared on macOS and all four
 were noise; the same commit was `ALL PASS` on Linux.
 
 ```bash
-LOOPKIT_REMOTE=user@host bash tools/remote-gate.sh <branch>
+LOOPKIT_REMOTE=user@host bash "${CLAUDE_PLUGIN_ROOT}/scripts/remote-gate.sh" <ref>
 ```
+
+It lives inside the plugin because that is the only place a consuming project
+can reach it — the repository's own `tools/` is not part of what ships, and
+`loopkit-init.sh` does not copy it. If you are working on LoopKit itself and
+`CLAUDE_PLUGIN_ROOT` points at an installed cache rather than your checkout,
+call it by path: `bash plugins/loopkit/scripts/remote-gate.sh <ref>`.
 
 It stages a local clone, **rsyncs your current working tree over it**, sends
 that to the host, and runs the suite in a container there. It prints the

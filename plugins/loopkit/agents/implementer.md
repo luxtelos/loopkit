@@ -59,29 +59,39 @@ gate.
 
 ## Where to run the suite
 
-**Run it on the remote Linux host, not on this Mac.** `bash tools/remote-gate.sh
-<branch>` — set `LOOPKIT_REMOTE=user@host` in your environment, or in
-`.loopkit/config.env`, which that script reads.
+**Read the runner's exit status, not its last line.** This half is transferable
+and holds everywhere: never read `$?` after a pipe. `suite | grep | tail`
+reports *tail's* status — the reader exits early, the writer takes SIGPIPE, and
+a suite printing `FAILURE: 3 checks failed` yielded `suite-rc=0`. Send the
+output to a file, capture the status on the very next line, and filter the file
+for display. Display and verdict must be separate paths.
 
-**Read its exit status, not its last line.** It exits with the suite's own
-status and prints `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`. It did not
-always: the first version piped the suite through `grep | tail` and then read
-`$?`, which is *tail's* status, so it exited 0 on a suite printing
-`FAILURE: 3 checks failed`. Never read `$?` after a pipe — send output to a
-file, capture the status on the next line, filter the file for display.
+**If a verdict on your machine has to be explained away, get it somewhere
+else.** A suite whose output needs someone to say "ignore those four" is a suite
+whose real failures get ignored too. The plugin ships a runner for that:
 
-Two reasons, both measured rather than assumed:
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/remote-gate.sh" <ref>
+```
 
-- **The Mac lies.** Three checks fail there because `/var` is a symlink, and a
-  wall-clock timing check flakes under load — observed at 215, 307, 318 and
-  429 ms on unchanged code. Every run then needs someone to say "ignore those
-  four", and a suite whose output must be explained away is one whose real
-  failures get explained away too. On 2026-09-07 four failures appeared on the
-  Mac and all four were noise; the same commit was ALL PASS on Linux.
-- **The Mac has no room.** Measured that day: ~48 MB of 16 GB free, load average
-  49-91. The remote had 18 GB free and 8 idle cores.
+Set `LOOPKIT_REMOTE=user@host` in your environment or in `.loopkit/config.env`,
+which it reads. It stages a clone, rsyncs your **current working tree** over it,
+sends that, and runs the suite in a container on the host — so uncommitted work
+is gated, and every run prints a `SCOPE:` line saying how much of it went with
+it. Check that line. An earlier version cloned from GitHub instead and reported
+`REMOTE GATE: PASS` on a dirty tree it had never sent. It exits with the suite's
+own status and labels it `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`; with
+`LOOPKIT_REMOTE` unset it refuses loudly rather than gating nothing.
 
-Use the Mac for one thing only: confirming the bash 3.2 path still works.
+**What follows is one machine on one day, not a rule about yours.** In this
+project on 2026-09-07: three checks failed on the maintainer's Mac because
+`/var` is a symlink, a wall-clock check flaked at 215, 307, 318 and 429 ms on
+unchanged code, and the machine had ~48 MB of 16 GB free at load average 49-91
+while the remote had 18 GB free and 8 idle cores. All four failures were noise;
+the same commit was `ALL PASS` on Linux. There, the Mac is used for one thing
+only — confirming the bash 3.2 path still works. If your own machine gives a
+verdict you can trust, use it. The rule is that the verdict must be
+trustworthy, not that it must come from another host.
 
 ## Every claim in a PR body must be checkable
 

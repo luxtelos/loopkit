@@ -14,7 +14,7 @@
 # for, one layer further out, and the one real run that said PASS was right
 # only by coincidence.
 #
-# This runs the far-side half (tools/remote-gate-body.sh) directly, against a
+# This runs the far-side half (scripts/remote-gate-body.sh) directly, against a
 # local throwaway tree, with a stub suite — no ssh, no docker, no network — and
 # requires it to exit non-zero on a failing suite and zero on a passing one.
 #
@@ -29,8 +29,8 @@ set -uo pipefail
 
 REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REPO="$(cd "$REPO" && pwd)"   # a relative argument must not break the fixtures
-BODY="$REPO/tools/remote-gate-body.sh"
-RUNNER="$REPO/tools/remote-gate.sh"
+BODY="$REPO/plugins/loopkit/scripts/remote-gate-body.sh"
+RUNNER="$REPO/plugins/loopkit/scripts/remote-gate.sh"
 [ -f "$BODY" ]   || { echo "FAIL no remote-gate-body.sh at $BODY"; exit 2; }
 [ -f "$RUNNER" ] || { echo "FAIL no remote-gate.sh at $RUNNER"; exit 2; }
 

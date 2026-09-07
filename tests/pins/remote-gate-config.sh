@@ -23,7 +23,7 @@ set -uo pipefail
 
 REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 CFG="$REPO/.loopkit/config.env"
-RUNNER="$REPO/tools/remote-gate.sh"
+RUNNER="$REPO/plugins/loopkit/scripts/remote-gate.sh"
 [ -f "$CFG" ]    || { echo "FAIL no config.env at $CFG"; exit 2; }
 [ -f "$RUNNER" ] || { echo "FAIL no remote-gate.sh at $RUNNER — this branch must carry the script its agent files point at"; exit 2; }
 
@@ -77,16 +77,26 @@ grep -q 'from-env@example.invalid' <<<"$out" \
     && ok "an exported LOOPKIT_REMOTE beats the config file" \
     || bad "the config file overrode the environment: $out"
 
-echo "== the agent files must point at a script that exists on this branch"
-# Three earlier hand-offs referenced this script while it existed in no merged
-# branch, so each agent improvised its own ssh line and the results were not
-# comparable. Re-creating that state inside the two files nobody can miss is
-# the same defect, amplified.
+echo "== the agent files must not name a path only this checkout has"
+# This check used to be "implementer.md points at a script present on this
+# branch", resolved against the REPO ROOT — where `tools/` exists. It passed
+# while every consumer of the plugin was being told to run `tools/remote-gate.sh`,
+# a path that is not inside plugins/loopkit, not in the installed cache, and not
+# copied by init. A check written against the wrong root cannot observe the case
+# it was written for, so the real consumer-side resolution moved to
+# tests/pins/shipped-paths-resolve.py, which builds an installed plugin and a
+# fresh project and resolves every shipped path against those.
+#
+# What is left here is the narrow local half: the shipped files must use the
+# plugin-root idiom, because a bare relative path is the shape that broke.
 for f in plugins/loopkit/agents/implementer.md plugins/loopkit/agents/reviewer.md; do
-    if grep -q 'tools/remote-gate.sh' "$REPO/$f" 2>/dev/null; then
-        [ -f "$REPO/tools/remote-gate.sh" ] \
-            && ok "$(basename "$f") points at a script present on this branch" \
-            || bad "$(basename "$f") sends the reader to a missing tools/remote-gate.sh"
+    hits="$(grep -oE '(bash|sh) +"?[^ "`]*remote-gate\.sh' "$REPO/$f" 2>/dev/null || true)"
+    if [ -z "$hits" ]; then
+        ok "$(basename "$f") does not invoke the remote gate"
+    elif printf '%s' "$hits" | grep -qv 'CLAUDE_PLUGIN_ROOT'; then
+        bad "$(basename "$f") names a remote-gate path a consumer cannot resolve: $hits"
+    else
+        ok "$(basename "$f") invokes the remote gate through \${CLAUDE_PLUGIN_ROOT}"
     fi
 done
 

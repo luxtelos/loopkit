@@ -37,7 +37,7 @@ set -uo pipefail
 
 REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REPO="$(cd "$REPO" && pwd)"   # a relative argument must not break the fixtures
-RUNNER="${LOOPKIT_GATE_RUNNER:-$REPO/tools/remote-gate.sh}"
+RUNNER="${LOOPKIT_GATE_RUNNER:-$REPO/plugins/loopkit/scripts/remote-gate.sh}"
 [ -f "$RUNNER" ] || { echo "FAIL no remote-gate.sh at $RUNNER"; exit 2; }
 
 fails=0
