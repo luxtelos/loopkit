@@ -52,3 +52,16 @@ explicit file list in small batches with a terse reporter, or start the broad
 run in the background writing to a log and print `tail -2` of that log every 60
 seconds until it ends. The same applies to `test-regressions.sh` and the stop
 gate.
+
+## Never put a secret on a command line
+
+An agent leaked a token on 2026-09-07 by writing `VAR='<token>' ssh host …`.
+Inline assignments go into the remote host's **process table**, where any other
+user on that box can read them with `ps`, and they get echoed back into
+transcripts. The token had to be rotated.
+
+- **Pipe secrets to stdin**, never as argv: `printf '%s' "$TOKEN" | ssh host 'read -r T; …'`
+- Or set them in the remote environment out of band, and reference the NAME.
+- A URL with credentials in it is the same mistake wearing different clothes:
+  `https://user:token@host/…` is argv too.
+- Filter output, but do not rely on filtering — the process table is not output.

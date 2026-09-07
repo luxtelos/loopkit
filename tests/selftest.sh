@@ -846,6 +846,13 @@ notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
 
+
+echo "== the secret scanner knows every shape it claims to know"
+ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
+printf '%s\n' "$ss" | grep '^  FAIL' || true
+[ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
+  || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
+
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
