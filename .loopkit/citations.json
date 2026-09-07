@@ -1,7 +1,20 @@
 {
   "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
   "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
-  "_allow_empty": "true, and it is a live decision, not neglect: no document in this repo cites a file:line today. Flip it to false the day one does, so the gate goes red if the scan ever stops seeing them.",
-  "allow_empty": true,
-  "pins": []
+  "_allow_empty": "false since 2026-09-07. The previous note here said 'true, and it is a live decision: no document in this repo cites a file:line today. Flip it to false the day one does.' docs/GETTING-STARTED.md now does, so this is that day. An EMPTY scan from here on means the scan lost the docs, and that is red.",
+  "allow_empty": false,
+  "pins": [
+    [
+      "docs/GETTING-STARTED.md",
+      "tests/selftest.sh",
+      "env -u CLAUDE_PROJECT_DIR python3 .*check-citations\\.py",
+      "the citation gate is actually invoked against this repo, with no --root"
+    ],
+    [
+      "docs/GETTING-STARTED.md",
+      ".github/workflows/selftest.yml",
+      "run: bash tests/selftest\\.sh",
+      "CI reaches that gate by running the suite"
+    ]
+  ]
 }
