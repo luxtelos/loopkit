@@ -525,16 +525,20 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
     So the runtime SHALL also **repair** what it finds. On any tick, a row whose
     status is not `blocked` and whose `spec` cell begins `waits:` has that cell
     cleared, and one diagnostic line is printed naming the row. Clearing is safe
-    because the prefix is unambiguous: every real spec path in this repo begins
-    `specs/`, and `waits:` is not a path, so the repair can never destroy a spec
-    reference. The diagnostic is what stops the repair being a silent
-    overwrite — the value goes, the evidence that it was there does not.
+    because the prefix is unambiguous, and that was measured rather than
+    assumed: of the 37 rows in the real `state/triage.md`, three carry a
+    non-empty `spec` cell and all three begin `specs/`. `waits:` is not a path,
+    so the repair cannot destroy a spec reference. The diagnostic is what stops
+    the repair being a silent overwrite — the value goes, the evidence that it
+    was there does not.
 
     Check `[today]`: a detector over the real `state/triage.md` reporting every
     non-`blocked` row whose `spec` cell begins `waits:`. It runs against the
-    current runtime and needs no evaluator. Today it reports zero, and that zero
-    is the baseline a regression is measured against — a detector first run
-    after the change could not tell a clean queue from a broken detector.
+    current runtime and needs no evaluator. Run on this branch it reports zero,
+    against 37 rows of which 12 are `blocked` and none of the 12 carries a
+    condition yet. That zero is the baseline a regression is measured against: a
+    detector first run *after* the change could not tell a clean queue from a
+    detector that never matches anything.
 
     Check `[M2b]`: the bounce, in two halves. Build a fixture whose condition is
     satisfied; tick once; assert the row is at `new` **and** its `spec` cell is
