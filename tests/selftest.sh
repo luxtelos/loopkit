@@ -933,8 +933,8 @@ printf '%s\n' "$bs_out" | grep -E '^  FAIL' || true
 bsr_out="$(bash "$REPO/tests/pins/stop-gate-prove-red.sh" "$REPO" 2>&1)"
 bsr_n="$(printf '%s' "$bsr_out" | grep -c 'RED, as required' || true)"
 bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
-[ "$bsr_n" = 3 ] && [ "$bsr_not" = 0 ] && ok "all three halves of the branch-shape fix are provably catchable" \
-  || fail "branch-shape mutations: $bsr_n/3 red, $bsr_not not red"
+[ "$bsr_n" = 4 ] && [ "$bsr_not" = 0 ] && ok "all four halves of the branch-shape fix are provably catchable" \
+  || fail "branch-shape mutations: $bsr_n/4 red, $bsr_not not red"
 
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
@@ -954,6 +954,17 @@ rgc_out="$(bash "$REPO/tests/pins/remote-gate-config.sh" "$REPO" 2>&1)"; rgc_rc=
 printf '%s\n' "$rgc_out" | grep -E '^  FAIL' || true
 [ "$rgc_rc" = 0 ] && ok "LOOPKIT_REMOTE is read, survives a set -a source, and the agent files point at a present script" \
   || fail "remote gate config: $(printf '%s' "$rgc_out" | tail -1)"
+
+echo "== remote gate runner: its verdict is about the tree you have"
+# An add/add merge kept the version that clones from GitHub inside the
+# container, so the gate judged PUSHED state only: `REMOTE GATE: PASS` on a
+# dirty worktree that was never sent, silently. An honest verdict about the
+# wrong tree is no better than a dishonest one, and nothing in the tree could
+# see the difference until this pin.
+rgt_out="$(bash "$REPO/tests/pins/remote-gate-sends-working-tree.sh" "$REPO" 2>&1)"; rgt_rc=$?
+printf '%s\n' "$rgt_out" | grep -E '^  FAIL' || true
+[ "$rgt_rc" = 0 ] && ok "the remote gate sends the working tree, says so, and keeps bare-host mode" \
+  || fail "remote gate tree: $(printf '%s' "$rgt_out" | tail -1)"
 
 # The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
 # all four unreviewed" and handed the owner all four in the same breath. The

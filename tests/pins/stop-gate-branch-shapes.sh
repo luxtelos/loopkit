@@ -28,6 +28,13 @@
 set -uo pipefail
 
 REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Absolutise it. This pin cds into fixture repos, so a RELATIVE argument — the
+# perfectly plausible `bash tests/pins/stop-gate-branch-shapes.sh .` — made
+# every subsequent "$REPO/..." path resolve inside the fixture and reported 13
+# failures that were not there. The suite passes it absolute, so the suite never
+# saw it. A pin that cries wolf on a plausible invocation teaches people to
+# ignore it, which is the same reasoning as the gpg-signing fix below.
+REPO="$(cd "$REPO" 2>/dev/null && pwd)" || { echo "FAIL no such repo root: $1"; exit 2; }
 GATE="$REPO/plugins/loopkit/hooks/stop_gate.sh"
 [ -f "$GATE" ] || { echo "FAIL no stop_gate.sh at $GATE"; exit 2; }
 
@@ -124,6 +131,22 @@ git_q -C "$wt" branch -q -D main
 out="$(run_gate "$wt")"
 ran "$out" && ok "no local 'main' ref, only origin/*" \
            || bad "CI-shaped checkout skipped: $(tail -3 <<<"$out")"
+
+# --- 4b. the remote is not called `origin` (a fork checkout) ---------------
+# `upstream/main` is right there, but the gate probed a hard-coded `origin` in
+# both the symbolic-ref lookup and the fallback list, fell back to the working
+# tree, and told the reader "no trunk-shaped ref in this clone" — which was
+# false. Same class as the branch-name guess this pin exists for, one field
+# over: a question with a wrong answer in an ordinary checkout.
+wt="$(mk_clone upstreamed main)"
+git_q -C "$wt" remote rename origin upstream >/dev/null 2>&1
+git_q -C "$wt" checkout -q -b fix/thing
+printf 'print("changed")\n' > "$wt/app.py"
+git_q -C "$wt" add app.py; git_q -C "$wt" commit -q -m "change"
+git_q -C "$wt" branch -q -D main >/dev/null 2>&1 || true
+out="$(run_gate "$wt")"
+ran "$out" && ok "remote named 'upstream', no local trunk (fork checkout)" \
+           || bad "remote named 'upstream' reverted to working-tree-only: $(tail -3 <<<"$out")"
 
 # --- 5. on the default branch, with a commit of its own --------------------
 # A base IS available here (HEAD~1). Falling back to the working tree on the

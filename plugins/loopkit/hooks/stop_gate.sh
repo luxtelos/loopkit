@@ -144,20 +144,36 @@ run_in_env() {
 # about HEAD directly. See tests/pins/stop-gate-branch-shapes.sh, which pins
 # each shape and can be proven red.
 gate_default_ref() {
-    local d
+    local d r n remotes
+    # Ask EVERY remote, not only one called `origin`. Hard-coding the remote
+    # name is the same defect as hard-coding the branch name: a question with a
+    # wrong answer in an ordinary checkout. A fork clone whose upstream is named
+    # `upstream` has a perfectly good trunk sitting in `upstream/main`, and the
+    # gate used to fall back to working-tree-only while telling the reader
+    # "no trunk-shaped ref in this clone" — which was false.
+    #
+    # `origin` is probed first so the answer stays deterministic when a checkout
+    # has several remotes; the rest follow in `git remote` order.
+    remotes="$(git remote 2>/dev/null || true)"
     # origin/HEAD is what `git clone` writes and what `git remote set-head`
     # repairs; it names the trunk whatever the trunk is called.
-    d="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
-    if [ -n "$d" ] && git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
-        printf '%s' "$d"; return 0
-    fi
-    # Documented fallback, for a clone with no origin/HEAD (a shallow CI
-    # fetch, or a repo created by `git init` with no remote at all). This is a
-    # last resort by design: it guesses a name, which is the thing that broke.
-    for d in origin/main origin/master origin/develop origin/trunk main master develop trunk; do
-        if git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
+    for r in origin $remotes; do
+        d="$(git symbolic-ref --quiet --short "refs/remotes/$r/HEAD" 2>/dev/null || true)"
+        if [ -n "$d" ] && git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
             printf '%s' "$d"; return 0
         fi
+    done
+    # Documented fallback, for a clone with no <remote>/HEAD (a shallow CI
+    # fetch, or a repo created by `git init` with no remote at all). This is a
+    # last resort by design: it guesses a name, which is the thing that broke.
+    # Local names come last, after every remote has been asked.
+    for r in origin $remotes ""; do
+        for n in main master develop trunk; do
+            if [ -n "$r" ]; then d="$r/$n"; else d="$n"; fi
+            if git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
+                printf '%s' "$d"; return 0
+            fi
+        done
     done
     printf ''
 }
@@ -166,7 +182,7 @@ gate_base() {
     local default_ref base head_branch
     default_ref="$(gate_default_ref)"
     if [ -z "$default_ref" ]; then printf ''; return 0; fi
-    base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
+    base=""; [ "$(git rev-parse --abbrev-ref HEAD)" != HEAD ] && base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
     # base == HEAD means HEAD adds nothing the trunk does not already have.
     # Usually that is honest and the empty diff is the right answer (a feature
     # branch with no commits yet). The one exception is a repo with NO remote
@@ -176,14 +192,15 @@ gate_base() {
     # choice, not a necessity.
     if [ -n "$base" ] && [ "$(git rev-parse "$base" 2>/dev/null)" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
         head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-        case "$default_ref" in
-            origin/*) : ;;   # a published trunk is ahead-or-equal: nothing new here
-            *)
-                if [ "$head_branch" = "$default_ref" ]; then
-                    base="$(git rev-parse --verify --quiet 'HEAD~1' 2>/dev/null || true)"
-                fi
-                ;;
-        esac
+        # "Is this a published trunk?" is asked of git, not of the ref's spelling.
+        # `origin/*` was the old test; it read `upstream/main` as a LOCAL branch,
+        # and a local branch called `feature/x` as a published one. Both wrong,
+        # and both invisible until a checkout has a remote not named origin.
+        if git rev-parse --verify --quiet "refs/remotes/$default_ref^{commit}" >/dev/null 2>&1; then
+            :   # a published trunk is ahead-or-equal: nothing new here
+        elif [ "$head_branch" = "$default_ref" ]; then
+            base="$(git rev-parse --verify --quiet 'HEAD~1' 2>/dev/null || true)"
+        fi
     fi
     printf '%s' "$base"
 }
