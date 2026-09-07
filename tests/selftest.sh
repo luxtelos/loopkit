@@ -880,6 +880,48 @@ lnp_out="$(python3 "$REPO/tests/pins/loop-next-output-parity.py" 2>&1)"; lnp_rc=
 
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
+echo "== M2 io: provider and store pins run INSIDE this suite"
+# Wired here because the spec's own Control case (§3) says both M1 pins run
+# inside tests/selftest.sh "so neither can rot unnoticed by being a command
+# nobody remembers to type". These 68 pins guard a conditional write, a runner
+# lock and a credential redactor, so the rule applies with more force, not
+# less. Before this, `grep provider tests/selftest.sh` returned nothing.
+#
+# Never read a pipeline's status here: grep exits non-zero on no match, and
+# under `set -o pipefail` that would silently become the gate's verdict.
+# Capture first, filter after.
+prov_out="$(PYTHONPATH="$P" python3 -m loopkit_core.provider --selftest 2>&1)"; prov_rc=$?
+printf '%s\n' "$prov_out" | grep '^FAIL' || true
+[ "$prov_rc" = 0 ] && ok "provider.py pins ($(printf '%s' "$prov_out" | tail -1))" \
+  || fail "provider.py pins: $(printf '%s' "$prov_out" | tail -1)"
+
+# The store suite may LOUDLY SKIP its live-object-storage pins. It is asked for
+# them only when LOOPKIT_S3_* is configured; either way the skip line names
+# what went unverified, and that line is echoed here rather than left buried in
+# captured output — a silent skip is this repo's named defect.
+store_args="--selftest"
+[ -n "${LOOPKIT_S3_BUCKET:-}" ] && store_args="--selftest --with-s3"
+store_out="$(PYTHONPATH="$P" python3 -m loopkit_core.store $store_args 2>&1)"; store_rc=$?
+printf '%s\n' "$store_out" | grep '^FAIL' || true
+printf '%s\n' "$store_out" | grep '^ *SKIP' | sed 's/^ */  UNVERIFIED: /' | awk '!seen[$0]++' || true
+[ "$store_rc" = 0 ] && ok "store.py pins ($(printf '%s' "$store_out" | grep -c '^PASS' || true) PASS)" \
+  || fail "store.py pins: $(printf '%s' "$store_out" | grep '^FAIL' | head -1)"
+
+# And those pins must be able to FAIL. Each mutation reintroduces, one at a
+# time, one defect a hostile review of this branch found — including MUT-R1,
+# which was GREEN across all sixteen of the original pins, and MUT-S3, which
+# turns the store's only redaction function into `return text` and was GREEN
+# across all twenty-seven store pins until the third review.
+#
+# The COUNT deliberately does not appear in this label. It said "six" while
+# the script ran fourteen, which is exactly how a hardcoded number in a
+# message becomes a lie nobody notices; the script's own last line is the
+# only count printed.
+m2red_out="$(python3 "$REPO/tests/pins/m2-prove-red.py" "$REPO" 2>&1)"; m2red_rc=$?
+printf '%s\n' "$m2red_out" | grep 'NOT RED' || true
+[ "$m2red_rc" = 0 ] && ok "every M2 mutation is provably catchable ($(printf '%s' "$m2red_out" | tail -1))" \
+  || fail "M2 mutations: $(printf '%s' "$m2red_out" | tail -1)"
+
 echo "== dogfood: .loopkit/config.env sources clean"
 cfg_err="$( ( set -a; . "$REPO/.loopkit/config.env"; set +a ) 2>&1 >/dev/null )"
 if [ -z "$cfg_err" ]; then ok "config.env sources with no stderr"; else fail "config.env sourcing printed: $cfg_err"; fi
