@@ -118,8 +118,20 @@ with tempfile.TemporaryDirectory() as t:
     t0 = time.monotonic()
     r = subprocess.run([PY, LOCK, "run", "--root", str(root), "--timeout", "2",
                         "--", "true"], capture_output=True, text=True)
-    check(r.returncode == 0 and time.monotonic() - t0 < 2,
-          "the lock is free again immediately after a SIGKILL (no stale lock)")
+    elapsed = time.monotonic() - t0
+    # Two unrelated failures used to share one assertion and one message:
+    #   check(rc == 0 and elapsed < 2, "... (no stale lock)")
+    # A correct-but-slow run — a machine under enough load to blow a 2s budget —
+    # printed "no stale lock", naming a defect that had not occurred and sending
+    # the next reader to debug flock. Measured margin on an idle host: seven
+    # samples of this exact call, worst 0.049s against the 2s budget, ~40x. So a
+    # timing failure here really does mean the machine, and the message should
+    # say so instead of blaming the lock. Ask the two questions separately.
+    check(r.returncode == 0,
+          f"the lock is free again after a SIGKILL — no stale lock (rc={r.returncode})")
+    check(elapsed < 2,
+          f"...and it was granted inside the 2s budget ({elapsed:.3f}s) — a failure "
+          f"on THIS line is a loaded machine, not a stale lock")
 
     r = subprocess.run([PY, LOCK, "status", "--root", str(root)],
                        capture_output=True, text=True)

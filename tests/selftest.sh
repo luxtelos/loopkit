@@ -21,6 +21,51 @@ expect_rc() {  # <want> <label> <cmd...>
   if [ "$got" = "$want" ]; then ok "$label (rc=$got)"; else fail "$label (rc=$got, want $want)"; fi
 }
 
+# --------------------------------------------------------------------------
+# A HARNESS MAY NOT WRITE TO THE TRACKED TREE. Watched, not asked.
+#
+# On 2026-09-07 tests/pins/stop-gate-prove-red.sh mutated the tracked
+# plugins/loopkit/hooks/stop_gate.sh in place and restored it a second later. A
+# concurrent `git add` landed inside that window and the mutation went into
+# commit 62943e3 — the very bug the commit claimed to fix, shipped inside the
+# fix. tests/pins/targets-prove-red.sh had the identical shape against the
+# tracked spec fixtures and was missed on the first sweep, because the sweep was
+# a person reading scripts.
+#
+# Both are fixed to mutate scratch copies, and each asserts its own checksums.
+# This is the guard that does not depend on remembering: it samples the tracked
+# tree twice a second for the whole run and reports ANY deviation from the state
+# the suite started in. Twice a second is chosen against the observed window —
+# seconds per mutation, not milliseconds.
+#
+# The baseline is the tree AS FOUND, not a clean tree, because a developer runs
+# this suite with uncommitted work. What is asserted is that the suite changes
+# nothing, which is true whether the tree started clean or dirty.
+TREEWATCH_PID=""; TREEWATCH_LOG=""; TREEWATCH_BASE=""
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  TREEWATCH_BASE="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+  TREEWATCH_LOG="$(mktemp "${TMPDIR:-/tmp}/loopkit-treewatch.XXXXXX")"
+  # --no-optional-locks: a poller must never take the index lock out from under
+  # anything else, and must never write the index it is only reading.
+  (
+    while :; do
+      now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+      [ "$now" = "$TREEWATCH_BASE" ] || printf '%s\n=== end of sample ===\n' "$now" >> "$TREEWATCH_LOG"
+      sleep 0.5
+    done
+  ) &
+  TREEWATCH_PID=$!
+  # This watcher never exits on its own, and the suite below calls a BARE `wait`
+  # twice (the concurrent-writer sections). A bare wait waits for EVERY job in
+  # the table, so without this line the suite hangs at the first one until it is
+  # killed — observed, not theorised. `disown` takes the watcher out of the job
+  # table; it is still a child, so `kill` still reaches it.
+  disown "$TREEWATCH_PID" 2>/dev/null || true
+else
+  echo "  NOTE tracked-tree watch is OFF — $REPO is not a git checkout, so this"
+  echo "       run cannot tell you whether a harness dirtied it."
+fi
+
 echo "== syntax and manifests"
 for f in "$P"/hooks/*.sh "$P"/scripts/*.sh "$P"/skills/run-state-model/install.sh; do
   bash -n "$f" && ok "bash -n $(basename "$f")" || fail "bash -n $f"
@@ -814,6 +859,16 @@ else
   fail "tests/pins/fixture-derivable.py is missing"
 fi
 
+# And that pin must be able to fail. `targets` was recomputed from a hand-written
+# reading of an undefined noun and agreed with every fixture by construction;
+# agreement is only evidence when disagreement was possible. This ran nowhere
+# until 2026-09-07 — a prove-red nothing invokes proves nothing.
+echo "== M1 runtime spec: the targets derivation can disagree with a fixture"
+tpr_out="$(bash "$REPO/tests/pins/targets-prove-red.sh" "$REPO" 2>&1)"; tpr_rc=$?
+printf '%s\n' "$tpr_out" | grep -E '^  (NOT RED|  NOT RED)' || true
+[ "$tpr_rc" = 0 ] && ok "every fixture with targets goes red when its targets are perturbed" \
+  || fail "targets mutations: $(printf '%s' "$tpr_out" | tail -1)"
+
 echo "== M1 runtime spec: every model assertion can fail"
 if [ -f "$REPO/tests/pins/model-invariants-live.sh" ]; then
   mi_out="$(bash "$REPO/tests/pins/model-invariants-live.sh" 2>&1)"
@@ -1025,6 +1080,32 @@ ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
 printf '%s\n' "$ss" | grep '^  FAIL' || true
 [ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
   || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
+
+
+# The verdict of the watcher started at the top of this file. Deliberately the
+# LAST check, so it covers every harness above it. It fails on two distinct
+# things and says which: residue (a harness left the tree changed) and a window
+# (a harness changed the tree and put it back). The second is the one that put
+# a mutated stop_gate.sh into a commit, and the only one an end-of-run
+# `git status` cannot see.
+echo "== no harness wrote to the tracked tree"
+if [ -n "$TREEWATCH_PID" ]; then
+  kill "$TREEWATCH_PID" 2>/dev/null || true
+  # It is disowned, so `wait` cannot be used. Give a sample already in flight
+  # longer than one poll interval to finish appending before the log is read.
+  sleep 0.7
+  tw_now="$(git -C "$REPO" --no-optional-locks status --porcelain 2>/dev/null)"
+  if [ "$tw_now" != "$TREEWATCH_BASE" ]; then
+    fail "the suite CHANGED the tracked tree and left it changed — now: $(printf '%s' "$tw_now" | tr '\n' ';' | cut -c1-200)"
+  elif [ -s "$TREEWATCH_LOG" ]; then
+    fail "a harness altered the tracked tree DURING the run and restored it — a concurrent git add inside that window is how 62943e3 happened. First deviation: $(head -3 "$TREEWATCH_LOG" | tr '\n' ';')"
+  else
+    ok "the tracked tree was never observed to differ from the state this run started in"
+  fi
+  rm -f "$TREEWATCH_LOG"
+else
+  echo "  NOTE no tracked-tree verdict: this run is not in a git checkout."
+fi
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"

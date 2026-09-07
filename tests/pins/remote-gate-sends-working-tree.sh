@@ -124,9 +124,27 @@ else
         || bad "deleted-in-worktree.txt is still in the stage — the gate runs against a tree nobody has"
 
     # Controls. Staging the dirt must not cost the committed state or the repo.
-    [ -f "$S/committed.txt" ] \
-        && ok "control: committed files are still there" \
-        || bad "committed.txt vanished — staging replaced the repo rather than overlaying it"
+    #
+    # This control used to read `[ -f "$S/committed.txt" ]` and say "committed
+    # files are still there". It could not fail. Every committed file that still
+    # exists is also in the working tree, so a runner that clones passes it and
+    # a runner that only copies the working tree passes it too — and its failure
+    # message named a condition ("staging replaced the repo") it had no way to
+    # detect. A pin with one vacuous row teaches that its other rows might be
+    # vacuous as well.
+    #
+    # So ask the question that CAN have a wrong answer: is the committed state
+    # still distinguishable from the uncommitted state on the far side? The
+    # rival transport design is to commit the dirt in the stage and push it,
+    # and that design passes every other row here while destroying this one —
+    # HEAD would carry EDITED-IN-WORKTREE, so nothing downstream could tell what
+    # was actually committed.
+    head_of_edit="$(git -C "$S" show HEAD:tracked-edit.txt 2>/dev/null)"
+    if [ "$head_of_edit" = "ORIGINAL" ]; then
+        ok "control: the overlay left the committed history intact (HEAD still holds the pre-edit content)"
+    else
+        bad "the stage's HEAD:tracked-edit.txt reads '$head_of_edit', not 'ORIGINAL' — the runner committed the working tree instead of overlaying it, so committed and uncommitted are no longer distinguishable on the far side"
+    fi
     [ -d "$S/.git" ] \
         && ok "control: .git is staged, so pins that ask git for the repo root still work" \
         || bad ".git is missing from the stage — every git-rooted pin breaks on the far side"
