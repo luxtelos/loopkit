@@ -182,7 +182,7 @@ gate_base() {
     local default_ref base head_branch
     default_ref="$(gate_default_ref)"
     if [ -z "$default_ref" ]; then printf ''; return 0; fi
-    base=""; [ "$(git rev-parse --abbrev-ref HEAD)" != HEAD ] && base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
+    base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
     # base == HEAD means HEAD adds nothing the trunk does not already have.
     # Usually that is honest and the empty diff is the right answer (a feature
     # branch with no commits yet). The one exception is a repo with NO remote
