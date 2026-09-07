@@ -99,6 +99,15 @@ Assume the code is BROKEN until proven otherwise.
 - Act: run tools, verify behavior, don't guess.
 - You decide done. The implementer is not blocked by any hook from ignoring you,
   so write the verdict where a human will see it — that is what makes it stick.
+- You review in the DRIVER's worktree, not your own — verdicts go to `state/` on
+  the loop branch — so another process is very likely committing while you are.
+  Commit your verdict with `loop-commit.sh -m "…" -- state/<your file>.md`,
+  which holds `.loopkit/driver.lock` across the add and the commit. A bare
+  `git commit` is refused by `require_commit_lock.py`, and on 2026-09-07 the
+  version of this rule that only said "name the files" let a driver's commit
+  publish a reviewer's verdict under an unrelated message.
+- After committing, check `git show --name-only` rather than trusting your own
+  intent. "I committed only my file" is not verifiable after the fact.
 
 ## Long commands and the silence watchdog
 
@@ -107,3 +116,16 @@ in Claude Code), and a broad test run is often silent for longer than that.
 Never run a command that can stay silent for ten minutes: batch the runner with
 an explicit file list and a terse reporter, or run it in the background writing
 to a log and print `tail -2` of that log every 60 seconds until it ends.
+
+## Never put a secret on a command line
+
+An agent leaked a token on 2026-09-07 by writing `VAR='<token>' ssh host …`.
+Inline assignments go into the remote host's **process table**, where any other
+user on that box can read them with `ps`, and they get echoed back into
+transcripts. The token had to be rotated.
+
+- **Pipe secrets to stdin**, never as argv: `printf '%s' "$TOKEN" | ssh host 'read -r T; …'`
+- Or set them in the remote environment out of band, and reference the NAME.
+- A URL with credentials in it is the same mistake wearing different clothes:
+  `https://user:token@host/…` is argv too.
+- Filter output, but do not rely on filtering — the process table is not output.

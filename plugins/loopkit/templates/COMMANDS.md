@@ -38,6 +38,7 @@ Constitution: the agent that wrote code never approves it.
 | UserPromptSubmit             | `loop_doctrine.py` — injects the tick discipline when a prompt looks like a tick            |
 | PreToolUse (\*)              | `require_contracts.py` — blocks work tools until FILES/TOOLS/COMMANDS are read              |
 | PreToolUse (Bash)            | `block_dangerous.py` — destructive-command floor; merge/approve/stage-all refused           |
+| PreToolUse (Bash)            | `require_commit_lock.py` — a bare `git commit` is refused; commit via `loop-commit.sh`       |
 | PreToolUse (Write/Edit)      | `protect_governance.py` — `constitution.md` and `specs/` need `GOVERNANCE_EDIT_OK=1`        |
 | PostToolUse (Write/Edit/Bash)| `notify_needs_human.py` — edits to `inbox/needs-human.md` ping a webhook (fail-open)        |
 | Stop                         | `stop_gate.sh` (precheck, tests, lint, typecheck, build) + `acceptance-review` against `specs/` |
@@ -67,8 +68,36 @@ looks like a tick. If you find yourself pasting a paragraph of procedure into
 If a timer is ever wanted, put `morning-triage.sh` in cron — never a bare
 `claude -p`, or the audit line never lands in `state/cron-triage.log`.
 
-Guard rail: never run two loop drivers concurrently against `state/triage.md`;
-the state file is the lock.
+## The driver lock — the guard rail that is now a mechanism
+
+This row used to read *"never run two loop drivers concurrently against
+`state/triage.md`; the state file is the lock."* Nothing enforced it, and on
+2026-09-07 it failed: a reviewer staged one file by name, a concurrent driver
+ran `git add … && git commit` in the same worktree, and the driver's commit
+published the reviewer's file under its own message (`6989d63`) — the
+reviewer's own commit then found nothing staged.
+
+The state file was never the lock. The shared thing is the **git index**: one
+file per worktree, shared by every process in it. So the lock is per worktree,
+`<worktree>/.loopkit/driver.lock`, held with `flock`.
+
+| What                    | Mechanism                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| Committing              | `loop-commit.sh -m "…" -- <paths>` — stages AND commits inside one critical section |
+| A bare `git commit`     | refused by `require_commit_lock.py` (PreToolUse, Bash)                             |
+| Writing `state/triage.md` | `triage_state.py` upsert/update/ensure-schema take the same lock                  |
+| Who holds it right now  | `driver_lock.py status`                                                            |
+| Running anything else under it | `driver_lock.py run --label … -- <cmd>`                                     |
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/loop-commit.sh" -m "msg" -- state/x.md
+```
+
+The kernel releases the lock when the holder exits — including on a crash or a
+`SIGKILL` — so there is no stale lock to reap and no liveness rule to get
+wrong. Two drivers in two DIFFERENT worktrees never contend, because they never
+shared an index. `commit-without-lock` in `.loopkit/block-disabled.txt` turns
+the gate off for a project that genuinely has one writer.
 
 ## Project commands
 

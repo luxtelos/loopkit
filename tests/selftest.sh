@@ -33,7 +33,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance; do
+for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
@@ -41,6 +41,9 @@ echo "== script tests"
 expect_rc 0 "test_loop_next_pick" python3 "$P/scripts/test_loop_next_pick.py"
 expect_rc 0 "test_loop_scan" python3 "$P/scripts/test_loop_scan.py"
 expect_rc 0 "test_inbox_to_triage" python3 "$P/scripts/test_inbox_to_triage.py"
+# Carries its own CONTROL: it reproduces the 2026-09-07 index-sweep first, so
+# the locked case is measured against a race that demonstrably still bites.
+expect_rc 0 "test_driver_lock" python3 "$P/scripts/test_driver_lock.py"
 
 echo "== model-checker driver selftest (stub engines)"
 expect_rc 0 "driver selftest" node "$P/skills/run-state-model/driver.mjs" selftest
@@ -53,6 +56,7 @@ expect_rc 0 "init (first run)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 expect_rc 0 "init (second run, idempotent)" bash "$P/scripts/loopkit-init.sh" --project "$T"
 n="$(grep -c 'loopkit:begin' "$T/CLAUDE.md")"; [ "$n" = 1 ] && ok "CLAUDE.md block appended exactly once" || fail "CLAUDE.md block count=$n"
 grep -qxF '.loopkit/config.env' "$T/.gitignore" && ok ".gitignore ignores config.env" || fail ".gitignore"
+grep -qxF '.loopkit/driver.lock' "$T/.gitignore" && ok ".gitignore ignores the driver lock" || fail "driver.lock not ignored"
 
 # An ignore line init added once is init's LAST word on it. A project that
 # deletes the line and keeps the marker has decided; the old check ("is the
@@ -109,6 +113,38 @@ python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status
 # exits on the first match and the script takes SIGPIPE on its next echo.
 out="$(bash "$P/scripts/loop-next.sh")"
 grep -q '^STAGE: spec-draft' <<<"$out" && ok "transition recorded, stage moves" || fail "update did not move the stage"
+
+# Concurrent writers must not lose a row. Before the driver lock, every mutating
+# command here was parse-then-write with nothing serialising it, and COMMANDS.md's
+# "the state file is the lock" enforced nothing. Ten writers, ten rows, or the
+# lock is not doing its job.
+echo "== state/triage.md survives concurrent writers"
+C="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-conc.XXXXXX")"; mkdir -p "$C/state" "$C/.loopkit"
+python3 "$TS" ensure-schema --state "$C/state/triage.md" >/dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  python3 "$TS" upsert --state "$C/state/triage.md" --finding "row $i" \
+    --source "src $i" --priority low --status new >/dev/null &
+done
+wait
+n="$(python3 "$TS" list --state "$C/state/triage.md" | grep -c 'src ')"
+[ "$n" = 10 ] && ok "10 concurrent upserts kept all 10 rows" || fail "lost rows under concurrency: $n/10"
+
+# The inbox bridge is the OTHER writer of this file, and it does not go through
+# triage_state's CLI — it calls upsert_row directly, in a loop, after its own
+# parse. So it has to take the same lock itself or an --apply run racing a
+# direct upsert drops one of them on the next write_table.
+mkdir -p "$C/inbox"
+printf '# needs-human\n\n## Decide the retry budget (2026-01-01)\n\nText.\n' > "$C/inbox/needs-human.md"
+python3 "$P/scripts/inbox_to_triage.py" --inbox "$C/inbox/needs-human.md" --state "$C/state/triage.md" --apply >/dev/null &
+python3 "$TS" upsert --state "$C/state/triage.md" --finding "racer" --source "src 11" --priority low --status new >/dev/null &
+wait
+rows="$(python3 "$TS" list --state "$C/state/triage.md")"
+case "$rows" in *"src 11"*) has_upsert=1 ;; *) has_upsert=0 ;; esac
+case "$rows" in *"retry budget"*) has_bridge=1 ;; *) has_bridge=0 ;; esac
+[ "$has_upsert$has_bridge" = "11" ] \
+  && ok "a bridge --apply racing an upsert loses neither row" \
+  || fail "bridge/upsert race lost a row (upsert=$has_upsert bridge=$has_bridge)"
+find "$C" -delete
 
 # inbox bridge
 printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
@@ -227,6 +263,17 @@ out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
 grep -q 'no row in TOOLS.md' <<<"$out" && ok "check-tools: server without a row" || fail "tools row: $out"
 grep -q 'relative path' <<<"$out" && ok "check-tools: relative command" || fail "tools relative: $out"
 grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'ghp_0123' <<<"$out" && ok "check-tools: secret flagged by key, value never printed" || fail "tools secret: $out"
+printf '{"mcpServers":{"ghost":{"command":"./bin/server","args":["--token","gho_SYNTHETIC0000000000000000000000000"]}}}' > "$F/.mcp.json"
+out="$(python3 "$P/scripts/check-tools.py" --root "$F")"
+# `gho_` is the prefix `gh auth token` hands out, so it is the token an agent in
+# this repo is likeliest to be holding — and it was NOT in the scanner until a
+# real one was exposed in a process table on 2026-09-07 and had to be revoked.
+# Two assertions, not one: flagged by KEY, and the value never echoed. A scanner
+# that matches perfectly and then prints the match puts the secret in a log,
+# which is the same failure by a different route.
+grep -q 'secret-looking literal' <<<"$out" && ! grep -q 'gho_SYNTHETIC' <<<"$out" \
+  && ok "check-tools: a gh-cli OAuth token is flagged by key, value never printed" \
+  || fail "tools gho_ secret: $out"
 expect_rc 1 "check-tools --strict fails" python3 "$P/scripts/check-tools.py" --root "$F" --strict
 mkdir -p "$F/.claude"; printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python3 .claude/hooks/block_dangerous.py"}]}]}}' > "$F/.claude/settings.json"
 out="$(python3 "$P/scripts/check-duplicate-hooks.py" --root "$F" --plugin "$P")"
@@ -692,14 +739,33 @@ out="$(rw 'seq 1 5')"
 after="$(grep -c offload_rewrite "$O/.loopkit/metrics.jsonl" || true)"
 [ "$after" = $((before + 1)) ] && ok "one offload_rewrite event per rewrite in metrics.jsonl ($before -> $after)" || fail "metrics: $before -> $after"
 out="$(rw 'git status')"; [ -z "$out" ] && ok "control: git status still passes through with patterns loaded" || fail "control rewrote git status: $out"
-python3 -c 'print("\n".join("^noisy%d\\b" % i for i in range(49)) + "\n^seq\\b")' > "$O/.loopkit/offload-patterns.txt"
-timing="$(CLAUDE_PROJECT_DIR="$O" python3 -c '
-import json, subprocess, sys, time
-payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "seq 1 3"}})
-t = time.time(); r = subprocess.run([sys.executable, sys.argv[1]], input=payload, capture_output=True, text=True)
-print(int((time.time() - t) * 1000), "hit" if r.stdout else "miss")' "$P/hooks/offload_rewrite.py")"
-set -- $timing
-[ "$1" -lt 200 ] && [ "$2" = hit ] && ok "50-line pattern file: ${1} ms, last line matched" || fail "timing: $timing"
+# SHAPE, not wall clock. Two earlier versions of this check were wrong in
+# opposite directions and for the same reason. A hard 200 ms budget failed for
+# LOAD (215 ms, 205 ms, and 307 ms for a reviewer) with nothing regressed. The
+# ratio that replaced it ran two subprocesses, so ~59 ms of interpreter startup
+# sat in both halves and diluted it: idle it ranged 0.45-1.81, under load it
+# reached 2.75 against its own 3.0 threshold, and it MISSED injected quadratic
+# work at +55 ms. Noise band and detection band overlapped.
+#
+# The pin now imports decide() and measures nanoseconds per pattern in-process
+# at 20 patterns and at 2000, so the startup constant is not in the measurement
+# at all. Linear holds it flat (0.75-1.43 including under 12-way load); O(n^2)
+# reads 96. NOT pinned, and deliberately: the end-to-end wall clock of one hook
+# invocation, which is mostly Python starting up. See the pin's header.
+#
+# The exit status is the verdict; the printed line is for the reader. Reading
+# only the text would re-invent the bug where a measurement that produced
+# nothing still parsed into a passing comparison.
+timing="$(CLAUDE_PROJECT_DIR="$O" python3 "$REPO/tests/pins/offload-cost-ratio.py" \
+  "$P/hooks/offload_rewrite.py" 2>&1)"; timing_rc=$?
+if [ -z "$timing" ]; then
+  fail "timing: the cost-ratio measurement produced no output"
+elif [ "$timing_rc" = 0 ]; then
+  set -- $timing
+  ok "per-pattern cost is flat from 20 to 2000 patterns (${1}x, ${2} ns/pattern), last of 50 patterns matched"
+else
+  fail "timing: $timing"
+fi
 bd="$(grep -n 'block_dangerous.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 orw="$(grep -n 'offload_rewrite.py' "$P/hooks/hooks.json" | head -1 | cut -d: -f1)"
 [ -n "$orw" ] && [ "$orw" -gt "$bd" ] && ok "hooks.json wires offload_rewrite.py after block_dangerous.py" || fail "hooks.json order: block=$bd offload=$orw"
@@ -787,6 +853,15 @@ echo "== M2 core: the moved modules work through both doors"
 csp_out="$(python3 "$REPO/tests/pins/core-shim-parity.py" 2>&1)"; csp_rc=$?
 [ "$csp_rc" = 0 ] && ok "every moved module imports as loopkit_core.<name> and at its old script path" \
   || fail "core/shim parity: $(printf '%s' "$csp_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+
+# The queue half of the driver lock, pinned at the location M2 moved it to.
+# `write_lock` fails open, so a helper it cannot find degrades to a no-op that
+# still returns a usable context manager — the guard would stop guarding and
+# every caller would still report success. This is the check that notices.
+echo "== driver lock: the queue's read-modify-write actually holds it"
+qlh_out="$(python3 "$REPO/tests/pins/queue-lock-held.py" 2>&1)"; qlh_rc=$?
+[ "$qlh_rc" = 0 ] && ok "triage_state.write_lock is a real flock at loopkit_core's path, excludes a foreign writer, re-enters for a descendant" \
+  || fail "queue lock held: $(printf '%s' "$qlh_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
 
 echo "== M2 core: decide() is pure"
 dp_out="$(python3 "$REPO/tests/pins/decide-pure.py" 2>&1)"; dp_rc=$?
@@ -887,6 +962,55 @@ red_n="$(printf '%s' "$red_out" | grep -c 'RED, as required' || true)"
 notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
+
+
+# The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
+# all four unreviewed" and handed the owner all four in the same breath. The
+# rule that fixes it is only worth having if it is present where an agent reads
+# it, so assert both surfaces.
+echo "== finishing: the loop reviews before it hands over"
+grep -q 'Finish before handing over' "$P/hooks/loop_doctrine.py" \
+  && ok "the always-on doctrine carries the finishing rule" \
+  || fail "loop_doctrine.py lost the finishing rule"
+grep -q 'Finishing means the owner only ever sees what is ready' "$P/skills/loop-tick/SKILL.md" \
+  && ok "loop-tick documents what may be handed over" \
+  || fail "loop-tick lost the hand-off section"
+grep -q 'pr-open` ONLY on a recorded PASS' "$P/skills/loop-tick/SKILL.md" \
+  && ok "pr-open requires a recorded PASS, not merely an opened PR" \
+  || fail "the fixing->pr-open transition no longer requires a verdict"
+doc_out="$(printf '{"prompt":"/loop work the backlog"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "a tick prompt actually receives the finishing rule" ;;
+  *) fail "the doctrine hook does not emit the finishing rule on a tick prompt" ;;
+esac
+# The plugin's OWN canonical invocation. `^\s*/loop\b` cannot match
+# `/loopkit:tick` (`\b` fails between `p` and `k`), so the doctrine used to be
+# silent on the one prompt the skill list advertises.
+doc_out="$(printf '{"prompt":"/loopkit:tick"}' | python3 "$P/hooks/loop_doctrine.py" 2>&1)"
+case "$doc_out" in
+  *"Finish before handing over"*) ok "/loopkit:tick receives the doctrine too" ;;
+  *) fail "the doctrine hook is silent on /loopkit:tick" ;;
+esac
+# The three checks above assert the TEXT is present, which a future agent
+# satisfies by paraphrase. This one runs the recorder and asserts the
+# BEHAVIOUR, which is the difference between a rule and a wish.
+gv="$(python3 "$REPO/tests/pins/pr-open-needs-a-verdict.py" 2>&1)"; gv_rc=$?
+printf '%s\n' "$gv" | grep '^  FAIL' || true
+[ "$gv_rc" = 0 ] && ok "the recorder REFUSES pr-open without a verdict, and has a visible override" \
+  || fail "pr-open gate: $(printf '%s' "$gv" | tail -1)"
+
+
+echo "== the queue never parses as empty when it is not"
+qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
+printf '%s\n' "$qz" | grep '^  FAIL' || true
+[ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
+  || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
+
+echo "== the secret scanner knows every shape it claims to know"
+ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
+printf '%s\n' "$ss" | grep '^  FAIL' || true
+[ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
+  || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
 
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"

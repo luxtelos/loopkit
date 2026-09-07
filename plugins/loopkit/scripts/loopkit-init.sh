@@ -128,6 +128,11 @@ ensure_ignore() {
 # to track it, and that is why this is a decision and not a rule.
 ensure_ignore .gitignore '.loopkit/config.env' 'may hold a webhook URL'
 
+# The driver lock is a live kernel object with a pid in it. Committing it would
+# publish one machine's process table and, worse, invite someone to "fix" a
+# conflict by deleting a lock another process is holding.
+ensure_ignore .gitignore '.loopkit/driver.lock' 'a live lock, never history'
+
 # A formatter must never rewrite the queue. Prettier strips the spaces around
 # inline code in a table cell, which changes the `source` key, which makes
 # every bridged row a duplicate on the next run.
