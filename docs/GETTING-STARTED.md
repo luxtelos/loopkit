@@ -343,3 +343,54 @@ A project that wants a known-good version rather than the newest can point its
 marketplace entry at a tag or a fork. Nothing here forces an upgrade, and a
 plugin that changes hook behaviour is exactly the kind of dependency worth
 pinning until its changelog has been read.
+
+## Where to run the suite
+
+Run it on Linux, not on macOS, whenever you have the choice.
+
+On macOS the suite reports three failures that have nothing to do with your
+change: `/var` is a symlink to `/private/var`, so a temp path compares unequal
+to itself and three graph checks fail. A timing check also flakes under load.
+Both are known and neither means anything is wrong.
+
+That is the problem. Every run needs a human to say "ignore those four" — and a
+suite whose output must be explained away is a suite whose real failures get
+explained away too. On 2026-09-07 four failures appeared on macOS and all four
+were noise; the same commit was `ALL PASS` on Linux.
+
+```bash
+LOOPKIT_REMOTE=user@host bash tools/remote-gate.sh <branch>
+```
+
+It clones the branch into a container, prints the platform and what `TMPDIR`
+resolves to, and runs the suite. Use macOS only to check that the bash 3.2 path
+still works, and read its four known failures as noise until they are fixed.
+
+**Read its exit status, not its last line.** `remote-gate.sh` exits with the
+suite's own status and prints `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`
+to say which. It did not always: the first version ran
+`suite | grep | tail` and then read `$?`, which is *tail's* status, so it exited
+0 on a suite printing `FAILURE: 3 checks failed`. The rule that came out of it,
+and that `tests/pins/remote-gate-status.sh` now enforces on every run: **never
+read `$?` after a pipe.** Send the output to a file, capture the status on the
+next line, and filter the file for display. Display and verdict must be
+separate paths, and only one of them is allowed to fail.
+
+The runner's second argument replaces the suite command, which is how that pin
+proves the runner can still go red — a gate that has only ever been seen say
+PASS has not been shown to be able to say anything else.
+
+### What the gate compares against
+
+The stop gate reads the whole branch against its merge base, plus the working
+tree. It resolves the trunk from `origin/HEAD` — the remote's own record of its
+default branch — so it does not care whether your trunk is called `main`,
+`develop` or `trunk`, whether a local `main` exists, or whether HEAD is
+detached (it is, in every review worktree and every CI pull-request checkout).
+
+When there genuinely is no merge base — an orphan branch, a repo with no
+remote and no trunk-shaped ref — the gate prints a `NOTE: no merge base` line
+saying which of those situations it is in, and falls back to the working tree.
+That note prints **every** time the gate is not reading a merge base, including
+when the suite then runs and the run therefore looks covered. A silent fallback
+is how the original bug walks back in.

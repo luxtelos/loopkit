@@ -846,6 +846,30 @@ notred="$(printf '%s' "$red_out" | grep -c 'NOT RED' || true)"
 [ "$red_n" = 3 ] && [ "$notred" = 0 ] && ok "all three halves of the governance guard are provably catchable" \
   || fail "governance mutations: $red_n/3 red, $notred not red"
 
+echo "== stop gate: every branch shape gates, and a missing base is announced"
+# Detached HEAD, a trunk not called main, a CI checkout with no local main, and
+# orphan branches each used to revert the gate to working-tree-only — the exact
+# bug the gate was fixed for, restored silently.
+bs_out="$(bash "$REPO/tests/pins/stop-gate-branch-shapes.sh" "$REPO" 2>&1)"; bs_rc=$?
+printf '%s\n' "$bs_out" | grep -E '^  FAIL' || true
+[ "$bs_rc" = 0 ] && ok "every branch shape gates, and no-base is announced out loud" \
+  || fail "branch shapes: $(printf '%s' "$bs_out" | tail -1)"
+# And that pin must be able to fail.
+bsr_out="$(bash "$REPO/tests/pins/stop-gate-prove-red.sh" "$REPO" 2>&1)"
+bsr_n="$(printf '%s' "$bsr_out" | grep -c 'RED, as required' || true)"
+bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
+[ "$bsr_n" = 3 ] && [ "$bsr_not" = 0 ] && ok "all three halves of the branch-shape fix are provably catchable" \
+  || fail "branch-shape mutations: $bsr_n/3 red, $bsr_not not red"
+
+echo "== remote gate runner: its verdict can be false"
+# `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
+# tools/remote-gate.sh exited 0 on a suite printing "FAILURE: 3 checks failed".
+# A runner whose verdict cannot be false is not a verdict.
+rg_out="$(bash "$REPO/tests/pins/remote-gate-status.sh" "$REPO" 2>&1)"; rg_rc=$?
+printf '%s\n' "$rg_out" | grep -E '^  FAIL' || true
+[ "$rg_rc" = 0 ] && ok "the remote gate runner goes red on a failing suite and green on a passing one" \
+  || fail "remote gate status: $(printf '%s' "$rg_out" | tail -1)"
+
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
