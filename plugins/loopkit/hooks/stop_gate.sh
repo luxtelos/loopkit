@@ -115,8 +115,39 @@ run_in_env() {
 # Tracked-modified OR untracked code files. Harness and plugin config never
 # count. `grep -v` exits 1 when it filters everything, which under pipefail
 # would abort the script — `|| true` makes "no files" a normal empty result.
+# What counts as "changed" for this turn.
+#
+# It used to be `git diff HEAD` plus untracked files — the WORKING TREE only.
+# That made the gate pass whenever the work was already committed, which is
+# every well-behaved agent and exactly what this repo's rules encourage. On
+# 2026-09-07 that was 92 commits in 24 hours with zero gate verdicts: the gate
+# ran every time, found a clean tree, and short-circuited to PASS without
+# running one test. A check that cannot fail, inside the gate.
+#
+# So: the whole BRANCH against its merge base, plus the working tree. On the
+# default branch there is no merge base to compare with, so fall back to the
+# working tree and say so out loud — a silent fallback is how the original bug
+# would come straight back.
+gate_base() {
+    local head remote_default d
+    for d in main master; do
+        if git show-ref --verify --quiet "refs/heads/$d"; then remote_default="$d"; break; fi
+    done
+    remote_default="${remote_default:-main}"
+    head="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+    if [ "$head" = "$remote_default" ] || [ "$head" = "HEAD" ]; then
+        echo ""   # no base — caller falls back to the working tree, loudly
+        return 0
+    fi
+    git merge-base "$remote_default" HEAD 2>/dev/null || echo ""
+}
+
 collect_changed_code_files() {
+    local base; base="$(gate_base)"
     {
+        if [ -n "$base" ]; then
+            git diff --name-only --diff-filter=ACMRTUXB "$base"...HEAD -- "${CODE_GLOBS[@]}" 2>/dev/null
+        fi
         git diff --name-only --diff-filter=ACMRTUXB HEAD -- "${CODE_GLOBS[@]}" 2>/dev/null
         git ls-files --others --exclude-standard -- "${CODE_GLOBS[@]}"
     } | awk 'NF' | { grep -vE '^(\.claude|\.loopkit)/' || true; } | sort -u
@@ -157,6 +188,11 @@ echo ">> stop_gate: running checks before 'done' is allowed"
 # full gate there produces false failures and blocks a clean stop.
 if [[ "${LOOP_FORCE_GATE:-0}" != "1" ]]; then
     if [[ -z "$(collect_changed_code_files)" ]]; then
+        if [[ -z "$(gate_base)" ]]; then
+            echo ">> NOTE: on the default branch there is no merge base, so only the"
+            echo ">>       working tree was examined. A committed change on this branch"
+            echo ">>       is NOT covered by this run."
+        fi
         echo ">> SKIP: no changed code files — nothing to verify (conversational/infra turn)."
         echo ">> PASS: gate short-circuited. 'done' condition satisfied."
         exit 0
