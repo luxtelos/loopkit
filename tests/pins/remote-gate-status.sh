@@ -40,8 +40,13 @@ SRC="$WORK/src"
 mkdir -p "$SRC"
 git -c init.defaultBranch=main init -q "$SRC" >/dev/null 2>&1
 echo ok > "$SRC/marker.txt"
+# `-c commit.gpgsign=false`: a fixture must not depend on the caller's commit
+# signing. With signing on and the agent locked, the commit fails, the fixture
+# has no branch, and every check below reports a defect that is not there.
 git -C "$SRC" -c user.email=t@t -c user.name=t add marker.txt >/dev/null 2>&1
-git -C "$SRC" -c user.email=t@t -c user.name=t commit -q -m "pin fixture" >/dev/null 2>&1
+git -C "$SRC" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q -m "pin fixture" >/dev/null 2>&1
+git -C "$SRC" rev-parse --verify --quiet main >/dev/null 2>&1 \
+    || { echo "FAIL could not build the fixture repo (is commit signing forcing a prompt?)"; exit 2; }
 
 run_body() {  # <suite-command> <run-id> → prints the body's exit status
     # Each on its own line: bash expands every word of a `local` statement

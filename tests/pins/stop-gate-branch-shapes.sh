@@ -38,7 +38,10 @@ bad()  { echo "  FAIL $1"; fails=$((fails+1)); }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-branch-shapes.XXXXXX")"
 trap 'find "$WORK" -mindepth 1 -delete 2>/dev/null; rmdir "$WORK" 2>/dev/null || true' EXIT
 
-git_q() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=main -c advice.detachedHead=false "$@"; }
+# `-c commit.gpgsign=false`: a fixture must not depend on the caller's commit
+# signing. With signing on and the agent locked, every fixture commit fails and
+# the pin reports defects that are not there.
+git_q() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=main -c advice.detachedHead=false -c commit.gpgsign=false "$@"; }
 
 # An upstream whose default branch is named <2>, cloned to <1>. Cloning is what
 # gives the clone an `origin/HEAD`, which is the only name-independent record of
