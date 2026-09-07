@@ -78,6 +78,26 @@ MUST_CATCH = {
     "private_key":       ("PEM private key block",     "-----BEGIN RSA PRIVATE KEY-----"),
 }
 
+# Variants WITHIN a shape. One regex covers a whole family, so the shape-keyed
+# table above has one row for it — but the family members still each need a
+# case, or widening a character class silently stops being tested. Every entry
+# main pinned separately before the table existed lives on here.
+VARIANTS = {
+    "GitHub personal":         "ghp_" + "A" * 36,
+    "GitHub user-to-server":   "ghu_" + "C" * 36,
+    "GitHub server-to-server": "ghs_" + "D" * 36,
+    "GitHub refresh":          "ghr_" + "E" * 36,
+    "Stripe test":             "sk_test_" + "H" * 24,
+    "Stripe restricted test":  "rk_test_" + "T" * 24,
+    "Slack session (xoxs)":    "xoxs-" + "2" * 20,
+    "Slack refresh (xoxr)":    "xoxr-" + "3" * 20,
+    "Doppler service token":   "dp.st." + "e" * 40,
+    "Doppler CLI token":       "dp.ct." + "f" * 40,
+    "PEM EC private key":      "-----BEGIN EC PRIVATE KEY-----",
+    "PEM plain private key":   "-----BEGIN PRIVATE KEY-----",
+    "AWS secret, colon form":  'AWS_SECRET_ACCESS_KEY: "' + "v" * 40 + '"',
+}
+
 MUST_MISS = {
     "the word token":         "set the token in your environment before running",
     "a variable name":        "GH_TOKEN is read from the environment, never written down",
@@ -131,6 +151,10 @@ def check(cond: bool, label: str) -> None:
 print("MUST CATCH")
 for shape, (label, sample) in MUST_CATCH.items():
     check(bool(ct.SECRET.search(sample)), f"{label} [{shape}]")
+
+print("MUST CATCH — family members inside a shape")
+for label, sample in VARIANTS.items():
+    check(bool(ct.SECRET.search(sample)), label)
 
 print("MUST NOT CATCH (a noisy scanner gets switched off)")
 for name, sample in MUST_MISS.items():
