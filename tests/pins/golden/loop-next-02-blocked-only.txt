@@ -1,0 +1,9 @@
+BACKLOG: new=0 spec-draft=0 spec-ready=0 fixing=0 pr-open=0
+BLOCKED: 2 row(s) awaiting a human ruling — not polled, not a stage. See inbox/needs-human.md.
+STAGE: discover
+ACTION: no actionable rows. Run morning-triage to find work.
+NEXT: WAIT — nothing here can move without an outside event (PR review / CI / a human ruling on 2 blocked row(s)). A wakeup is appropriate: 30 min working hours, 60 otherwise.
+RULE: advance exactly ONE stage this tick — for EVERY row listed under TARGETS,
+      in parallel worktrees — then update each row via
+      python3 <SCRIPTS>/triage_state.py update --state <PROJECT>/state/triage.md --source <row source> --status <s>, and stop.
+      One stage per tick keeps transitions attributable; one ROW per tick was never the rule.

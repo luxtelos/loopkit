@@ -26,6 +26,7 @@ for f in "$P"/hooks/*.sh "$P"/scripts/*.sh "$P"/skills/run-state-model/install.s
   bash -n "$f" && ok "bash -n $(basename "$f")" || fail "bash -n $f"
 done
 python3 -m py_compile "$P"/hooks/*.py "$P"/scripts/*.py && ok "py_compile" || fail "py_compile"
+python3 -m py_compile "$P"/loopkit_core/*.py && ok "py_compile loopkit_core" || fail "py_compile loopkit_core"
 for j in "$P/hooks/hooks.json" "$P/.claude-plugin/plugin.json" "$REPO/.claude-plugin/marketplace.json" "$P"/templates/loopkit/*.json; do
   python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$j" && ok "json $(basename "$j")" || fail "json $j"
 done
@@ -771,6 +772,36 @@ fi
 # docs/ci-model-engines.patch, to be applied by someone whose token carries the
 # `workflow` scope. Until then the model invariants are proved on macOS only,
 # and README.md says so rather than implying CI covers them.
+
+# --- M2 core pins (added 2026-09-07 with plugins/loopkit/loopkit_core) --------
+# M2 part A moved five modules into a package with no Claude Code dependency and
+# lifted the stage precedence and the CONTINUE/WAIT/IDLE split out of bash. Three
+# ways that goes wrong quietly, one pin each:
+#   1. the package works and the old script paths silently stop working, so
+#      hooks and other projects break at the next call rather than here;
+#   2. `decide()` looks pure and reads the clock, which no same-second
+#      double-call would ever catch;
+#   3. the decision is right and the PRINTED lines changed, which every reader
+#      of loop-next.sh depends on.
+echo "== M2 core: the moved modules work through both doors"
+csp_out="$(python3 "$REPO/tests/pins/core-shim-parity.py" 2>&1)"; csp_rc=$?
+[ "$csp_rc" = 0 ] && ok "every moved module imports as loopkit_core.<name> and at its old script path" \
+  || fail "core/shim parity: $(printf '%s' "$csp_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+
+echo "== M2 core: decide() is pure"
+dp_out="$(python3 "$REPO/tests/pins/decide-pure.py" 2>&1)"; dp_rc=$?
+[ "$dp_rc" = 0 ] && ok "decide() reads no clock, disk or socket, and is deterministic over 729 count vectors" \
+  || fail "decide purity: $(printf '%s' "$dp_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+
+echo "== M2 core: decide() reproduces the fixtures' three-way split"
+df_out="$(python3 "$REPO/tests/pins/decide-from-fixtures.py" 2>&1)"; df_rc=$?
+[ "$df_rc" = 0 ] && ok "decide() matches every spec/fixtures case, driven from the fixture files" \
+  || fail "decide vs fixtures: $(printf '%s' "$df_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
+
+echo "== M2 core: loop-next.sh still prints what it printed before"
+lnp_out="$(python3 "$REPO/tests/pins/loop-next-output-parity.py" 2>&1)"; lnp_rc=$?
+[ "$lnp_rc" = 0 ] && ok "BACKLOG/BLOCKED/POLL/STAGE/TARGET/TARGETS/ACTION/NEXT/RULE byte-identical on three fixture queues" \
+  || fail "loop-next output parity: $(printf '%s' "$lnp_out" | grep -E '^ +FAIL' | head -3 | tr '\n' ' ')"
 
 # --- the repo's own gate config must source silently: an unquoted multi-word
 # value (LOOP_TEST_CMD=bash tests/selftest.sh) RUNS the second word as a command
