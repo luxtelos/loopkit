@@ -1,6 +1,6 @@
-# 0007 — Should `state/` findings be routed through the knowledge layer?
+# 0007 — Findings become concepts; the queue stays a table
 
-Status: **proposed** — owner ruling required. Options costed, lean stated last.
+Status: **accepted** (owner ruling, 2026-09-07) — **Option C**.
 
 ## Context
 
@@ -70,10 +70,10 @@ remains exactly as it is.
 - **Loses:** two stores rather than one, and a boundary someone must understand.
   The boundary is already in `FILES.md`, but it becomes load-bearing.
 
-## Which way I lean, having given the costs first
+## The ruling, and the reasoning behind it
 
-**Option C.** The rot is in findings, not in the queue: a triage row says
-`status=fixing`, which cannot go stale the way `store.py:633` can. Option B pays
+**Option C, ruled by the owner 2026-09-07.** The rot is in findings, not in the queue: a triage row says
+`status=fixing`, which cannot go stale the way a finding naming a code location can. Option B pays
 its largest cost — rebuilding a parser five review rounds deep — to fix a class
 of problem the queue does not have. Option A leaves verification forgeable,
 which makes the trust tiers decorative.
@@ -82,7 +82,7 @@ I hold this loosely on one point: Option C's boundary must be stated so plainly
 that no agent has to think about it, or facts will land in the wrong store — and
 `FILES.md` opens by warning that a fact filed in the wrong layer is a fact lost.
 
-## Consequences if C is chosen
+## Consequences
 
 - A finding is written through the mailbox, not by appending markdown.
 - `FILES.md` gains a row and the boundary becomes explicit.
