@@ -84,7 +84,23 @@ STAGE_ONLY="${LOOPKIT_GATE_STAGE_DIR:-}"
 # the plugin. Ask git, or take CLAUDE_PROJECT_DIR when the harness set one.
 REPO="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The body is found as a SIBLING of this file, so this file's own path has to be
+# the real one. BASH_SOURCE[0] is the path the caller used — for a symlinked
+# entry point that is the LINK, whose directory has no body next to it, and the
+# runner then refuses to start with "missing .../remote-gate-body.sh". Loud, but
+# wrong, and plugin installs are exactly where symlinks turn up. Walk the links
+# by hand: `readlink -f` is GNU, absent on the macOS this is developed on.
+SELF="${BASH_SOURCE[0]}"
+_hops=0
+while [ -L "$SELF" ] && [ "$_hops" -lt 40 ]; do
+    _link="$(readlink "$SELF")"
+    case "$_link" in
+        /*) SELF="$_link" ;;
+        *)  SELF="$(dirname "$SELF")/$_link" ;;
+    esac
+    _hops=$((_hops + 1))
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
 BODY="$HERE/remote-gate-body.sh"
 [ -f "$BODY" ] || { echo "REMOTE GATE: missing $BODY" >&2; exit 2; }
 [ -d "$REPO/.git" ] || git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
