@@ -51,6 +51,12 @@
       "tests/pins/loop-next-output-parity.py",
       "replace\\(str\\(scripts\\), \"<SCRIPTS>\"\\)",
       "the control case's absolute-path scrubbing already exists here and should be extended, not rewritten"
+    ],
+    [
+      "specs/blocked-waits-on-what.md",
+      "plugins/loopkit/loopkit_core/triage_state.py",
+      "^\\s*if spec is not None:$",
+      "update_row leaves the spec cell untouched when the argument is None, which is why criterion 10 cannot rely on the caller remembering to clear a spent condition"
     ]
   ]
 }
