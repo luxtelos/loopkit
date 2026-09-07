@@ -111,7 +111,15 @@ to a log and print `tail -2` of that log every 60 seconds until it ends.
 ## Where to run the suite
 
 **Run it on the remote Linux host, not on this Mac.** `bash tools/remote-gate.sh
-<branch>` with `LOOPKIT_REMOTE` set.
+<branch>` — set `LOOPKIT_REMOTE=user@host` in your environment, or in
+`.loopkit/config.env`, which that script reads.
+
+**Read its exit status, not its last line.** It exits with the suite's own
+status and prints `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`. It did not
+always: the first version piped the suite through `grep | tail` and then read
+`$?`, which is *tail's* status, so it exited 0 on a suite printing
+`FAILURE: 3 checks failed`. Never read `$?` after a pipe — send output to a
+file, capture the status on the next line, filter the file for display.
 
 Two reasons, both measured rather than assumed:
 
@@ -125,3 +133,12 @@ Two reasons, both measured rather than assumed:
   49-91. The remote had 18 GB free and 8 idle cores.
 
 Use the Mac for one thing only: confirming the bash 3.2 path still works.
+
+## Reject unverifiable claims in a PR body
+
+A claim you cannot check from the diff, the history, or a command in the body is
+not evidence, and "I could not check it" is a finding, not an omission. Say so
+and ask for the claim to be struck or marked unaudited. Local housekeeping —
+worktrees removed, caches cleared, files tidied on someone's laptop — leaves no
+record anywhere you can reach, so it can never support a "nothing was lost"
+conclusion.

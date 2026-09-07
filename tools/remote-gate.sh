@@ -30,8 +30,22 @@
 set -uo pipefail
 
 REF="${1:?usage: remote-gate.sh <branch-or-sha> [suite-command]}"
+
+# Read the project's config, like every other tool that this file's settings
+# live beside. Without this, .loopkit/config.env told you to set LOOPKIT_REMOTE
+# for a script that only ever read the environment — a slot with no reader,
+# pointing at the one tool that uses the variable. The file assigns these keys
+# as `${VAR:-}`, so an entry left empty there cannot overwrite an exported one.
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+if [ -f "$ROOT/.loopkit/config.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ROOT/.loopkit/config.env"
+    set +a
+fi
+
 SUITE="${2:-${LOOPKIT_GATE_SUITE:-bash tests/selftest.sh}}"
-REMOTE="${LOOPKIT_REMOTE:?set LOOPKIT_REMOTE=user@host}"
+REMOTE="${LOOPKIT_REMOTE:?set LOOPKIT_REMOTE=user@host, in the environment or .loopkit/config.env}"
 SSH_KEY="${LOOPKIT_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 IMAGE="${LOOPKIT_IMAGE:-node:22-bookworm}"
 REPO_URL="https://github.com/${LOOPKIT_REPO:-luxtelos/loopkit}.git"
@@ -39,6 +53,21 @@ REPO_URL="https://github.com/${LOOPKIT_REPO:-luxtelos/loopkit}.git"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BODY="$HERE/remote-gate-body.sh"
 [ -f "$BODY" ] || { echo "REMOTE GATE: missing $BODY" >&2; exit 2; }
+
+# LOOPKIT_GATE_DRY_RUN=1 resolves and prints the settings without touching the
+# network. It is how tests/pins/remote-gate-config.sh proves the config file is
+# genuinely read, offline and without a host — a key nothing reads is
+# decoration, and the only way to know it is read is to observe it.
+if [ "${LOOPKIT_GATE_DRY_RUN:-0}" = "1" ]; then
+    echo "REMOTE:   $REMOTE"
+    echo "SSH_KEY:  $SSH_KEY"
+    echo "IMAGE:    $IMAGE"
+    echo "REF:      $REF"
+    echo "SUITE:    $SUITE"
+    echo "REPO_URL: $REPO_URL"
+    echo "REMOTE GATE: DRY RUN (nothing executed)"
+    exit 0
+fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-remote-gate.XXXXXX")"
 cleanup() { rm -f "$WORK/input.sh" "$WORK/output.log"; rmdir "$WORK" 2>/dev/null || true; }

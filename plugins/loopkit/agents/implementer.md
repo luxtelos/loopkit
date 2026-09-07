@@ -56,7 +56,15 @@ gate.
 ## Where to run the suite
 
 **Run it on the remote Linux host, not on this Mac.** `bash tools/remote-gate.sh
-<branch>` with `LOOPKIT_REMOTE` set.
+<branch>` — set `LOOPKIT_REMOTE=user@host` in your environment, or in
+`.loopkit/config.env`, which that script reads.
+
+**Read its exit status, not its last line.** It exits with the suite's own
+status and prints `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`. It did not
+always: the first version piped the suite through `grep | tail` and then read
+`$?`, which is *tail's* status, so it exited 0 on a suite printing
+`FAILURE: 3 checks failed`. Never read `$?` after a pipe — send output to a
+file, capture the status on the next line, filter the file for display.
 
 Two reasons, both measured rather than assumed:
 
@@ -70,3 +78,20 @@ Two reasons, both measured rather than assumed:
   49-91. The remote had 18 GB free and 8 idle cores.
 
 Use the Mac for one thing only: confirming the bash 3.2 path still works.
+
+## Every claim in a PR body must be checkable
+
+State only what a reader can verify from the diff, the history, or a command
+you put in the body. If it cannot be checked, mark it unaudited or leave it out.
+
+This is a rule because of a real one: a PR body said eighteen worktrees whose
+branches were already ancestors of `main` had been removed and nothing was lost.
+Worktree removal is a local filesystem action with no representation in the
+diff, the commit, or the reflog — the eighteen were named nowhere, so neither
+the claim nor its reversal could be checked. The reviewer then found nine
+*survivors* that were themselves ancestors of `main`, which means the stated
+criterion was not the one that ran. An unverifiable claim does not merely fail
+to help; it spends the reader's trust in the claims around it that are true.
+
+Housekeeping you did on your own machine is not evidence. Either produce the
+list and check it in the body, or say plainly that it was unaudited.

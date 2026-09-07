@@ -870,6 +870,16 @@ printf '%s\n' "$rg_out" | grep -E '^  FAIL' || true
 [ "$rg_rc" = 0 ] && ok "the remote gate runner goes red on a failing suite and green on a passing one" \
   || fail "remote gate status: $(printf '%s' "$rg_out" | tail -1)"
 
+echo "== remote gate config: the key has a reader, and never clobbers"
+# LOOPKIT_REMOTE was added to config.env with no consumer, and — because eight
+# scripts source that file with `set -a` — an empty entry overwrote a correct
+# exported value. A key nothing reads is decoration; one that overwrites a
+# working value is a bug.
+rgc_out="$(bash "$REPO/tests/pins/remote-gate-config.sh" "$REPO" 2>&1)"; rgc_rc=$?
+printf '%s\n' "$rgc_out" | grep -E '^  FAIL' || true
+[ "$rgc_rc" = 0 ] && ok "LOOPKIT_REMOTE is read, survives a set -a source, and the agent files point at a present script" \
+  || fail "remote gate config: $(printf '%s' "$rgc_out" | tail -1)"
+
 echo
 [ "$fails" = 0 ] && echo "ALL PASS" || echo "$fails FAILURE(S)"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
