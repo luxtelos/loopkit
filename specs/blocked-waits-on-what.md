@@ -295,32 +295,41 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    is the most-repeated defect in this codebase. Four parts, all decidable
    without running the evaluator at all:
 
-   a. **No defaulted parameters.** `evaluator.__defaults__` and
+   a. **It is a plain function at all.** `isinstance(evaluator,
+      types.FunctionType)`. A callable class instance has no inspectable
+      `__code__`, so every part below would raise rather than judge — and a
+      check that raises where it meant to refuse is a check whose verdict
+      depends on how the caller wrote its `try`. Refuse explicitly.
+   b. **No defaulted parameters.** `evaluator.__defaults__` and
       `evaluator.__kwdefaults__` are both empty. A default is evaluated once, at
       `def` time, in the module — so `def evaluate(rows, arg, _now=time.time())`
       hides a clock read that no name in the function body records.
-   b. **No closure.** `evaluator.__closure__` is `None`. A free variable is
-      non-argument state by definition.
-   c. **Every reachable name is on the allow-list.** Take the union of
+   c. **No closure.** `evaluator.__closure__` is `None`. A free variable is
+      non-argument state by definition, and it is also how a decorator hides the
+      real evaluator behind a `functools.wraps` wrapper.
+   d. **Every reachable name is on the allow-list.** Take the union of
       `co_names` over `evaluator.__code__` and, recursively, every code object
       in its `co_consts`. That is every global, every imported name and every
       attribute the function can reach, including from a nested `def` or
       `lambda`. It must be a subset of the declared list. Everything else
       fails: an unlisted module, an unlisted builtin, an unlisted attribute,
       and — this is the point — a name nobody has thought of yet.
-   d. **No allow-listed builtin is shadowed.** For each reachable name that is
+   e. **No allow-listed builtin is shadowed.** For each reachable name that is
       also a builtin, assert `evaluator.__globals__` either does not bind it or
       binds it to the same object as `builtins` does. Without this, a module can
       rebind `len` to something that reads the clock and its evaluator passes
-      part (c) with every name legal.
+      part (d) with every name legal.
 
    The allow-list is the builtins the evaluator uses plus the attribute names it
    calls on its arguments — about twenty entries, all of them `str`, `dict` and
    `list` members. Attribute names are included deliberately, although `dis`
-   could tell them apart from globals: it costs one line in the list, and it
-   buys refusal of `.st_mtime` reached through any object at all. Cheap
-   over-strictness is the right trade in a check whose entire job is to fail
-   closed.
+   could tell them apart from globals. It costs one line in the list, and it
+   earned itself: the only evaluator that reaches dangerous state while naming
+   **no module global whatsoever** does it through an argument, as
+   `rows.__class__.__base__.__subclasses__()`, and the names that refuse it are
+   `__class__`, `__base__` and `__subclasses__` — three attributes. A check that
+   scanned globals alone would let it through. Cheap over-strictness is the
+   right trade in a check whose entire job is to fail closed.
 
    **Measured against seventeen stand-in evaluators** — two legal shapes, the
    six spellings the round-two review used to defeat the deny-list, four the
@@ -361,8 +370,8 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    shapes: an allow-list does not have to recognise the danger, only to fail to
    recognise the name.
 
-   **`clock read in a parameter default`** defeats parts (b), (c) and (d) on
-   their own; part (a) exists solely because of it. It was found by writing this
+   **`clock read in a parameter default`** defeats parts (c), (d) and (e) on
+   their own; part (b) exists solely because of it. It was found by writing this
    check, not by reading the old one, which is the argument for writing checks
    that try to break themselves.
 
@@ -388,6 +397,34 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    criterion. It is recorded here because it is the plausible next thing a
    reader reaches for, and because "it is a hook, so it must be sound" is how
    the shape gets bought a third time.
+
+   **Six more, written to attack this check rather than the old one.** The
+   seventeen above were mostly inherited from two rounds of review, which makes
+   them a test of the previous check as much as this one. These were chosen by
+   asking where an allow-list over `co_names` would be weakest:
+
+   ```
+   adversarial evaluator     intent     verdict   refused because
+   clock read in a genexp    forbidden  detected  unlisted name: time
+   clock read in a lambda    forbidden  detected  unlisted name: time
+   rows.__class__.__base__   forbidden  detected  unlisted: __class__, __base__, __subclasses__
+     .__subclasses__()
+   a callable class instance forbidden  detected  not a plain function
+   functools.wraps wrapper   forbidden  detected  closure over non-argument state
+   str/dict methods only     allowed    allowed   -
+
+   wrong: 0/6
+   ```
+
+   The third and fourth are the ones that changed this criterion. The
+   attribute-chain evaluator names no module global at all — it climbs from an
+   *argument* to `object.__subclasses__`, and only the attribute half of part
+   (d) refuses it. The callable instance produced no verdict at all in the first
+   draft of this check; it raised, because a class instance has no `__code__`.
+   Part (a) exists because of it. Both were found by writing evaluators against
+   the check rather than by re-reading it, which is the method this criterion
+   recommends to whoever implements it: the twenty-third evaluator is the one
+   worth writing.
 
    **What this check does not prove, said plainly so nobody mistakes it for
    total.** It does not prove the evaluator is a function of *honest* inputs: if
