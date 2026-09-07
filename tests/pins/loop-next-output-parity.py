@@ -81,11 +81,21 @@ def build_project(scripts: Path, queue: list[dict]) -> Path:
         check=True, capture_output=True, text=True, timeout=60,
     )
     for row in queue:
+        # `--override-verdict` because a `pr-open` row here is a FIXTURE, not a
+        # transition the pipeline earned. Since 2026-09-07 the recorder refuses
+        # `pr-open` without a recorded reviewer PASS, and this pin builds queues
+        # that already contain one. Saying so explicitly is the point of the
+        # flag: the alternative — leaving `upsert` ungated so fixtures keep
+        # working — is how the gate would have acquired a signposted detour on
+        # the day it was written.
+        override = (["--override-verdict",
+                     "fixture construction in loop-next-output-parity.py"]
+                    if row.get("status") == "pr-open" else [])
         subprocess.run(
             [sys.executable, str(triage), "upsert", "--state", str(state),
              "--finding", row.get("finding", ""), "--source", row.get("source", ""),
              "--priority", row.get("priority", ""), "--spec", row.get("spec", ""),
-             "--status", row.get("status", "")],
+             "--status", row.get("status", ""), *override],
             check=True, capture_output=True, text=True, timeout=60,
         )
     return project

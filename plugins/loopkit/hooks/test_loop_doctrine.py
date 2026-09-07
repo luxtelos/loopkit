@@ -26,6 +26,11 @@ MUST_INJECT = [
     ("triage phrasing", "process the triage findings"),
     ("plain ask", "run the loop"),
     ("leading whitespace", "   /loop coordinate on the billing epic"),
+    # The plugin's own canonical skill invocations. `^\s*/loop\b` cannot match
+    # these — `\b` fails between `p` and `k` — so the doctrine was silent on the
+    # exact prompt the skill list advertises. Found by the 2026-09-07 review.
+    ("the plugin's own tick skill", "/loopkit:tick"),
+    ("the plugin's own scan skill", "/loopkit:scan"),
 ]
 
 MUST_STAY_QUIET = [

@@ -25,3 +25,6 @@ MC.*
 # `.loopkit/config.env` line is a decision and not an omission. Delete the
 # marker and the next init will add the line back.
 # loopkit:decided .loopkit/config.env — init wrote this line once and will not re-add it. To opt out, delete the line and keep this comment.
+
+# loopkit:decided .loopkit/driver.lock — a live lock, never history
+.loopkit/driver.lock
