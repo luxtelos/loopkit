@@ -36,6 +36,10 @@ Never decide done yourself. Never merge.
 - Never stage everything. `git add -A`, `--all` and `.` are refused by the
   same hook (`git-add-all`). Name the files, so the diff you commit is the diff
   you reviewed.
+- Commit with `loop-commit.sh -m "…" -- <paths>`, never a bare `git commit`
+  (refused by `require_commit_lock.py`). In your own worktree you contend with
+  nobody and the lock is uncontended; the habit is what makes it safe on the
+  days you are working in a shared one.
 - If you hit something outside the spec, route to `inbox/` instead of guessing.
 - Repo-specific constraints are not restated here. The project's `CLAUDE.md`
   auto-loads every session and carries them. Two copies of one rule are free to
