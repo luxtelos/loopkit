@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 from dataclasses import dataclass
@@ -263,6 +264,58 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+
+def _root_for(state: Path) -> Path:
+    """The worktree root that owns this state file — `state/triage.md` sits one
+    level under it. The lock is per worktree because the index is per worktree."""
+    resolved = state.resolve()
+    return resolved.parent.parent if resolved.parent.name == "state" else resolved.parent
+
+
+def _driver_lock_path() -> Path | None:
+    """Locate `driver_lock.py`, which lives in `scripts/` beside this package.
+
+    Relocation hazard, and the reason this is a named function with a pin
+    (`tests/pins/queue-lock-held.py`): `write_lock` used to load the helper from
+    its OWN directory. That was correct while this module lived in `scripts/`.
+    After M2 moved it into `loopkit_core/`, the same expression resolves to
+    `loopkit_core/driver_lock.py`, which does not exist — and because the caller
+    fails open, the lock would have degraded to a no-op that still returns a
+    perfectly good context manager. A guard that silently stops guarding is
+    worse than no guard, so the path is resolved explicitly and pinned.
+    """
+    here = Path(__file__).resolve().parent
+    for candidate in (here.parent / "scripts" / "driver_lock.py", here / "driver_lock.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def write_lock(state: Path):
+    """The driver lock, around a read-modify-write of the queue.
+
+    Every mutating command here is parse-then-write: two drivers interleaving
+    between the parse and the write lose one of the two edits silently, and the
+    "state file is the lock" guard rail that was supposed to prevent it enforced
+    nothing (2026-09-07). Re-entrant, so a driver that already holds the lock —
+    loop-commit.sh, say — does not deadlock against itself.
+
+    Fail-open: if the helper cannot be loaded at all, an unlocked write is still
+    better than a triage command that refuses to run.
+    """
+    try:
+        import importlib.util
+        path = _driver_lock_path()
+        if path is None:
+            return contextlib.nullcontext()
+        spec = importlib.util.spec_from_file_location("driver_lock", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.held(_root_for(state), label="triage_state")
+    except Exception:
+        return contextlib.nullcontext()
+
+
 def _record_transition(state: Path, source: str, status: str | None) -> None:
     """Append to state/ticks.jsonl beside the state file. Never raises."""
     if not status:
@@ -283,37 +336,41 @@ def main() -> int:
     args = parser.parse_args()
     state_path = Path(args.state)
 
+    # Only the writers take the lock. `list` is a read and must never block on
+    # a driver that is mid-commit — a status question that hangs gets replaced
+    # by a status question nobody asks.
+    mutating = args.command in {"ensure-schema", "upsert", "update"}
+
     try:
-        if args.command == "ensure-schema":
-            ensure_schema(state_path)
-            return 0
+        with (write_lock(state_path) if mutating else contextlib.nullcontext()):
+            if args.command == "ensure-schema":
+                ensure_schema(state_path)
+                return 0
 
-        if args.command == "upsert":
-            created = upsert_row(
-                state_path,
-                finding=args.finding,
-                source=args.source,
-                priority=args.priority,
-                spec=args.spec,
-                status=args.status,
-            )
-            print("created" if created else "updated")
-            return 0
+            if args.command == "upsert":
+                created = upsert_row(
+                    state_path,
+                    finding=args.finding,
+                    source=args.source,
+                    priority=args.priority,
+                    spec=args.spec,
+                    status=args.status,
+                )
+                print("created" if created else "updated")
+                return 0
 
-        if args.command == "update":
-
-
-            _record_transition(Path(args.state), args.source, args.status)
-            update_row(
-                state_path,
-                source=args.source,
-                finding=args.finding,
-                priority=args.priority,
-                spec=args.spec,
-                status=args.status,
-            )
-            print("updated")
-            return 0
+            if args.command == "update":
+                _record_transition(Path(args.state), args.source, args.status)
+                update_row(
+                    state_path,
+                    source=args.source,
+                    finding=args.finding,
+                    priority=args.priority,
+                    spec=args.spec,
+                    status=args.status,
+                )
+                print("updated")
+                return 0
 
         if args.command == "list":
             rows = iter_rows(state_path, statuses=args.status)

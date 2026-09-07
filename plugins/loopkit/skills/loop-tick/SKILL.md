@@ -76,6 +76,20 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triage_state.py" update --state state/tri
 findings with the same source overwrite each other — give each row a distinct
 source (`state/<doc>.md §S14`), never the bare doc path.
 
+Then commit the tick THROUGH THE LOCK, never with a bare `git commit`:
+
+```bash
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/loop-commit.sh" \
+  -m "loop(tick): <row> -> <status>" -- state/triage.md state/<your notes>.md
+```
+
+Parallel agents share one git index per worktree, so an unlocked
+`git add … && git commit` publishes whatever anyone else has staged — that is
+how a review verdict ended up inside commit `6989d63` on 2026-09-07. The
+wrapper holds `.loopkit/driver.lock` across the add and the commit;
+`triage_state.py` takes the same lock for its own write. A bare `git commit` is
+refused by the plugin's `require_commit_lock.py`.
+
 ```bash
 # lane-scoped tick (lanes come from <project>/.loopkit/scopes.json):
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/loop-next.sh" --scope <lane>

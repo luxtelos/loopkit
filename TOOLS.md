@@ -14,6 +14,8 @@
 | Is a `file:line` citation still true       | `check-citations.py`                                                 |
 | Two writers, a retry, a guard-then-write   | `run-state-model` driver (FizzBee first); trace cited in the spec    |
 | Triage rows                                | `triage_state.py` — never hand-edit the table                        |
+| Committing anything                        | `loop-commit.sh -m "…" -- <paths>` — holds the driver lock         |
+| Who holds the driver lock right now        | `driver_lock.py status`                                              |
 | Findings in prose → rows                   | `inbox_to_triage.py` (dry run by default)                            |
 | GitHub reads and PR comments               | `gh` CLI; never `gh pr merge`, never `--approve`                     |
 | Secrets a command genuinely needs          | `LOOP_ENV_WRAPPER` (e.g. a secrets-manager `run --`), value-blind    |
