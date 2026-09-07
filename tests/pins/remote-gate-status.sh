@@ -14,15 +14,21 @@
 # for, one layer further out, and the one real run that said PASS was right
 # only by coincidence.
 #
-# This runs the container half (tools/remote-gate-body.sh) directly, against a
-# local throwaway repo, with a stub suite — no ssh, no docker, no network — and
+# This runs the far-side half (tools/remote-gate-body.sh) directly, against a
+# local throwaway tree, with a stub suite — no ssh, no docker, no network — and
 # requires it to exit non-zero on a failing suite and zero on a passing one.
+#
+# The COMPANION pin is remote-gate-sends-working-tree.sh: this one asks whether
+# the verdict is honest, that one asks whether the verdict is about the tree you
+# have. Both are needed. A runner that reports failures accurately about the
+# wrong tree is no better than one that cannot report failures at all.
 #
 # usage: bash tests/pins/remote-gate-status.sh [<repo-root>]
 
 set -uo pipefail
 
 REPO="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+REPO="$(cd "$REPO" && pwd)"   # a relative argument must not break the fixtures
 BODY="$REPO/tools/remote-gate-body.sh"
 RUNNER="$REPO/tools/remote-gate.sh"
 [ -f "$BODY" ]   || { echo "FAIL no remote-gate-body.sh at $BODY"; exit 2; }
@@ -35,8 +41,9 @@ bad() { echo "  FAIL $1"; fails=$((fails+1)); }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-remote-gate-pin.XXXXXX")"
 trap 'find "$WORK" -mindepth 1 -delete 2>/dev/null; rmdir "$WORK" 2>/dev/null || true' EXIT
 
-# A throwaway repo for the body to clone, so the real clone/checkout path runs.
-SRC="$WORK/src"
+# A throwaway repo standing in for the tree the sender rsynced over, so the real
+# "run in a staged tree" path executes.
+SRC="$WORK/staged"
 mkdir -p "$SRC"
 git -c init.defaultBranch=main init -q "$SRC" >/dev/null 2>&1
 echo ok > "$SRC/marker.txt"
@@ -60,13 +67,16 @@ run_body() {  # <suite-command> <run-id> → prints the body's exit status
     {
         printf 'REF=%q\n' main
         printf 'SUITE=%q\n' "$suite"
-        printf 'REPO_URL=%q\n' "$SRC"
-        printf 'WORKDIR=%q\n' "$WORK/clone-$id"
+        printf 'DIRTY=%q\n' 0
+        printf 'WORKDIR=%q\n' "$SRC"
         printf 'LOGDIR=%q\n'  "$WORK/log-$id"
         printf 'SKIP_APT=1\n'
         cat "$BODY"
     } > "$input"
-    bash "$input" >"$out" 2>&1
+    # HOME is redirected because the body declares the staged tree a safe
+    # directory with `git config --global`. Without this the pin would append a
+    # line to the developer's own ~/.gitconfig on every run.
+    HOME="$WORK" bash "$input" >"$out" 2>&1
     rc=$?
     printf '%s' "$rc"
 }
@@ -97,6 +107,25 @@ echo "== a non-zero status must survive a suite that prints nothing matchable"
 quiet_rc="$(run_body 'echo unmatchable; exit 3' quiet)"
 [ "$quiet_rc" = 3 ] && ok "exit status passes through the display fallback (rc=3)" \
                     || bad "status lost when no summary line matched (rc=$quiet_rc)"
+
+echo "== a missing staged tree must be loud, not a silent pass"
+# The far side runs in whatever was sent. If nothing was, saying so is the whole
+# difference between a gate and a rubber stamp.
+missing_in="$WORK/in-missing.sh"
+{
+    printf 'REF=%q\n' main
+    printf 'SUITE=%q\n' 'exit 0'
+    printf 'DIRTY=%q\n' 0
+    printf 'WORKDIR=%q\n' "$WORK/there-is-no-such-tree"
+    printf 'LOGDIR=%q\n' "$WORK/log-missing"
+    printf 'SKIP_APT=1\n'
+    cat "$BODY"
+} > "$missing_in"
+HOME="$WORK" bash "$missing_in" >"$WORK/out-missing.log" 2>&1
+missing_rc=$?
+[ "$missing_rc" != 0 ] && grep -q 'no staged tree' "$WORK/out-missing.log" \
+    && ok "an absent staged tree fails loudly (rc=$missing_rc)" \
+    || bad "an absent staged tree gave rc=$missing_rc: $(tail -1 "$WORK/out-missing.log")"
 
 echo "== structural: the shapes that caused this must not come back"
 # `$?` may only ever be read on the line after a redirect-to-file, never after

@@ -362,9 +362,28 @@ were noise; the same commit was `ALL PASS` on Linux.
 LOOPKIT_REMOTE=user@host bash tools/remote-gate.sh <branch>
 ```
 
-It clones the branch into a container, prints the platform and what `TMPDIR`
-resolves to, and runs the suite. Use macOS only to check that the bash 3.2 path
+It stages a local clone, **rsyncs your current working tree over it**, sends
+that to the host, and runs the suite in a container there. It prints the
+platform, what `TMPDIR` resolves to, and a `SCOPE:` line saying how many
+uncommitted changes went with it. Use macOS only to check that the bash 3.2 path
 still works, and read its four known failures as noise until they are fixed.
+
+**It gates what is on disk, not what is pushed** — and that is not a detail. A
+version that cloned the branch from GitHub inside the container once replaced
+this one through a merge conflict. Run from a dirty worktree it printed
+`REMOTE GATE: PASS (rc=0)` while the uncommitted work was never sent, and said
+nothing about it. `tests/pins/remote-gate-sends-working-tree.sh` now fails if
+the staged tree loses a working-tree addition, edit or deletion, or if the run
+stops announcing its scope. Narrow scope can be defended; silent scope cannot.
+
+Set `LOOPKIT_REMOTE_DOCKER=0` to run bare on the host instead of in a container,
+and then own the three memory failures out loud: `memory.py` finds a mempalace
+the host has installed, so the case asserting behaviour "when the palace is
+absent" measures a machine where it is present.
+
+`LOOPKIT_GATE_STAGE_DIR=<dir>` builds exactly what would be sent, into `<dir>`,
+and stops before any network call — useful when you want to see what the gate
+is about to judge.
 
 **Read its exit status, not its last line.** `remote-gate.sh` exits with the
 suite's own status and prints `REMOTE GATE: PASS` or `REMOTE GATE: FAIL (rc=N)`
