@@ -19,7 +19,7 @@ read, and a hand edit breaks that.
 | Submit to anthropics/claude-plugins-official once 0.2.0 is tagged | plan §distribution official-marketplace | medium |  | blocked |
 | Bloom profile (six behaviour seeds + check-bloom.py) — waits on the owner's spend decision and a control-case run | docs/research/bloom-assessment.md | medium |  | blocked |
 | M1 runtime spec: specs/loopkit-runtime.md (EARS), ADR-0001..0004, docs/DDD-ERD.md, spec/fixtures, loopkit-runtime.model.fizz | docs/research/runtime-plan.md §M1 | high |  | done |
-| M2 loopkit-core: extract portable modules, lift stage+NEXT into loop_next_pick.decide, Provider (stub/OpenAI-compat/Anthropic), Store (fs/sqlite/s3), Runner, projection | docs/research/runtime-plan.md §M2 | high |  | fixing |
+| M2 loopkit-core: extract portable modules, lift stage+NEXT into loop_next_pick.decide, Provider (stub/OpenAI-compat/Anthropic), Store (fs/sqlite/s3), Runner, projection | docs/research/runtime-plan.md §M2 | high |  | pr-open |
 | M3 plugin becomes an adapter over loopkit-core; selftest unchanged | docs/research/runtime-plan.md §M3 | medium |  | blocked |
 | M4 projections + protocols: knowledge project --schema, A2A agent card, AG-UI emitter behind a flag | docs/research/runtime-plan.md §M4 | medium |  | blocked |
 | M5 loopkit-js from the conformance fixtures (packages/js) | docs/research/runtime-plan.md §M5 | low |  | blocked |
@@ -44,3 +44,5 @@ read, and a hand edit breaks that.
 | Release 0.2.2: governance guard fixes reach installed copies only after the manifest bump merges | release §0.2.2 | high |  | done |
 | M1 spec review FAIL: scoping field is fiction (scopes/scope/tags vs okf.py's lane\|scope\|domain prefix), fixture 05 message lacks required enqueued_at, criterion 1 run_start contradicts all four fixtures, fixture 04 events ambiguous, counts undefined | PR #8 review §spec-defects | high |  | done |
 | blocked is doing two jobs: waiting on a PERSON and waiting on an EVENT. An event-blocked row is never polled, so its precondition can be met for hours with nobody noticing — M2 and the marketplace submission both sat blocked after their preconditions passed | loop 2026-09-07 §blocked-conflates-two-waits | high |  | spec-draft |
+| tests/selftest.sh fails three graph checks on a STOCK macOS TMPDIR: graph.py available() compares str(root.resolve()) with the raw indexed root_path, and /var is a symlink to /private/var, so a first-time clone sees three red lines | env 2026-09-07 §tmpdir-symlink | high |  | new |
+| Spec criterion 23 says a provider's usage SHALL be 0 when the upstream reports none; the M2 brief said absent-never-zero because a fabricated zero corrupts tokens-per-task. PR #27 implemented absent. Either the criterion changes or the providers do | PR #27 §usage-zero-vs-absent | high |  | new |
