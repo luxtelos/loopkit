@@ -7,22 +7,67 @@
 # gets waved through as "probably the Mac again". The Linux box has neither
 # quirk: TMPDIR is /tmp and /tmp is /tmp.
 #
-# usage: tools/remote-gate.sh <branch-or-sha>
+# usage: tools/remote-gate.sh <branch-or-sha> [suite-command]
 #
-# The host is the project's own Linux box. Override with LOOPKIT_REMOTE=user@host.
-set -uo pipefail
-REF="${1:?usage: remote-gate.sh <branch-or-sha>}"
-EXTRA="${2:-}"
+#   LOOPKIT_REMOTE    user@host of the Linux box (required)
+#   LOOPKIT_SSH_KEY   identity file (default: ~/.ssh/id_ed25519)
+#   LOOPKIT_IMAGE     container image (default: node:22-bookworm)
+#   LOOPKIT_GATE_SUITE / argument 2
+#                     the command that IS the gate (default: bash tests/selftest.sh).
+#                     Overridable so this script's verdict can be proven red as
+#                     well as green — a runner that has only ever been seen say
+#                     PASS has not been shown to be able to say anything else.
+#
+# THE STATUS RULE, which this script got wrong once and must never get wrong
+# again. Never read `$?` after a pipe, and never let a pipe be the last thing a
+# gate does. `suite | grep | tail` reports TAIL's status: the reader exits
+# early, the writer takes SIGPIPE, and a suite printing "FAILURE: 3 checks
+# failed" yielded `suite-rc=0`. So: the suite writes to a FILE, its status is
+# captured on the very next line, the FILE is filtered for display, and the
+# captured status is what exits. Display and verdict are separate paths, and
+# only one of them can fail.
 
-ssh -i "${LOOPKIT_SSH_KEY:-$HOME/.ssh/id_ed25519}" -o BatchMode=yes "${LOOPKIT_REMOTE:?set LOOPKIT_REMOTE=user@host}" "docker run --rm node:22-bookworm bash -lc '
-set -e
-apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq git python3 >/dev/null 2>&1
-git clone -q https://github.com/luxtelos/loopkit.git /w 2>/dev/null
-cd /w && git checkout -q $REF
-echo \"REF: \$(git rev-parse --short HEAD)  \$(git log -1 --format=%s | cut -c1-60)\"
-echo \"PLATFORM: \$(uname -s) python \$(python3 -V 2>&1 | cut -d\\  -f2) bash \$BASH_VERSION\"
-echo \"TMPDIR: \${TMPDIR:-/tmp} -> \$(python3 -c \"import os,pathlib;print(pathlib.Path(os.environ.get(chr(84)+chr(77)+chr(80)+chr(68)+chr(73)+chr(82),\\\"/tmp\\\")).resolve())\")\"
-echo \"---\"
-bash tests/selftest.sh 2>&1 | grep -E \"^  FAIL|ALL PASS|FAILURE|^== \" | tail -30
-echo \"suite-rc=\$?\"
-'" 2>&1 | tail -40
+set -uo pipefail
+
+REF="${1:?usage: remote-gate.sh <branch-or-sha> [suite-command]}"
+SUITE="${2:-${LOOPKIT_GATE_SUITE:-bash tests/selftest.sh}}"
+REMOTE="${LOOPKIT_REMOTE:?set LOOPKIT_REMOTE=user@host}"
+SSH_KEY="${LOOPKIT_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+IMAGE="${LOOPKIT_IMAGE:-node:22-bookworm}"
+REPO_URL="https://github.com/${LOOPKIT_REPO:-luxtelos/loopkit}.git"
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BODY="$HERE/remote-gate-body.sh"
+[ -f "$BODY" ] || { echo "REMOTE GATE: missing $BODY" >&2; exit 2; }
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-remote-gate.XXXXXX")"
+cleanup() { rm -f "$WORK/input.sh" "$WORK/output.log"; rmdir "$WORK" 2>/dev/null || true; }
+trap cleanup EXIT
+
+# The container script is fed to `bash -s` over ssh's stdin, so nothing has to
+# survive three layers of nested quoting. REF and SUITE are prepended as
+# bash-quoted assignments (printf %q), which round-trips exactly because the
+# far side is bash too.
+#
+# Plain `bash -c`, never `bash -lc`: a login shell re-sources the profile and
+# can reset PATH to a system runtime, silently discarding the caller's. The
+# gate this script runs for forbids `-lc` in its own `run_in_env`; a runner that
+# breaks the rule it enforces is not a runner anybody should trust.
+{
+    printf 'REF=%q\n' "$REF"
+    printf 'SUITE=%q\n' "$SUITE"
+    printf 'REPO_URL=%q\n' "$REPO_URL"
+    cat "$BODY"
+} > "$WORK/input.sh"
+
+ssh -i "$SSH_KEY" -o BatchMode=yes "$REMOTE" \
+    "docker run --rm -i $IMAGE bash -s" <"$WORK/input.sh" >"$WORK/output.log" 2>&1
+rc=$?
+
+cat "$WORK/output.log"
+if [ "$rc" -eq 0 ]; then
+    echo "REMOTE GATE: PASS (rc=0)"
+else
+    echo "REMOTE GATE: FAIL (rc=$rc)"
+fi
+exit "$rc"

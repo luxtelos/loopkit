@@ -124,26 +124,106 @@ run_in_env() {
 # ran every time, found a clean tree, and short-circuited to PASS without
 # running one test. A check that cannot fail, inside the gate.
 #
-# So: the whole BRANCH against its merge base, plus the working tree. On the
-# default branch there is no merge base to compare with, so fall back to the
-# working tree and say so out loud — a silent fallback is how the original bug
-# would come straight back.
-gate_base() {
-    local head remote_default d
-    for d in main master; do
-        if git show-ref --verify --quiet "refs/heads/$d"; then remote_default="$d"; break; fi
-    done
-    remote_default="${remote_default:-main}"
-    head="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-    if [ "$head" = "$remote_default" ] || [ "$head" = "HEAD" ]; then
-        echo ""   # no base — caller falls back to the working tree, loudly
-        return 0
+# So: the whole BRANCH against its merge base, plus the working tree.
+#
+# The first version of that fix asked `git rev-parse --abbrev-ref HEAD` for a
+# branch name and `git show-ref refs/heads/main` for the trunk. Both questions
+# have wrong answers in ordinary checkouts, and every wrong answer reverted the
+# gate to working-tree-only — the original bug, restored silently:
+#
+#   * detached HEAD has no branch name. That is how every review worktree in
+#     this project is made, and how CI checks out a pull request head.
+#   * `refs/heads/<name>` is a LOCAL branch lookup. A CI checkout has no local
+#     `main`, and a project whose trunk is `develop` or `trunk` has no `main`
+#     at all — this is a distributed plugin, so other repos' trunks matter.
+#   * an orphan branch shares no commit with anything.
+#
+# A merge base does not care what a branch is called, or whether it has a name.
+# So never ask. Resolve the trunk from `origin/HEAD` — the remote's own record
+# of its default branch, the only name-independent source — and ask merge-base
+# about HEAD directly. See tests/pins/stop-gate-branch-shapes.sh, which pins
+# each shape and can be proven red.
+gate_default_ref() {
+    local d
+    # origin/HEAD is what `git clone` writes and what `git remote set-head`
+    # repairs; it names the trunk whatever the trunk is called.
+    d="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    if [ -n "$d" ] && git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
+        printf '%s' "$d"; return 0
     fi
-    git merge-base "$remote_default" HEAD 2>/dev/null || echo ""
+    # Documented fallback, for a clone with no origin/HEAD (a shallow CI
+    # fetch, or a repo created by `git init` with no remote at all). This is a
+    # last resort by design: it guesses a name, which is the thing that broke.
+    for d in origin/main origin/master origin/develop origin/trunk main master develop trunk; do
+        if git rev-parse --verify --quiet "$d^{commit}" >/dev/null 2>&1; then
+            printf '%s' "$d"; return 0
+        fi
+    done
+    printf ''
+}
+
+gate_base() {
+    local default_ref base head_branch
+    default_ref="$(gate_default_ref)"
+    if [ -z "$default_ref" ]; then printf ''; return 0; fi
+    base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
+    # base == HEAD means HEAD adds nothing the trunk does not already have.
+    # Usually that is honest and the empty diff is the right answer (a feature
+    # branch with no commits yet). The one exception is a repo with NO remote
+    # trunk to compare against, sitting on its own trunk: there the merge base
+    # is always HEAD, so the gate would never read a commit made on it. HEAD~1
+    # is the base that does. Falling back to the working tree there was a
+    # choice, not a necessity.
+    if [ -n "$base" ] && [ "$(git rev-parse "$base" 2>/dev/null)" = "$(git rev-parse HEAD 2>/dev/null)" ]; then
+        head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+        case "$default_ref" in
+            origin/*) : ;;   # a published trunk is ahead-or-equal: nothing new here
+            *)
+                if [ "$head_branch" = "$default_ref" ]; then
+                    base="$(git rev-parse --verify --quiet 'HEAD~1' 2>/dev/null || true)"
+                fi
+                ;;
+        esac
+    fi
+    printf '%s' "$base"
+}
+
+# Whenever the gate is NOT looking at a merge base it is reading the working
+# tree only, and any committed work is invisible to it. Say so — every time,
+# and say which situation actually obtains. The previous message asserted "on
+# the default branch there is no merge base" in three shapes where you are not
+# on the default branch, and did not print at all when the base was empty and
+# the tree was dirty: the suite ran, the run looked covered, and the committed
+# change was not. That silent fallback is exactly how the original bug returns.
+gate_scope_note() {  # <base>
+    local base="${1:-}" head default_ref why
+    if [ -n "$base" ]; then return 0; fi
+    default_ref="$(gate_default_ref)"
+    head="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+    if ! git rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        why="this repository has no commits yet"
+    elif [ -z "$default_ref" ]; then
+        why="no default branch could be resolved — no origin/HEAD, and no trunk-shaped ref in this clone"
+    elif [ -z "$(git merge-base "$default_ref" HEAD 2>/dev/null || true)" ]; then
+        # No common ancestor at all — the structural fact, so it is reported
+        # before the weaker "root commit" one, which is also true here.
+        if [ "$head" = "HEAD" ]; then
+            why="detached HEAD shares no history with the default branch ($default_ref) — an orphan or unrelated line"
+        else
+            why="branch '$head' shares no history with the default branch ($default_ref) — an orphan or unrelated line"
+        fi
+    elif ! git rev-parse --verify --quiet 'HEAD~1' >/dev/null 2>&1; then
+        why="HEAD is a root commit, so there is nothing behind it to compare against"
+    else
+        why="the merge base against the default branch ($default_ref) could not be resolved"
+    fi
+    echo ">> NOTE: no merge base — $why."
+    echo ">>       ONLY THE WORKING TREE was examined. Anything already committed"
+    echo ">>       on this branch is NOT covered by this run."
 }
 
 collect_changed_code_files() {
-    local base; base="$(gate_base)"
+    local base; base="${GATE_BASE-$(gate_base)}"
     {
         if [ -n "$base" ]; then
             git diff --name-only --diff-filter=ACMRTUXB "$base"...HEAD -- "${CODE_GLOBS[@]}" 2>/dev/null
@@ -182,17 +262,18 @@ step() {  # <label> <command>
 
 echo ">> stop_gate: running checks before 'done' is allowed"
 
+# Resolved once, so every path below reads the same base, and announced before
+# any branch can swallow it — including LOOP_FORCE_GATE=1, which used to skip
+# the enclosing block and the note with it.
+GATE_BASE="$(gate_base)"
+gate_scope_note "$GATE_BASE"
+
 # --- Short-circuit on no-op turns -------------------------------------------
 # The gate verifies CODE changes. A turn that only touched state/, docs, specs
 # or the harness has nothing to test, lint, typecheck or build; running the
 # full gate there produces false failures and blocks a clean stop.
 if [[ "${LOOP_FORCE_GATE:-0}" != "1" ]]; then
     if [[ -z "$(collect_changed_code_files)" ]]; then
-        if [[ -z "$(gate_base)" ]]; then
-            echo ">> NOTE: on the default branch there is no merge base, so only the"
-            echo ">>       working tree was examined. A committed change on this branch"
-            echo ">>       is NOT covered by this run."
-        fi
         echo ">> SKIP: no changed code files — nothing to verify (conversational/infra turn)."
         echo ">> PASS: gate short-circuited. 'done' condition satisfied."
         exit 0
