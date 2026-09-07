@@ -32,7 +32,16 @@ NOTES="$(awk -v v="$VERSION" '
 ' CHANGELOG.md)"
 [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ] || { echo "FAIL: no '## $VERSION' section in CHANGELOG.md — write the notes first" >&2; exit 3; }
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "FAIL: tracked files are modified; commit or set them aside first" >&2; exit 4; }
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && { echo "FAIL: tag $TAG already exists; a release is never re-pointed" >&2; exit 5; }
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+  # A tag with no release is a half-made release, not a finished one. Refusing
+  # to continue leaves it stuck forever; re-POINTING it is what must never
+  # happen. So: finish it if the release is missing, refuse if it exists.
+  if gh release view "$TAG" --repo "$REMOTE_REPO" >/dev/null 2>&1; then
+    echo "FAIL: $TAG is already released; a release is never re-pointed" >&2; exit 5
+  fi
+  echo "note: $TAG exists with no release — completing it rather than re-pointing" >&2
+  RESUME=1
+fi
 
 # The manifests are what an installed copy compares against. Claude Code caches
 # a plugin per VERSION STRING (~/.claude/plugins/cache/<market>/<plugin>/<ver>),
@@ -50,6 +59,7 @@ echo "RELEASE: $TAG at $SHA ($(git log -1 --format=%s "$SHA" | cut -c1-60))"
 echo "NOTES ($(printf '%s\n' "$NOTES" | grep -c .) lines):"; printf '%s\n' "$NOTES" | head -6 | sed 's/^/  /'
 [ "$DRY" = 1 ] && { echo "dry run — no tag, no release"; exit 0; }
 
+if [ "${RESUME:-0}" = 0 ]; then
 git tag -a "$TAG" "$SHA" -m "LoopKit $VERSION"
 # A bare push needs a working agent or a credential helper. When neither is
 # there, fall back to gh's token — interpolated inline, never written down, and
@@ -57,12 +67,17 @@ git tag -a "$TAG" "$SHA" -m "LoopKit $VERSION"
 if ! git push -q origin "refs/tags/$TAG" 2>/dev/null; then
   if command -v gh >/dev/null 2>&1 && gh auth token >/dev/null 2>&1; then
     echo "note: plain push failed (no agent or helper); using the gh token" >&2
-    git push -q "https://x-access-token:$(gh auth token)@github.com/${REMOTE_REPO}.git" \
-      "refs/tags/$TAG" 2>&1 | grep -v x-access-token
-    [ "${PIPESTATUS[0]}" = 0 ] || { echo "FAIL: could not push $TAG by either route" >&2; exit 7; }
+    # Capture, then filter. `| grep -v` returns 1 when it selects nothing, and a
+    # quiet push prints nothing — under `set -e` with pipefail that killed this
+    # script between the tag push and the release, which is the half-made
+    # release this fallback exists to prevent.
+    push_out="$(git push -q "https://x-access-token:$(gh auth token)@github.com/${REMOTE_REPO}.git" "refs/tags/$TAG" 2>&1)" || push_rc=$?
+    printf '%s\n' "${push_out}" | grep -v x-access-token || true
+    [ "${push_rc:-0}" = 0 ] || { echo "FAIL: could not push $TAG by either route" >&2; exit 7; }
   else
     echo "FAIL: could not push $TAG and gh is not authenticated" >&2; exit 7
   fi
+fi
 fi
 printf '%s\n' "$NOTES" | gh release create "$TAG" --repo "$REMOTE_REPO" --target "$SHA" --title "LoopKit $VERSION" $PRE --notes-file -
 echo "RELEASED: https://github.com/$REMOTE_REPO/releases/tag/$TAG"

@@ -82,6 +82,22 @@ APPENDED .prettierignore: state/triage.md
 APPENDED CLAUDE.md: LoopKit standing rules
 ```
 
+Those two `APPENDED` lines are written **once**. Init leaves a marker comment
+beside each one:
+
+```
+# loopkit:decided .loopkit/config.env — init wrote this line once and will not re-add it. To opt out, delete the line and keep this comment.
+.loopkit/config.env
+```
+
+**If you do not want one of them, delete the line and keep the marker.** Init
+reads the marker, not the line, so the next run prints `KEPT ... removed by the
+project on purpose` and leaves your file alone. (A project whose gate config
+holds no webhook and no secret is right to track `.loopkit/config.env`; this
+plugin's own repository does exactly that.) Delete the marker as well and init
+treats the line as one you have never seen, and adds it back — which is what it
+used to do on every single run, silently reversing the decision.
+
 Without a session, the same thing from a shell:
 
 ```bash
@@ -123,8 +139,11 @@ Rules that save an hour:
 - **Secrets manager?** `LOOP_ENV_WRAPPER=doppler run --project p --config c --`
   (or `op run --`, `dotenvx run --`). Every gate command runs behind it. The
   values never touch a file.
-- `.loopkit/config.env` is gitignored by `init` because it may hold a webhook
-  URL. Everything else under `.loopkit/` is meant to be committed.
+- `.loopkit/config.env` is gitignored by `init` because it **may** hold a
+  webhook URL. May, not does: if yours holds only commands, track it and delete
+  the ignore line — keep the `loopkit:decided` marker comment and init will not
+  put it back (step 3). Everything else under `.loopkit/` is meant to be
+  committed.
 
 ## 5. Seed the test baseline
 
@@ -271,7 +290,7 @@ if you ran step 8.
 ## Platforms
 
 - **macOS** (bash 3.2, the default shell) — the development platform; every script is written for it.
-- **Linux** — `tests/selftest.sh` passes on `node:22-bookworm` (Debian 12: Python 3.11, Node 22, bash 5.2). `.github/workflows/selftest.yml` runs it on `ubuntu-latest` for every push and pull request. The CI job runs the selftest only; `install.sh`'s Linux branch is not exercised by it.
+- **Linux** — `tests/selftest.sh` passes on `node:22-bookworm` (Debian 12: Python 3.11, Node 22, bash 5.2). `.github/workflows/selftest.yml` runs it on `ubuntu-latest` for every push and pull request, and that job now also runs `install.sh` (cached on its pinned engine versions) so the runtime model's invariants are **proved on Linux**, not just on the maintainer's laptop. The job fails if the model-invariant pin skips: a green tick that meant "the engines were missing, so nothing was checked" is the failure this repo is built to catch.
 
 ## Updating LoopKit in a project that uses it
 

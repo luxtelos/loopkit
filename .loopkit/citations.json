@@ -1,15 +1,7 @@
 {
-  "_comment": "check-citations.py config. 'scanned' may hold globs. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
-  "scanned": [
-    "CLAUDE.md",
-    "constitution.md",
-    "README.md",
-    "FILES.md",
-    "TOOLS.md",
-    "COMMANDS.md",
-    "docs/MUTATION_POLICY.md",
-    ".claude/agents/*.md",
-    ".claude/skills/*/SKILL.md"
-  ],
+  "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
+  "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
+  "_allow_empty": "true, and it is a live decision, not neglect: no document in this repo cites a file:line today. Flip it to false the day one does, so the gate goes red if the scan ever stops seeing them.",
+  "allow_empty": true,
   "pins": []
 }

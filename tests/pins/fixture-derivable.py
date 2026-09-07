@@ -21,13 +21,20 @@ reimplementing it — `okf_bundle.trust_tier` and
 `knowledge_actor.validate_message` — so a fixture that disagrees with the
 runtime fails here rather than in a reviewer's head.
 
-WHAT IT DOES NOT CHECK. `messages` content is not derivable from `input`: what
-an agent proposes depends on the Provider, whose script the fixture does not
-carry. For `messages` this pin asserts only what the spec DOES determine —
-that every expected Message is one `validate_message` accepts. That limit is
-stated in spec/fixtures/README.md rule 6 rather than left for a reader to
-discover, because fixture 05 shipped asserting a Message the runtime was
-required to dead-letter.
+WHAT IT DOES NOT CHECK. ONE key is not derivable from `input`: `messages`
+content. `targets` was the second until the spec defined it in §Targets on
+2026-09-07; this pin now derives it from that rule.
+
+`messages` content is not derivable: what an agent proposes depends on the
+Provider, whose script the fixture does not carry. For `messages` this pin
+asserts only what the spec DOES determine — that every expected Message is one
+`validate_message` accepts. That limit was stated from the start, because
+fixture 05 shipped asserting a Message the runtime was required to dead-letter.
+
+`targets` IS derivable, from spec §Targets. Until 2026-09-07 it was not: the
+noun was undefined and this pin carried a `targets_of()` that recomputed it
+from a hand-written reading, reporting a guess as a derivation. The rule now
+lives in the spec and `derive_targets` implements that rule and nothing else.
 
 usage: python3 tests/pins/fixture-derivable.py
 exit 0 = every fixture derives; exit 1 = at least one disagreement.
@@ -85,14 +92,54 @@ def decide(counts: dict) -> tuple[str, str]:
     return "discover", "IDLE"
 
 
-def targets_of(rows: list[dict], stage: str) -> list[dict]:
+PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+MAX_FANOUT = 8
+
+
+def derive_targets(rows: list[dict], stage: str, lane_terms: list[str] | None) -> list[dict]:
+    """`targets` from the spec's §Targets rule, not from a reading of the code.
+
+    The rule the spec settles: the SERVED stage only (loop-next.sh filters the
+    picker's fuller stream, and that filtered form is what every fixture
+    asserts); Queue order unscoped, priority order when scoped; capped at
+    MAX_FANOUT; identity is `source`.
+
+    This function existed once before as `targets_of()`, encoding one reading of
+    a noun the spec had never defined — which made the pin read as covering
+    derivability while it covered a guess. It is back only because §Targets now
+    states the rule it implements.
+    """
     if stage == "discover":
         return []
-    return [
-        {"stage": stage, "finding": r.get("finding", ""), "source": r.get("source", "")}
-        for r in rows
-        if str(r.get("status", "")).strip() == stage
-    ]
+    seen: set[str] = set()
+    picked: list[dict] = []
+    for r in rows:
+        src = str(r.get("source", "")).strip()
+        if src in seen:
+            continue
+        seen.add(src)
+        if (r.get("status") or "").strip() != stage:
+            continue
+        if lane_terms and not any(t in str(r.get("finding", "")) + src for t in lane_terms):
+            continue
+        picked.append(r)
+    if lane_terms:
+        picked = sorted(picked, key=lambda r: PRIORITY_RANK.get(
+            (r.get("priority") or "").strip().lower(), 9))
+    return [{"stage": stage,
+             "finding": str(r.get("finding", "")).strip(),
+             "source": str(r.get("source", "")).strip()} for r in picked[:MAX_FANOUT]]
+
+
+def targets_problems(rows: list[dict], stage: str, targets: list[dict],
+                     lane_terms: list[str] | None = None) -> list[str]:
+    """Compare the fixture's `targets` against the derivation above."""
+    want = derive_targets(rows, stage, lane_terms)
+    got = [{"stage": t.get("stage"), "finding": t.get("finding"), "source": t.get("source")}
+           for t in targets]
+    if want == got:
+        return []
+    return [f"targets: spec §Targets derives {want!r} but the fixture asserts {got!r}"]
 
 
 def steps_of(journal: list[dict]) -> tuple[dict, set]:
@@ -208,7 +255,14 @@ def main() -> int:
         if "counts" in exp:
             check(name, "counts", counts, exp["counts"])
         if "targets" in exp:
-            check(name, "targets", targets_of(rows, stage), exp["targets"])
+            probs = targets_problems(rows, stage, exp["targets"])
+            if probs:
+                fails.append(name)
+                for p in probs:
+                    print(f"  FAIL {name}: targets — {p}")
+            else:
+                print(f"  ok   {name}: targets satisfies criteria 5/6/9 "
+                      f"(membership, ordering and cap are NOT derivable — README rule 6)")
         if "events" in exp:
             check(name, "events", events_delta(run, inp["journal"], stage), exp["events"])
         if "provider_calls" in exp:
