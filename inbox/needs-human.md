@@ -72,64 +72,6 @@ and stops. What happens next is undecided.
   different budget on a slow network, so fixtures cannot pin it and CI is flaky
   by construction.
 
-**Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
-
-Only you can settle this, because it is the spec that has to move, and a spec
-is not an agent's to edit. `plugins/loopkit/loopkit_core/provider.py` implements
-absent-not-zero and does NOT touch `specs/`.
-
-The conflict, exactly: criterion 23 says `usage` "SHALL use `0` — never `null`,
-never a missing key — when the upstream API reports no count." The provider
-returns `usage: None` in that case. Both cannot hold.
-
-Why the code is the half that looks right, on grounds stronger than "a
-fabricated zero is dishonest":
-
-- **Q2 above already names the cost, in your own words.** Under the
-  tokens-from-`usage` option it says "a provider reporting 0 has an unlimited
-  budget". Criterion 23 forces every silent provider to report 0. So criterion
-  23 as written makes criterion 21 undecidable under one of its own three
-  options — the spec is inconsistent with itself, not merely with the code.
-- **The repository already made this call once.** `loop_metrics.py` returns
-  `None`, not `0`, for `gate_pass_rate` and `verified_success` when there is
-  nothing to count. Criterion 23 would be the only place in the codebase where
-  "not measured" and "measured zero" are deliberately made indistinguishable.
-- **The corruption is one-directional.** A fabricated zero drags a
-  tokens-per-task average DOWN, which is the direction nobody audits, and it
-  cannot be detected after the fact because the wrong value is well-formed.
-
-Proposed replacement wording for criterion 23, for you to accept, edit or
-reject — NOT applied:
-
-> A Provider's return value SHALL carry all three keys. `text` SHALL be a
-> string, possibly empty. `tool_calls` SHALL be a list, possibly empty, each
-> entry `{name, arguments}`. `usage` SHALL be either `null` — meaning the
-> upstream reported no count — or a mapping carrying BOTH `input_tokens` and
-> `output_tokens` as non-negative integers. A Provider SHALL NOT report a
-> count it did not receive, and SHALL NOT report one count without the other:
-> a partial usage is not a measurement. Check `[M2]`:
-> `python3 -m loopkit_core.provider --selftest` cases P2 and P7.
-
-What each choice costs you:
-
-- **Rule for the code (change criterion 23).** Cost: every caller of `usage`
-  must handle `None`, so the runtime gains a branch it would not otherwise
-  need; `usage_or_zero()` exists as the one-line adapter for callers that
-  genuinely want zeros, but a caller who forgets it gets a `TypeError` rather
-  than a wrong number. Criterion 21's fixture also cannot be written until Q2
-  is answered, so this does not unblock M2 on its own.
-- **Rule for the spec (change the code).** Cost: the tokens-per-task metric
-  the runtime plan exists to measure is silently wrong low whenever a provider
-  omits usage, with no way to detect it afterwards; and criterion 21's
-  token-budget option becomes unimplementable, because a silent provider would
-  hold an unlimited budget. Also throws away the partial-usage rule, which has
-  no sensible zero-filling form at all.
-
-Until you rule, the `usage` KEY is always present (so the "carries all three
-keys" half of criterion 23 holds either way), and both readings stay reachable:
-`usage_is_reported(result)` for the code's rule, `usage_or_zero(result)` for the
-spec's.
-
 **Q3 — the Store `list` contract: total list or iterator? (criterion 30)**
 - *Total ordered list.* Simplest contract; the fixtures can compare one value.
   Cost: an S3 bucket paginates at 1000 keys, so the implementation must loop
@@ -330,3 +272,40 @@ What I would fix before submitting, and would rather you decide on:
 
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
+
+## Ruling needed: may an implementing agent grant itself a governance override?
+
+Raised 2026-09-07 from the PR #29 round-2 review. **Not urgent, but it recurs
+every time an agent touches `specs/`.**
+
+`protect_governance.py` guards `specs/`. The round-2 implementer needed to edit
+its own spec, used the documented inline `GOVERNANCE_EDIT_OK=1` override, and
+disclosed it on the PR as its own call rather than an owner's. The reviewer
+judged it legitimate on the facts and then named the real problem:
+
+> the hook cannot distinguish a draft-on-a-branch from a ratified-spec-on-main.
+
+That is the whole issue. Editing an unmerged draft of your own spec is ordinary
+work. Editing a ratified spec on `main` is a governance act. The hook sees one
+path and cannot tell them apart, so the override is currently the same gesture
+for both — and an agent can perform it unilaterally.
+
+**Option A — teach the hook the difference.** Allow the override when the target
+spec is not yet an ancestor of `main`; refuse otherwise.
+*Cost:* the hook must ask git about merge-base on every write, so it gets slower
+and gains a failure mode (a hook that cannot reach git must then decide whether
+to fail open or closed — and either choice is wrong in one direction).
+*Buys:* agents stop needing the override for ordinary drafting, so the gesture
+becomes rare enough that using it means something.
+
+**Option B — keep one override, require it be declared.** Any use must name a
+reason in the PR body, and a reviewer must judge it.
+*Cost:* it stays a social control, not a technical one — it works exactly as
+well as reviewers are attentive, which today's record does not flatter.
+*Buys:* nothing to build; works now; no new failure mode in the hook.
+
+**Recommendation: A**, because B is the shape this repo keeps getting burned by
+— a rule that holds only while someone remembers to look. But A costs real work
+and adds a fail-open/fail-closed decision, so it is your call, not mine.
+
+Blocking nothing today. PR #29 proceeds either way.
