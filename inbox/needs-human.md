@@ -72,6 +72,68 @@ and stops. What happens next is undecided.
   different budget on a slow network, so fixtures cannot pin it and CI is flaky
   by construction.
 
+**RESOLVED 2026-09-08 — Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
+
+Ruled in ADR 0005: the budget is spent against a pre-flight estimate, so
+`usage` is no longer load-bearing; it must be explicit rather than a fabricated
+`0`, and nothing dangerous rides on it. `provider.py`'s absent-not-zero stands.
+
+Only you can settle this, because it is the spec that has to move, and a spec
+is not an agent's to edit. `plugins/loopkit/loopkit_core/provider.py` implements
+absent-not-zero and does NOT touch `specs/`.
+
+The conflict, exactly: criterion 23 says `usage` "SHALL use `0` — never `null`,
+never a missing key — when the upstream API reports no count." The provider
+returns `usage: None` in that case. Both cannot hold.
+
+Why the code is the half that looks right, on grounds stronger than "a
+fabricated zero is dishonest":
+
+- **Q2 above already names the cost, in your own words.** Under the
+  tokens-from-`usage` option it says "a provider reporting 0 has an unlimited
+  budget". Criterion 23 forces every silent provider to report 0. So criterion
+  23 as written makes criterion 21 undecidable under one of its own three
+  options — the spec is inconsistent with itself, not merely with the code.
+- **The repository already made this call once.** `loop_metrics.py` returns
+  `None`, not `0`, for `gate_pass_rate` and `verified_success` when there is
+  nothing to count. Criterion 23 would be the only place in the codebase where
+  "not measured" and "measured zero" are deliberately made indistinguishable.
+- **The corruption is one-directional.** A fabricated zero drags a
+  tokens-per-task average DOWN, which is the direction nobody audits, and it
+  cannot be detected after the fact because the wrong value is well-formed.
+
+Proposed replacement wording for criterion 23, for you to accept, edit or
+reject — NOT applied:
+
+> A Provider's return value SHALL carry all three keys. `text` SHALL be a
+> string, possibly empty. `tool_calls` SHALL be a list, possibly empty, each
+> entry `{name, arguments}`. `usage` SHALL be either `null` — meaning the
+> upstream reported no count — or a mapping carrying BOTH `input_tokens` and
+> `output_tokens` as non-negative integers. A Provider SHALL NOT report a
+> count it did not receive, and SHALL NOT report one count without the other:
+> a partial usage is not a measurement. Check `[M2]`:
+> `python3 -m loopkit_core.provider --selftest` cases P2 and P7.
+
+What each choice costs you:
+
+- **Rule for the code (change criterion 23).** Cost: every caller of `usage`
+  must handle `None`, so the runtime gains a branch it would not otherwise
+  need; `usage_or_zero()` exists as the one-line adapter for callers that
+  genuinely want zeros, but a caller who forgets it gets a `TypeError` rather
+  than a wrong number. Criterion 21's fixture also cannot be written until Q2
+  is answered, so this does not unblock M2 on its own.
+- **Rule for the spec (change the code).** Cost: the tokens-per-task metric
+  the runtime plan exists to measure is silently wrong low whenever a provider
+  omits usage, with no way to detect it afterwards; and criterion 21's
+  token-budget option becomes unimplementable, because a silent provider would
+  hold an unlimited budget. Also throws away the partial-usage rule, which has
+  no sensible zero-filling form at all.
+
+Until you rule, the `usage` KEY is always present (so the "carries all three
+keys" half of criterion 23 holds either way), and both readings stay reachable:
+`usage_is_reported(result)` for the code's rule, `usage_or_zero(result)` for the
+spec's.
+
 **Q3 — the Store `list` contract: total list or iterator? (criterion 30)**
 - *Total ordered list.* Simplest contract; the fixtures can compare one value.
   Cost: an S3 bucket paginates at 1000 keys, so the implementation must loop
@@ -273,7 +335,7 @@ What I would fix before submitting, and would rather you decide on:
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
 
-## Ruling needed: may an implementing agent grant itself a governance override?
+## Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08)
 
 Raised 2026-09-07 from the PR #29 round-2 review. **Not urgent, but it recurs
 every time an agent touches `specs/`.**
