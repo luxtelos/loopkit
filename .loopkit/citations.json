@@ -1,6 +1,6 @@
 {
-  "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of]. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
-  "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely \u2014 the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
+  "_comment": "check-citations.py config. A pin is [citing doc, cited path, regex the cited line must match, what it is evidence of, and — when the doc cites that path more than once — an ANCHOR regex matching prose within 2 lines of the ONE citation the claim is about. Without the anchor a pin over a multiply-cited path checks the SET of cited lines, not the sentence; the gate now refuses such a pin instead of passing it. Add a pin whenever a doc cites a line as proof that a rule is enforced.",
+  "_scanned": "No 'scanned' key on purpose: this file used to copy the defaults verbatim, which froze the scan at seven root-level files and missed docs/ and specs/ entirely — the run reported 'Checked 0 citation(s) ... PASS'. Omitting the key follows plugins/loopkit/scripts/check-citations.py's DEFAULT_SCANNED, which now covers docs/**, specs/** and the plugin's own agents and skills.",
   "_allow_empty": "false since 2026-09-07. It was true while no document in this repo cited a file:line; both docs/GETTING-STARTED.md and specs/blocked-waits-on-what.md now do, so an EMPTY scan from here means the scan lost the docs, and that is red.",
   "allow_empty": false,
   "pins": [
@@ -20,43 +20,50 @@
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^COLUMNS = \\[\"finding\", \"source\", \"priority\", \"spec\", \"status\"\\]$",
-      "the queue is exactly five columns, which is why the spec forbids a sixth and puts the condition in the `spec` cell"
+      "the queue is exactly five columns, which is why the spec forbids a sixth and puts the condition in the `spec` cell",
+      "Of the five columns at"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^def normalize_cell",
-      "the read-side rewrite the condition grammar must survive (collapses whitespace runs)"
+      "the read-side rewrite the condition grammar must survive (collapses whitespace runs)",
+      "`normalize_cell` is"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "replace\\(\"\\|\", \"\\\\\\\\\\|\"\\)",
-      "the write-side rewrite the condition grammar must survive (escapes literal pipes)"
+      "the write-side rewrite the condition grammar must survive (escapes literal pipes)",
+      "`format_row` writes `\\.replace"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^ACCEPTED_HEADERS(?::[^=]+)? = \\(",
-      "the closed four/five-column header list; a six-column header matches neither, which is why the spec forbids a sixth column"
+      "the closed four/five-column header list; a six-column header matches neither, which is why the spec forbids a sixth column",
+      "closed list of accepted shapes"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "if len\\(cells\\) != len\\(header_cells\\):",
-      "the cell-count mismatch that records a dropped row; paired with the short-read invariant below it is a refusal, no longer a silent skip"
+      "the cell-count mismatch that records a dropped row; paired with the short-read invariant below it is a refusal, no longer a silent skip",
+      "the cell-count check at"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/loop_next_pick.py",
       "^WANT = \\[\"pr-open\", \"fixing\", \"spec-ready\", \"spec-draft\", \"new\"\\]$",
-      "`blocked` is absent from WANT, so a blocked row is counted and never served"
+      "`blocked` is absent from WANT, so a blocked row is counted and never served",
+      "absent from `WANT` at"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/loop_next_pick.py",
       "hay = \\(\\(r\\.get\\(\"finding\"\\).*r\\.get\\(\"source\"\\)",
-      "scope matching hays finding+source, which is why the condition may not live in either"
+      "scope matching hays finding+source, which is why the condition may not live in either",
+      "haystack for scope matching"
     ],
     [
       "specs/blocked-waits-on-what.md",
@@ -68,85 +75,99 @@
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^\\s*if spec is not None:$",
-      "update_row leaves the spec cell untouched when the argument is None, which is why criterion 10 cannot rely on the caller remembering to clear a spent condition"
+      "update_row leaves the spec cell untouched when the argument is None, which is why criterion 10 cannot rely on the caller remembering to clear a spent condition",
+      "untouched when the argument is"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "no recognisable header, but the file holds",
-      "the refusal that replaced the silent zero \u2014 the spec's old 'rows parsed: 0, exit 0' argument for the no-sixth-column SHALL is dead, and the SHALL now rests on cross-version compatibility instead"
+      "the refusal that replaced the silent zero — the spec's old 'rows parsed: 0, exit 0' argument for the no-sixth-column SHALL is dead, and the SHALL now rests on cross-version compatibility instead",
+      "The refusal is at"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^    if len\\(rows\\) < len\\(data_indices\\):$",
-      "the short-read invariant: a row that fails the cell-count check is refused, not silently deleted, which is why the grammar table reads PARSE REFUSED"
+      "the short-read invariant: a row that fails the cell-count check is refused, not silently deleted, which is why the grammar table reads PARSE REFUSED",
+      "exits 2 naming the offending line"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^    header = \"\\| finding \\| source \\| priority \\| spec \\| status \\|\"$",
-      "write_table hardcodes the five-column header, so a sixth column cannot round-trip even if a parser admitted it"
+      "write_table hardcodes the five-column header, so a sixth column cannot round-trip even if a parser admitted it",
+      "`write_table` hardcodes the"
     ],
     [
       "specs/blocked-waits-on-what.md",
       "plugins/loopkit/loopkit_core/triage_state.py",
       "^def header_cells_if_header",
-      "the single reader of ACCEPTED_HEADERS, so a six-column header is rejected in exactly one place"
+      "the single reader of ACCEPTED_HEADERS, so a six-column header is rejected in exactly one place",
+      "header matches neither"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/okf.py",
       "^\\s+if res\\.startswith\\(\\(\"inbox/\", \"state/triage\"",
-      "the write path refuses the queue, the tick log, the progress file and inbox/ as sources \u2014 this IS the boundary rule's case 2, quoted rather than restated"
+      "the write path refuses the queue, the tick log, the progress file and inbox/ as sources — this IS the boundary rule's case 2, quoted rather than restated",
+      "^directories, at$"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "^\\s+_assert_human_claim_is_credible\\(paths, message\\)$",
-      "the human-claim guard is wired to the verify branch alone, which is why criterion 4 says upsert bypasses it"
+      "the human-claim guard is wired to the verify branch alone, which is why criterion 4 says upsert bypasses it",
+      "wired to the `verify` op alone"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "^\\s+frontmatter\\.update\\(payload\\.get\\(\"frontmatter\"\\) or \\{\\}\\)$",
-      "apply_upsert copies payload frontmatter wholesale, so an agent can write a `verified: human:` entry through upsert \u2014 the hole criterion 4 must close"
+      "apply_upsert copies payload frontmatter wholesale, so an agent can write a `verified: human:` entry through upsert — the hole criterion 4 must close",
+      "in an ordinary$"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "^\\s+frontmatter\\[\"generated\"\\] = \\{\"by\": message\\.by",
-      "generated is overwritten from the message's own actor, so criterion 3's SHALL is the code's behaviour and not a wish"
+      "generated is overwritten from the message's own actor, so criterion 3's SHALL is the code's behaviour and not a wish",
+      "own actor and enqueued time at"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "^\\s+if introducer and \\(\"\\[bot\\]\" in introducer",
-      "the one door that IS guarded: a known bot author claiming human: is refused. Unknown authorship is not, which is criterion 4's second row"
+      "the one door that IS guarded: a known bot author claiming human: is refused. Unknown authorship is not, which is criterion 4's second row",
+      "Only the first door is guarded, by"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "# Deliberately does NOT touch `status`",
-      "apply_stale leaves status alone, which the read path's failure branch depends on and must not change"
+      "apply_stale leaves status alone, which the read path's failure branch depends on and must not change",
+      "Clobbering a human's `stable`"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
       "^def scan_drift",
-      "the per-concept digest comparison the read path SHALL reuse rather than reimplement"
+      "the per-concept digest comparison the read path SHALL reuse rather than reimplement",
+      "SHALL reuse that comparison"
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/okf_bundle.py",
       "^VALID_STATUS = \\(\"draft\", \"stable\", \"deprecated\"\\)$",
-      "the three status values, admitted from any actor \u2014 which is why criterion 5 is a detector over a convention, not a refusal"
+      "the three status values, admitted from any actor — which is why criterion 5 is a detector over a convention, not a refusal",
+      "`VALID_STATUS` is `\\(\"draft\""
     ],
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/vendor/okf_bundle.py",
       "^def trust_tier",
-      "trust tier is derived from `verified` alone, so a forged verified entry yields human-reviewed \u2014 the decorative-tiers failure ADR 0007 rejected Option A for"
+      "trust tier is derived from `verified` alone, so a forged verified entry yields human-reviewed — the decorative-tiers failure ADR 0007 rejected Option A for",
+      "`trust_tier` returns `human-reviewed`"
     ],
     [
       "specs/findings-are-concepts.md",

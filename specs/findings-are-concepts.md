@@ -476,7 +476,7 @@ to be.
     its frontmatter.
 
     Check `[today]`: a detector that imports `CITATION` from
-    `plugins/loopkit/scripts/check-citations.py:120 as of 3ea14d9` — imports it,
+    `plugins/loopkit/scripts/check-citations.py:174 as of 3ea14d9` — imports it,
     never re-spells it, because a second copy of that pattern drifts from the
     first — and applies it to every `Finding` in the bundle. Measured on this
     branch against five strings, two refused and three controls that must pass:
