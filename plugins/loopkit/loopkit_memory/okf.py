@@ -2,7 +2,7 @@
 
 The bundle is a directory of markdown concepts, each with typed frontmatter
 (Doctrine, Invariant, Decision, Trap, Topology, Contract, Gate, Playbook,
-Post-mortem), maintained by a mailbox actor: every change is a message that a
+Post-mortem, Finding), maintained by a mailbox actor: every change is a message that a
 deterministic program applies; the bundle is never hand-edited (protect_
 governance guards it when enabled). Sources are cited as repo files and their
 blob digests are captured at apply time, so drift is detectable and a citation
@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
 
 RECALL_BASH = re.compile(r"memory\.py\s+knowledge\s+(?:get|search)\b", re.I)
 ACTOR_TIMEOUT = 120.0
-TYPES = ("Doctrine", "Invariant", "Decision", "Trap", "Topology", "Contract", "Gate", "Playbook", "Post-mortem")
+TYPES = ("Doctrine", "Invariant", "Decision", "Trap", "Topology", "Contract", "Gate", "Playbook", "Post-mortem", "Finding")
 
 
 class OkfKnowledge(KnowledgeAdapter):

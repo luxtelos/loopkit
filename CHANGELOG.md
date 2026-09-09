@@ -55,6 +55,38 @@ The guard rail that was only a sentence.
 
 ### Fixed
 
+- **A citation pin bound a SET of lines, not the line it named.** Pass 2 of
+  `check-citations.py` matched a pin with `any(...)` across every citation of
+  that path in that document. Where a document cites a file once that is exact;
+  where it cites the file many times, the pin asserted only that SOMEWHERE in
+  the document a citation landed on a matching line — never that the sentence
+  making the claim did. Measured on this repo: rotating all 16
+  `triage_state.py` citations in `specs/blocked-waits-on-what.md` onto each
+  other's lines — every citation wrong, the cited set unchanged — still printed
+  `PASS — every citation points at what it claims`. Twelve of the fifteen pins
+  sat over a multiply-cited path, so twelve pins were non-binding. Nothing in
+  the repository was wrong and the gate was green; the tripwire was simply
+  absent, which is the defect class this project hunts hardest — a gate that
+  cannot go red.
+  The missing information was never a matching subtlety. The config knows which
+  line a claim is about (the regex) and the document knows which lines it cites,
+  but nothing recorded WHICH citation realises WHICH claim, and no set
+  arithmetic recovers it: a rotation closed over the cited set leaves every
+  set-derived fact identical. So a pin now takes an optional fifth element, an
+  ANCHOR regex matched against the citing document's own prose within
+  `ANCHOR_WINDOW` (2) lines of a citation. It selects the one citation the pin
+  is about, and that citation's line is checked exactly.
+  The two cases are distinguished rather than collapsed: a path cited once needs
+  no anchor and four-element pins keep working; an anchored pin binds one line;
+  an anchor of `"*"` asks for the old cited-somewhere meaning on purpose; and a
+  pin over a multiply-cited path with no anchor is now REFUSED, with the cited
+  line numbers in the message, rather than passed while reading as binding.
+  The twelve pins in `.loopkit/citations.json` carry anchors, and the same
+  rotation now fails ten pins, each naming the wrong line and the right one.
+  Five cases in `tests/selftest.sh` pin the tripwire; three of them pass against
+  the pre-fix script, which is the bug, and the other two are the control that
+  proves the fixture can distinguish.
+
 - **The refusal message printed the command back.** `block_dangerous.py` ended
   every block with `dangerous command pattern detected: <the whole command>`. The
   commerce profile's `no-live-keys` pattern fires on `sk_live_` literals, so

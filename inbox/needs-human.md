@@ -330,3 +330,70 @@ What I would fix before submitting, and would rather you decide on:
 
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
+
+## Criterion 4 of specs/findings-are-concepts.md: patch the vendored actor or wait upstream (2026-09-09)
+
+Two decisions, one entry, because they share a transcript.
+
+**What was measured.** ADR 0007 (accepted 2026-09-07) rests Option C on
+"`apply_verify` refuses a self-authenticated human claim". The spec for it
+measured the vendored actor instead of reading the ADR, and the reviewer of
+PR #47 reproduced it independently in a scratch git repo — one message per
+door, then `drain --json`:
+
+```
+door3  UPSERT by process:probe/1, payload frontmatter carries verified human:akul
+       -> APPLIED  verified=[{by: human:akul}]  trust=human-reviewed
+door2  VERIFY by process:probe/1 claiming human:akul, message NOT committed
+       -> APPLIED  verified=[{by: human:akul}]  trust=human-reviewed
+door1  VERIFY by process:probe/1 claiming human:akul, message committed by github-actions[bot]
+       -> DEAD-LETTERED  (verified=None, trust=unverified)
+ctl    VERIFY by human:akul -> APPLIED;  VERIFY by process:x/1 as process:x/1 -> APPLIED
+```
+
+`_assert_human_claim_is_credible` runs only on the `verify` branch, and
+`apply_upsert` copies payload frontmatter wholesale. Door 2 is the door the
+loop walks every tick (enqueue and drain, nothing committed in between); door 3
+needs no guard at all. So the ADR's sentence is true of one op and false of the
+path in use, and the trust tiers it was chosen to make real are forgeable
+today. Criterion 4 of the spec is deliberately RED for this; criterion 5's
+detector is satisfiable by a forged entry until it lands.
+
+**Decision 1 — where the fix goes.** The fix is small and does not depend on
+git: refuse a `human:` claim whose message actor is not `human:`, on every op,
+and strip `verified` from upsert payload frontmatter. It lands in
+`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py`, whose header reads
+"VENDORED verbatim … Do not edit here: fix upstream, re-vendor, keep this
+header." The implementer cannot satisfy the criterion without either breaking
+that header or waiting on a repository this loop does not drive. That is yours.
+
+- **Option A — patch the vendored copy locally and carry the patch.** About
+  twenty lines in two functions, plus a header note naming the divergence and
+  a pin that goes red if a re-vendor drops it. Cost: the header stops being
+  true ("verbatim" becomes "verbatim plus one patch"), and every future
+  re-vendor must re-apply it or the pin fails the suite. Benefit: criterion 4
+  goes green in the implementation PR for this spec, on this repo's own
+  schedule.
+- **Option B — fix upstream (origin project, commit 48d75b05 lineage) and
+  re-vendor.** Cost: latency nobody here controls, and the spec's write-path
+  table claims a protection it does not have for as long as that takes;
+  criterion 5's `human:` half is decorative meanwhile. Benefit: the header stays
+  true and the two copies never diverge.
+- If you want a recommendation rather than a menu: A, with the pin, and an
+  upstream issue opened the same day so B happens anyway and the patch retires
+  on the next re-vendor. That is a recommendation, not a decision, and the spec
+  does not encode it.
+
+**Decision 2 — the ADR sentence.** `docs/adr/0007-routing-findings-through-the-knowledge-layer.md`
+says `apply_verify` refuses a self-authenticated human claim. Measured false on
+the upsert path and on the uncommitted verify path. An accepted ADR is
+governance and is not the loop's to correct. Proposed wording, for you to
+accept, edit or refuse: *"`apply_verify` refuses a self-authenticated human
+claim only when the message file has a known non-human git author; on the
+uncommitted path the loop uses, and on `upsert`, the claim is accepted. Closing
+that is the first work item of the spec that implements this ADR."*
+
+**Where this sits.** Criterion 4 stays in the spec as a dependency — the spec
+cannot claim actor-authenticated verification without it. This entry is the
+escalation half. The row for it on `state/triage.md` is keyed by
+`inbox_to_triage.py`, not by hand, and is `blocked` on the two decisions above.
