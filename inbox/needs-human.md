@@ -72,7 +72,11 @@ and stops. What happens next is undecided.
   different budget on a slow network, so fixtures cannot pin it and CI is flaky
   by construction.
 
-**Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
+**RESOLVED 2026-09-08 — Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
+
+Ruled in ADR 0005: the budget is spent against a pre-flight estimate, so
+`usage` is no longer load-bearing; it must be explicit rather than a fabricated
+`0`, and nothing dangerous rides on it. `provider.py`'s absent-not-zero stands.
 
 Only you can settle this, because it is the spec that has to move, and a spec
 is not an agent's to edit. `plugins/loopkit/loopkit_core/provider.py` implements
@@ -330,3 +334,40 @@ What I would fix before submitting, and would rather you decide on:
 
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
+
+## Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08)
+
+Raised 2026-09-07 from the PR #29 round-2 review. **Not urgent, but it recurs
+every time an agent touches `specs/`.**
+
+`protect_governance.py` guards `specs/`. The round-2 implementer needed to edit
+its own spec, used the documented inline `GOVERNANCE_EDIT_OK=1` override, and
+disclosed it on the PR as its own call rather than an owner's. The reviewer
+judged it legitimate on the facts and then named the real problem:
+
+> the hook cannot distinguish a draft-on-a-branch from a ratified-spec-on-main.
+
+That is the whole issue. Editing an unmerged draft of your own spec is ordinary
+work. Editing a ratified spec on `main` is a governance act. The hook sees one
+path and cannot tell them apart, so the override is currently the same gesture
+for both — and an agent can perform it unilaterally.
+
+**Option A — teach the hook the difference.** Allow the override when the target
+spec is not yet an ancestor of `main`; refuse otherwise.
+*Cost:* the hook must ask git about merge-base on every write, so it gets slower
+and gains a failure mode (a hook that cannot reach git must then decide whether
+to fail open or closed — and either choice is wrong in one direction).
+*Buys:* agents stop needing the override for ordinary drafting, so the gesture
+becomes rare enough that using it means something.
+
+**Option B — keep one override, require it be declared.** Any use must name a
+reason in the PR body, and a reviewer must judge it.
+*Cost:* it stays a social control, not a technical one — it works exactly as
+well as reviewers are attentive, which today's record does not flatter.
+*Buys:* nothing to build; works now; no new failure mode in the hook.
+
+**Recommendation: A**, because B is the shape this repo keeps getting burned by
+— a rule that holds only while someone remembers to look. But A costs real work
+and adds a fail-open/fail-closed decision, so it is your call, not mine.
+
+Blocking nothing today. PR #29 proceeds either way.
