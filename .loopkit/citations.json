@@ -174,6 +174,27 @@
       "plugins/loopkit/scripts/check-citations.py",
       "^CITATION = re\\.compile\\(",
       "the coordinate pattern criterion 11's detector imports rather than re-spells"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/okf.py",
+      "^TYPES = \\(.*\"Finding\"\\)$",
+      "Finding is the tenth house type, listed in TYPES beside the nine, so `--type Finding` is a documented filter and not a stranger to the list",
+      "house types at$"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+if not resource or \"://\" in resource:$",
+      "a source carrying a scheme is never digested — the switch that keeps an immutable artifact (boundary case 4) out of false drift and routes its validation to verified",
+      "records nothing for a resource that carries a scheme"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py",
+      "^\\s+if entry\\.get\\(\"kind\"\\) != \"repo-file\":$",
+      "scan_drift walks only repo-file digest records, so a scheme-carrying source never drifts",
+      "never digested and never drifts"
     ]
   ],
   "_as_of": "specs/blocked-waits-on-what.md writes its citations as `path:line as of <sha>`. check-citations.py matches path:line and ignores the suffix, so the convention is free to the gate and still checked by it."

@@ -9,9 +9,13 @@
 
 Every `file:line` below is written **`path:line as of <sha>`**, the convention
 `specs/blocked-waits-on-what.md` adopted after nine of its citations rotted at
-once. The sha is **`3ea14d9`**, the branch head every number was measured on. To
-re-verify one: `git diff 3ea14d9..HEAD -- <path>`; an empty diff means the
-number still holds. `check-citations.py` matches `path:line` and ignores the
+once. The sha is **`039b4c5`**, the merge of #45 into this branch, at which every
+number below was re-measured. Two moved since the first draft measured them at
+`3ea14d9`: `check-citations.py`'s `CITATION` pattern, which #45 pushed from line
+120 to 174, and line 36 of `okf.py`, whose *number* holds while this PR changes its
+*content* by one token (`Finding` joins `TYPES`) — the pin on it is what proves
+the number. To re-verify one: `git diff 039b4c5..HEAD -- <path>`; an empty diff
+means the number still holds. `check-citations.py` matches `path:line` and ignores the
 suffix, so the convention costs the gate nothing and is still checked by it.
 
 **No `path:line` in this document is an illustration.** The gate cannot tell an
@@ -31,7 +35,7 @@ that dated findings become OKF concepts written through the mailbox, which
 supplies the anchor: `_capture_digests` records a `git hash-object` digest and
 the head commit for every cited source, in the concept's own frontmatter, in the
 same atomic write as the claim
-(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:687 as of 3ea14d9`).
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:687 as of 039b4c5`).
 
 Two things this spec found by measuring rather than by reading the ADR, both bad
 news, both stated before anything else:
@@ -42,18 +46,18 @@ news, both stated before anything else:
    for the mailbox is that `apply_verify` refuses a self-authenticated human
    claim. `apply_verify` does refuse one — measured below — but the refusal is
    wired to the `verify` op alone
-   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1130 as of 3ea14d9`),
+   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1130 as of 039b4c5`),
    and `apply_upsert` copies whatever frontmatter the message carries straight
    onto the concept
-   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:572 as of 3ea14d9`).
+   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:572 as of 039b4c5`).
    So a `process:` actor writes `verified: [{by: human:akul}]` in an ordinary
    upsert and `trust_tier` returns `human-reviewed`
-   (`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:535 as of 3ea14d9`).
+   (`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:535 as of 039b4c5`).
    Measured, not argued — the transcript is in criterion 4.
 2. **Even the guarded door is only guarded for a committed message.**
    `_assert_human_claim_is_credible` cross-checks git authorship and allows
    unknown authorship, which its own docstring records as deliberate
-   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1139 as of 3ea14d9`).
+   (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1139 as of 039b4c5`).
    A tick that enqueues and drains in one breath commits nothing in between, so
    the check never fires. Measured in criterion 4 as well.
 
@@ -64,7 +68,7 @@ protection the write path does not have — which is the defect this repo hunts
 hardest, one layer up from code.
 
 The knowledge adapter is also **off** in this repo today —
-`.loopkit/memory.json:17 as of 3ea14d9` — and there is no `knowledge/` bundle.
+`.loopkit/memory.json:17 as of 039b4c5` — and there is no `knowledge/` bundle.
 `memory.py knowledge status` exits 0 and says so. Turning it on is therefore in
 scope; without it every criterion below is untestable.
 
@@ -84,7 +88,7 @@ its own citations; the queue's status vocabulary; anything in
 `specs/blocked-waits-on-what.md`. Option B moved those and was not chosen.
 
 Also out: any background job. `scan-drift` exists
-(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1244 as of 3ea14d9`)
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1244 as of 039b4c5`)
 and stays a thing an operator runs, never a timer, hook or tick step. ADR 0006's
 fourth clause is the reason and criterion 10 is the check.
 
@@ -93,21 +97,30 @@ fourth clause is the reason and criterion 10 is the check.
 This section is normative. ADR 0007 holds Option C loosely on exactly one point:
 the boundary "must be stated so plainly that no agent has to think about it, or
 facts will land in the wrong store". `FILES.md` opens by warning that a fact
-filed in the wrong layer is a fact lost. So the rule is one question with three
-answers and no judgement in any of them.
+filed in the wrong layer is a fact lost. So the rule is one question with four
+answers and no judgement in any of them. The first draft had three; the fourth
+was found by a reviewer applying the rule to this spec's own worked table, and
+the hole it fills is described below it.
 
 ### The rule
 
 > **Name the file whose bytes, if they changed, would oblige you to re-read this
 > fact.**
 >
-> 1. You can name a repo file, and it is **not** `state/triage.md`,
->    `state/ticks.jsonl`, `state/progress.md` or anything under `inbox/` →
->    it is a **finding**. Write a concept. That file is its `sources` entry.
+> 1. You can name a repo file **at HEAD** — its bytes can change — and it is
+>    **not** `state/triage.md`, `state/ticks.jsonl`, `state/progress.md` or
+>    anything under `inbox/` → it is a **finding**. Write a concept. That file
+>    is its `sources` entry.
 > 2. The only file you can name **is** one of those four → it is **loop state**.
 >    It belongs in a triage row's cells. Do not write a concept.
 > 3. You can name **no file at all** → it is neither. It is a judgement waiting
 >    on a person → `inbox/needs-human.md`, with the whole context.
+> 4. The file you name is **immutable** — it lives at a tag, a sha or a released
+>    version (`git show v0.2.2:<path>`), and no commit can change those bytes →
+>    it is a **finding**, and its anchor is the artifact id, never a HEAD path.
+>    Its `sources` entry names the artifact with a scheme —
+>    `tag://v0.2.2/<path>` or `commit://<sha>/<path>` — the actor digests
+>    nothing for it, and validation resolves `verified {by, at}` instead.
 
 The rule is not asked in the abstract, and it is not asked twice. It is asked
 about the one sentence you were about to write down, and the file you name
@@ -115,11 +128,51 @@ becomes the `sources` entry — so answering it and doing the work are the same
 act. A fact whose answer you cannot produce has no anchor, cannot be validated
 under ADR 0006, and must not be written as a concept at all.
 
+### Why there is a fourth answer
+
+Take the worked table's third row, *"v0.2.2's `loop-next.sh` reports IDLE on a
+six-column queue"*, and apply the three-answer rule without judgement. The bytes
+that make it true are `git show v0.2.2:plugins/loopkit/scripts/loop-next.sh` —
+a tagged file, which cannot change. So no file whose bytes *can* change obliges
+a re-read → case 3 → `inbox/`. Wrong: it is plainly a finding and needs no
+human. The escape is to name `plugins/loopkit/scripts/loop-next.sh` at HEAD →
+case 1 → a concept anchored to a file the fact is **not about**: the next edit
+to `loop-next.sh` marks it stale while the fact about v0.2.2 stays true forever.
+Both answers the three-answer rule gives are wrong, and choosing between them
+is judgement — the one thing the rule exists to remove. The class is *facts
+about immutable artifacts*: a tag, a sha, a released version, a prior commit.
+
+The write path already has the slot; the rule was not pointing at it.
+`_capture_digests` records nothing for a resource that carries a scheme
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:706 as of 039b4c5`),
+and `scan_drift` walks only `repo-file` entries
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1270 as of 039b4c5`),
+so a scheme-carrying source is never digested and never drifts — which is
+exactly right for bytes that cannot move. Validation of such a concept falls to
+the read path's second branch, `verified {by, at}`, the same slot a
+non-version-controlled target uses. Measured on this branch, in a scratch
+project with the adapter enabled:
+
+```
+enqueue  --type Finding --sources tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh   rc=0
+drain                                                                            rc=0
+applied  sources: [{id: loop-next, resource: "tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh"}]
+         x_source_digests: ABSENT on disk (no repo-file source, nothing to record)
+verify-bundle                                                                    rc=0
+scan-drift  before an edit: 8 drifted, case-4 concept not among them
+scan-drift  after a one-line edit to the CONTROL's source (a HEAD file): 9 drifted,
+            the control newly listed, the case-4 concept still absent
+```
+
+The control is the half that matters: a scan that reports zero for the case-4
+concept proves nothing unless the same scan reports the edit to a sibling whose
+source *is* a HEAD file. It did.
+
 ### Why case 2 is a refusal rather than advice
 
 The four paths in case 2 are the four the write path already rejects, plus
 directories, at
-`plugins/loopkit/loopkit_memory/okf.py:142 as of 3ea14d9`. That is not a
+`plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5`. That is not a
 coincidence to be maintained by hand — it is the same list, and the spec quotes
 the code rather than the code implementing the spec. Loop state cannot be
 dressed up as a finding, because the message is refused before it is written.
@@ -133,10 +186,14 @@ REFUSED-at-okf.py      inbox/needs-human.md                           the escala
 REFUSED-at-okf.py      plugins/                                       a directory
 rc=0                   state/2026-09-07-blocked-conflates-two-waits.md a dated note
 rc=0                   plugins/loopkit/loopkit_core/loop_next_pick.py  a mechanism file  <-- CONTROL
+rc=0                   tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh  an immutable artifact (case 4)
 ```
 
-The last two rows are the control. A refusal list that refuses everything is not
-a boundary, and a check fed only the bad cases could not tell the difference.
+The dated note and the mechanism file are the control. A refusal list that
+refuses everything is not a boundary, and a check fed only the bad cases could
+not tell the difference. The eighth row is case 4, accepted by the same write
+path with no change to it; what the actor then records for it is measured under
+"Why there is a fourth answer".
 
 ### Worked examples
 
@@ -144,12 +201,16 @@ Ordinary cases first, then the two that look like the wrong side.
 
 | The fact | Names which file? | Verdict |
 |---|---|---|
-| `loop_next_pick.WANT` omits `blocked`, so a blocked row is counted and never served | `loop_next_pick.py` | finding |
-| The offload timing pin budgets 200 ms and fails under load, not under regression | the pin script | finding |
-| v0.2.2's `loop-next.sh` reports IDLE on a six-column queue | the released runtime's file | finding |
-| Row `plan §0.3 judge-runner` is at `new` | `state/triage.md` only | loop state |
-| The backlog is 39 rows, 12 blocked | `state/triage.md` only | loop state |
-| Whether agents may self-authorize the `specs/` override | no file — nobody has ruled | `inbox/` |
+| `loop_next_pick.WANT` omits `blocked`, so a blocked row is counted and never served | `loop_next_pick.py` at HEAD, mutable | finding (case 1) |
+| The offload timing pin budgets 200 ms and fails under load, not under regression | the pin script at HEAD, mutable | finding (case 1) |
+| v0.2.2's `loop-next.sh` reports IDLE on a six-column queue | `git show v0.2.2:plugins/loopkit/scripts/loop-next.sh` — immutable; source `tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh` | finding (case 4) |
+| Row `plan §0.3 judge-runner` is at `new` | `state/triage.md` only | loop state (case 2) |
+| The backlog is 39 rows, 12 blocked | `state/triage.md` only | loop state (case 2) |
+| Whether agents may self-authorize the `specs/` override | no file — nobody has ruled | `inbox/` (case 3) |
+
+The table was re-run against the four-answer rule row by row. Five rows answer
+as they did under three; the third row is the one that had no honest answer and
+now has one.
 
 **Look-alike A — reads as loop state, is a finding.** *"`plan §distribution
 official-marketplace` has been blocked since before 0.2.0 was tagged; the tag
@@ -166,7 +227,7 @@ file the sentence whole is what sends it to the wrong one.
 **Look-alike B — reads as a finding, is loop state.** *"PR #38 has sat at
 `pr-open` for four ticks; review latency is the bottleneck."* It has a
 measurement, a diagnosis and an implied recommendation, so it wears the costume
-of an audit, and audits have been dated notes since `FILES.md:27 as of 3ea14d9`
+of an audit, and audits have been dated notes since `FILES.md:27 as of 039b4c5`
 said so. Apply the rule and the only file you can name is `state/triage.md` —
 the claim goes false the moment the loop does its own job and moves the row.
 Case 2. The write path proves it independently: `--sources state/triage.md` is
@@ -182,12 +243,31 @@ lagging — but its claim is that `loop-next.sh` reads the checkout's copy, so
 finding. The difference is not the subject matter and not the tone; it is
 whether any file outside the queue can make the sentence false.
 
+**Look-alike C — reads as a finding, is a finding, and the three-answer rule
+still filed it wrong.** *"v0.2.2's `loop-next.sh` reports IDLE on a six-column
+queue."* Nothing about it looks like loop state and nothing about it needs a
+person, yet under three answers it lands in `inbox/` (no mutable file) or on a
+HEAD path it is not about (false drift on the next edit). Under four answers the
+question is answered the same way and the answer has a slot: the file is
+immutable → case 4 → finding, source `tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh`,
+no digest, validated on `verified`. A and B were not the whole test; C is what
+a rule that only routes mutable files cannot see.
+
+**All three, re-run under four answers.** A still splits: *the row says
+`blocked`* names only `state/triage.md` → case 2; *no tick will ever serve it*
+names `loop_next_pick.py` at HEAD, mutable → case 1. B still names only
+`state/triage.md` → case 2, and the write path still refuses the concept. C →
+case 4, measured above. Case 4 changes nothing for A and B, because neither
+names an immutable artifact; it is a fourth answer, not a new tie-breaker.
+
 ### The shape of the mistake this rule is guarding against
 
-Both look-alikes fail the same way if you answer from the *topic* instead of the
-rule: A is about the queue and B is about the queue, so a topic-matcher files
-both identically and gets one of them wrong whichever way it leans. The rule
-never asks what a fact is about. It asks what could falsify it.
+A and B fail the same way if you answer from the *topic* instead of the rule:
+both are about the queue, so a topic-matcher files them identically and gets
+one wrong whichever way it leans. C fails differently — the question was
+answered correctly and the rule had no slot for the answer. The rule never asks
+what a fact is about. It asks what could falsify it, and now also admits that
+for some facts the honest answer is *nothing can*.
 
 ## The write path
 
@@ -200,19 +280,23 @@ and the actor's idempotency layer assumes it owns the bytes.
 | `type` | required, exactly `Finding` | agent | this spec, criterion 2 |
 | `title` | required | agent | this spec, criterion 2 |
 | `status` | required; `draft` on write | agent may write `draft` only | this spec, criterion 5 |
-| `sources` | required, ≥1, repo-relative files | agent | `plugins/loopkit/loopkit_memory/okf.py:142 as of 3ea14d9`; criteria 1, 2 |
+| `sources` | required, ≥1, repo-relative files or artifact ids (case 4) | agent | `plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5`; criteria 1, 2 |
 | `generated {by, at}` | always present | **the actor, never the agent** | the code, criterion 3 |
 | `verified {by, at}` | optional | `verify` op only; `human:` only by a human actor | criterion 4 — **not enforced today** |
 | `stale_after` | optional | `stale` op, or the reader on a failed validation | the code, criterion 7 |
 | `superseded_by` | optional | `deprecate` op | the code |
-| `x_source_digests` | always present | the actor, never the agent | the code, criterion 9 |
+| `x_source_digests` | one record per repo-file source; absent on disk when every source is an artifact id (measured, case 4) | the actor, never the agent | the code, criterion 9 |
 
 Four notes on that table, each measured on this branch.
 
-**`type: Finding` is legal and is a new value.** OKF conformance requires only a
-non-empty `type`; the nine house types at
-`plugins/loopkit/loopkit_memory/okf.py:36 as of 3ea14d9` are a search filter,
-not a closed set the checker enforces. One value is specified rather than
+**`type: Finding` is legal and is the tenth house type.** OKF conformance
+requires only a non-empty `type`; the house types at
+`plugins/loopkit/loopkit_memory/okf.py:36 as of 039b4c5` are a search filter,
+not a closed set the checker enforces. `Finding` joins that list in this PR —
+`okf.py` is LoopKit's own adapter, not a vendored file; the vendored pair is
+under `vendor/` — so the tenth filter value is discoverable beside the nine.
+The pin on that line went red before the edit and green after it. One value
+is specified rather than
 "`Trap` for a hazard, `Post-mortem` for an incident", because a two-way choice
 is judgement and this spec has spent its judgement budget on the boundary. It
 also makes `memory.py knowledge search --type Finding` return exactly the
@@ -220,7 +304,7 @@ findings, which is what the read path needs.
 
 **`generated` cannot be forged.** `apply_upsert` overwrites it from the
 message's own actor and enqueued time at
-`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:580 as of 3ea14d9`.
+`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:580 as of 039b4c5`.
 An agent that types `generated: {by: human:akul, at: 1999-01-01T00:00:00Z}` into
 the payload gets `by: process:probe/1` and the real timestamp on disk. Measured;
 criterion 3 is the check.
@@ -231,10 +315,10 @@ for the transcript of all three doors.
 
 **`status: stable` is a SHALL this spec adds, not a refusal the code makes.**
 `VALID_STATUS` is `("draft", "stable", "deprecated")` at
-`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:96 as of 3ea14d9` and
+`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:96 as of 039b4c5` and
 nothing checks who wrote which. Conformance run with `require_sources` only asks
 that a `stable` concept name its evidence
-(`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:707 as of 3ea14d9`).
+(`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:707 as of 039b4c5`).
 So this is a rule upheld by a detector, not a wall, and it is written that way
 here so nobody reads it as a wall.
 
@@ -251,13 +335,15 @@ Normative, and it is ADR 0006 applied to a concept rather than to prose.
   and compare it to the recorded `digest`. Equal for every entry → validated.
   Any mismatch, or a source that has gone missing, → failed. This is exactly the
   comparison `scan_drift` performs, per concept, at
-  `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1244 as of 3ea14d9`,
+  `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1244 as of 039b4c5`,
   and the reader SHALL reuse that comparison rather than write a second one. Two
   implementations of one rule diverge, and the day they diverge is the day
   somebody trusts the wrong one.
-- **Where the target is not version-controlled** — a released runtime's
-  behaviour, an external service, a decision taken in a meeting — there is no
-  digest to compare, so validation resolves `verified {by, at}` instead. The
+- **Where the target is not version-controlled, or is immutable** — a released
+  runtime's behaviour, a tagged or sha-pinned file (case 4), an external
+  service, a decision taken in a meeting — there is no digest to compare (the
+  actor records none for a scheme-carrying source), so validation resolves
+  `verified {by, at}` instead. The
   concept must carry at least one entry, and the reader SHALL report it verbatim
   with its actor and its date, so the human reading the tick output can judge a
   three-month-old machine confirmation for themselves.
@@ -272,17 +358,17 @@ with a caveat — a caveat is how a wrong note gets quoted into a decision.
 
 `apply_stale` is already correct for this and the spec relies on the detail:
 it sets `stale_after` and an `x_drift` record
-(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:651 as of 3ea14d9`)
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:651 as of 039b4c5`)
 and **deliberately does not touch `status`**, which the code says in its own
 words at
-`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:659 as of 3ea14d9`.
+`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:659 as of 039b4c5`.
 Clobbering a human's `stable` would destroy the ratification the system exists
 to preserve. Nothing in this spec may change that.
 
 Where a superseding concept is known, `deprecate` carries `superseded_by` and
 `link` writes the navigable trail — that is ADR 0007's "this moved, where did it
 go". `link` requires both concepts to exist and raises otherwise
-(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:664 as of 3ea14d9`),
+(`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:664 as of 039b4c5`),
 so the trail cannot point at nothing.
 
 ### Reading to display
@@ -303,7 +389,7 @@ Nothing re-validates on a timer, on `main` moving, or as a step of the tick.
 **A finding-concept SHALL NOT contain a `path:line` coordinate. It names the
 symbol.**
 
-`FILES.md:34 as of 3ea14d9` already routes code structure to *derived: query the
+`FILES.md:34 as of 039b4c5` already routes code structure to *derived: query the
 code, never author it*, and ADR 0006 records the cost of ignoring it: four notes
 rotted in a day, one of them buying a confident and completely wrong diagnosis
 of a CI failure. Naming `resolve_qbo_gate` survives a refactor that moves it;
@@ -341,12 +427,16 @@ to be.
    passes against an `enqueue` that refuses everything.
 
 2. A finding-concept SHALL carry `type: Finding`, a non-empty `title`, a
-   `status`, and at least one `sources` entry naming an existing regular file.
+   `status`, and at least one `sources` entry naming an existing regular file
+   or an immutable artifact id (`tag://`, `commit://` — case 4). `Finding`
+   SHALL be listed in `okf.TYPES`.
 
    Check `[today]`: a validator over a fixture bundle, with a control per field.
    `type: Finding` must be accepted by `okf_bundle.conformance_errors` — measured
    on this branch, it is, and it round-trips through a drain unchanged — and a
-   concept with an empty `type` must be rejected by the same call. A concept with
+   concept with an empty `type` must be rejected by the same call. `Finding in
+   okf.TYPES` is pinned in `.loopkit/citations.json` and the pin was run red
+   first. A concept with
    no `sources` must be rejected by this spec's validator even though
    conformance alone accepts it below `stable`; that gap is why the validator
    exists rather than leaning on `verify-bundle`.
@@ -378,17 +468,17 @@ to be.
    ```
 
    Only the first door is guarded, by
-   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1151 as of 3ea14d9`,
+   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1151 as of 039b4c5`,
    which tests the git author of the message file. The second is allowed on
    purpose — the docstring at
-   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1139 as of 3ea14d9`
+   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1139 as of 039b4c5`
    says unknown authorship is permitted — and it is the door the loop walks
    through every time, because a tick enqueues and drains without committing in
    between. The third bypasses the guard entirely, because
    `_assert_human_claim_is_credible` is called only on the `verify` branch at
-   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1130 as of 3ea14d9`
+   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1130 as of 039b4c5`
    while `apply_upsert` copies payload frontmatter wholesale at
-   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:572 as of 3ea14d9`.
+   `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:572 as of 039b4c5`.
 
    **The fix this criterion requires does not depend on git.** Refuse a `human:`
    claim whose message actor is not `human:`, and strip `verified` from upsert
@@ -401,6 +491,16 @@ to be.
    permitted op must still be APPLIED. A guard that refuses every `verified`
    write would pass the three-row table and destroy the feature.
 
+   **Dependency, escalated.** This criterion is in the spec because the write
+   path table and every trust-tier claim in the read path rest on it. But the
+   fix lands in `plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py`,
+   whose header says *do not edit here: fix upstream, re-vendor*. Whether to
+   carry a local patch or wait on upstream is an owner's decision, filed in
+   `inbox/needs-human.md` under *Criterion 4 of specs/findings-are-concepts.md*
+   with both options costed and a `blocked` row keyed by the bridge. The same
+   entry names the sentence in ADR 0007 that this measurement falsifies. The
+   criterion stays RED until the ruling lands and the fix with it.
+
 5. WHILE an agent is the author, a finding-concept's `status` SHALL be `draft`.
    Only a `verify` from a `human:` actor promotes it, and promotion to `stable`
    SHALL be accompanied by non-empty `sources`.
@@ -409,7 +509,7 @@ to be.
    `status` is not `draft` and whose `verified` carries no `human:` entry. Its
    control is a concept that *is* human-verified and `stable`, which must not be
    reported. Note plainly what this is: `VALID_STATUS` at
-   `plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:96 as of 3ea14d9` admits
+   `plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:96 as of 039b4c5` admits
    all three values from anyone, so this criterion is a detector over a
    convention, not a refusal at the write path. Criterion 4's fix is what makes
    the `human:` half of it meaningful; until that lands this detector can be
@@ -459,7 +559,8 @@ to be.
      fires.
    - `[M2c]`: the non-version-controlled half — a concept with no `repo-file`
      source validates on `verified` alone, and the reader prints the actor and
-     date verbatim.
+     date verbatim. The case-4 concept measured above is the fixture: a
+     `tag://` source and no digest record on disk.
 
 10. Nothing SHALL schedule re-validation. `scan-drift` SHALL remain invoked only
     by a person.
@@ -476,7 +577,7 @@ to be.
     its frontmatter.
 
     Check `[today]`: a detector that imports `CITATION` from
-    `plugins/loopkit/scripts/check-citations.py:174 as of 3ea14d9` — imports it,
+    `plugins/loopkit/scripts/check-citations.py:174 as of 039b4c5` — imports it,
     never re-spells it, because a second copy of that pattern drifts from the
     first — and applies it to every `Finding` in the bundle. Measured on this
     branch against five strings, two refused and three controls that must pass:
@@ -561,23 +662,26 @@ control or is itself a control. Counted mechanically over this section: 14 of 14
   concept whose every source is missing: validation fails on the first, one
   `stale` message for the concept, not one per source — `scan_drift` already
   batches per concept and the reader must too.
-- **Error.** A concept with `sources` but no `x_source_digests` (hand-written, or
-  upserted with `record_digests: false`): treat as failed validation, never as
-  passed. Absence of an anchor is not evidence of freshness.
+- **Error.** A concept with a repo-file-shaped source (no scheme) and no
+  matching `x_source_digests` record (hand-written, or upserted with
+  `record_digests: false`): failed validation, never passed. A concept whose
+  every source carries a scheme has no digest record by construction (case 4,
+  measured) and validates on `verified`; with no `verified` entry, failed.
+  Absence of an anchor is not evidence of freshness, in either shape.
 - **Supersession.** A finding replaced by a later one: `deprecate` with
   `superseded_by`, then `link`. A `link` naming a concept that does not exist
   raises rather than writing a dangling trail, which is correct and must not be
   softened.
 - **Trust.** A concept carrying only `process:` verification is
   `machine-confirmed`, never `human-reviewed`
-  (`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:548 as of 3ea14d9`). The
+  (`plugins/loopkit/loopkit_memory/vendor/okf_bundle.py:548 as of 039b4c5`). The
   read path SHALL print the tier, so a reader can weigh it. It SHALL NOT gate on
   the tier — that is a separate ruling nobody has made.
 - **Concurrency.** Two agents draining one mailbox: the actor's lock and
   idempotency keys already cover it. Not re-specified here.
 - **A finding about the queue itself.** Legal, and Look-alike A is one. Its
   `sources` name the queue's *code*, never the queue's *file*. The refusal at
-  `plugins/loopkit/loopkit_memory/okf.py:142 as of 3ea14d9` makes the wrong
+  `plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5` makes the wrong
   version of it impossible to write, which is why that refusal is quoted in the
   boundary rather than paraphrased.
 
@@ -593,8 +697,9 @@ buys — Option C's entire cost story is that the queue does not move. Criterion
 ships as a marketplace plugin and `knowledge.enabled` is false by default.
 Criterion 13, with its "before" captured on this branch and quoted above.
 
-Both baselines exist now. `tests/selftest.sh` on this branch, at `3ea14d9`, is
-**300 ok and zero FAIL lines** (one `ok` line contains the word FAIL in its
+Both baselines exist now. `tests/selftest.sh` on this branch was **300 ok and
+zero FAIL lines** at `3ea14d9`, and is **338 ok and zero FAIL lines** with #45
+merged forward and this round's changes (macOS, read by FAIL lines) (one `ok` line contains the word FAIL in its
 description, which is why this gate is read by its FAIL lines and never by its
 exit code). One SKIP is reported honestly as UNVERIFIED: the S3Store live pins,
 which need `--with-s3`.
@@ -653,7 +758,7 @@ is needed to finish this migration, which is the same promise criterion 10 makes
 
 - **Who may use the `specs/` override.** `protect_governance` documents an
   escape hatch at
-  `plugins/loopkit/hooks/protect_governance.py:79 as of 3ea14d9`, and whether an
+  `plugins/loopkit/hooks/protect_governance.py:79 as of 039b4c5`, and whether an
   agent may self-authorize it is an open question already sitting in
   `inbox/needs-human.md`. This spec used the override to write itself and says so
   in its PR. It does not claim that was permitted.
@@ -661,7 +766,11 @@ is needed to finish this migration, which is the same promise criterion 10 makes
   says it prints the tier and does not gate. Gating is a product decision nobody
   has made, and under this repo's routing rule a change that would encode an
   unmade decision goes to `inbox/`, not into a criterion.
-- **Whether `type: Finding` should join the house type list** at
-  `plugins/loopkit/loopkit_memory/okf.py:36 as of 3ea14d9`. It works without
-  joining; joining is cosmetic and would touch a vendored file, which is a
-  bigger decision than it looks.
+- **Criterion 4's fix path** — patch the vendored actor and carry the patch,
+  or fix upstream and re-vendor. Escalated with both options costed; see
+  criterion 4. Until it is ruled the criterion is RED and criterion 5's
+  detector is satisfiable by a forgery.
+- **The ADR 0007 sentence this spec falsifies.** "`apply_verify` refuses a
+  self-authenticated human claim" is true of the `verify` op and false of the
+  path the loop uses. Correcting an accepted ADR is an owner edit; the wording
+  is in the same inbox entry.
