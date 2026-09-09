@@ -1196,6 +1196,17 @@ printf '%s\n' "$qz" | grep '^  FAIL' || true
 [ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
   || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
 
+echo "== criterion 5's purity check survives being attacked"
+# The check has been defeated twice, both times by a rule about NAMES applied
+# to the wrong namespace. This pin holds the attacks, not just the answer: it
+# asserts the round-2 check IS still fooled by them, so a harness that stopped
+# reproducing the defect fails loudly instead of printing a clean sheet.
+c5="$(python3 "$REPO/tests/pins/criterion5-purity-attacks.py" 2>&1)"; c5_rc=$?
+printf '%s\n' "$c5" | grep '^  FAIL' || true
+printf '%s\n' "$c5" | grep '^  gap ' || true
+[ "$c5_rc" = 0 ] && ok "the sealed evaluator refuses every attack, and its known gaps are named" \
+  || fail "criterion 5 purity: $(printf '%s' "$c5" | tail -1)"
+
 echo "== the secret scanner knows every shape it claims to know"
 ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
 printf '%s\n' "$ss" | grep '^  FAIL' || true
