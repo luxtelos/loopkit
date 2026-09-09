@@ -34,13 +34,26 @@ third name-list would be defeated a fourth time; what changed is the structure:
 Both are needed. Sealing cannot see `rows.__class__.__base__.__subclasses__()`;
 the static check cannot see a module that rebinds a name after the check ran.
 
+Neither can see gap 7, and nor can a sample taken inside one process. Set
+iteration order is hash-seeded PER PROCESS; `str` of a default repr embeds an
+address. An evaluator built on either uses no name the pure control does not,
+so there is nothing for a list or a seal to refuse, and `flips()` runs under
+one seed on one heap, so the value it samples never moves. The only sampler
+that sees this class runs the SEALED evaluator in a fresh interpreter per
+call with a distinct PYTHONHASHSEED each — `verdicts_across_processes()` —
+and its bound is the seeds it ran. A tick is a process; that is why it matters.
+
 usage: python3 tests/pins/criterion5-purity-attacks.py
+       python3 tests/pins/criterion5-purity-attacks.py --child
+         (internal: evaluator source on stdin, one sealed verdict on stdout)
 """
 from __future__ import annotations
 
 import builtins
 import dis
+import os
 import signal
+import subprocess
 import sys
 import time
 import types
@@ -109,6 +122,10 @@ def round2_check(fn) -> list[str]:
 # curated rather than derived: `getattr`, `id`, `hash`, `open`, `vars`,
 # `globals` and `__import__` are all pristine builtins and all forbidden. See
 # the N2 and N3b cases below for why each of those exclusions is load-bearing.
+# `str` IS on it, and `str(<anything with a default repr>)` is address-derived
+# exactly as `id` is — gap 3 below measures that. The list refuses `id` because
+# nobody wrote it down and admits `str` because somebody did; it is not a
+# control against that class and never was.
 ALLOWED_GLOBALS = {"any", "all", "len", "str", "bool", "isinstance"}
 
 # Attribute names reachable on an argument. All non-mutating members of `str`,
@@ -220,9 +237,13 @@ def build(src: str):
 
 
 def flips(fn, rows=ROWS, n=200, gapsec=0.005) -> bool:
-    """Does it return different answers for IDENTICAL inputs? This is the
-    ground truth the static checks are graded against — it is evidence, not a
-    gate: `count()` only flips because the clock moves during the sample."""
+    """Does it return different answers for IDENTICAL inputs, sampled within
+    ONE process? Evidence, not a gate: `count()` only flips because the clock
+    moves during the sample. A per-process constant — set order under this
+    process's hash seed, an address on this heap — never moves during the
+    sample, so this sampler is BLIND to gap 7 by construction. The pin asserts
+    that blindness below; `verdicts_across_processes` is the sampler that sees
+    it."""
     seen = set()
     for _ in range(n):
         try:
@@ -231,6 +252,40 @@ def flips(fn, rows=ROWS, n=200, gapsec=0.005) -> bool:
             seen.add(type(e).__name__)
         time.sleep(gapsec)
     return len(seen) > 1
+
+
+if sys.argv[1:] == ["--child"]:
+    # One SEALED call in THIS fresh interpreter: source on stdin, verdict on
+    # stdout, nothing else printed. The parent varies PYTHONHASHSEED per child
+    # and nothing else, so a verdict that differs between children differs
+    # because of the seed (or the heap), never because of the harness.
+    _child_fn, _child_g = build(sys.stdin.read())
+    try:
+        print(repr(seal(_child_fn)(ROWS, ARG)))
+    except Exception as _e:                                       # noqa: BLE001
+        print(type(_e).__name__)
+    raise SystemExit(0)
+
+
+def verdicts_across_processes(src: str, seeds, stop_when_split: bool = False
+                              ) -> dict[str, int]:
+    """Run the SEALED evaluator once per FRESH interpreter, one PYTHONHASHSEED
+    per process. The only sampler that can see a per-process constant. Returns
+    {verdict: number of processes that returned it}. `stop_when_split` returns
+    as soon as two verdicts disagree — the claim being tested is "it flips",
+    and one disagreement proves it; the pure control is run without it, so
+    every seed asked for is a seed it had to survive."""
+    seen: dict[str, int] = {}
+    for seed in seeds:
+        env = dict(os.environ, PYTHONHASHSEED=str(seed))
+        out = subprocess.run([sys.executable, os.path.abspath(__file__), "--child"],
+                             input=src, env=env, capture_output=True, text=True,
+                             timeout=60)
+        verdict = out.stdout.strip() or f"rc={out.returncode}"
+        seen[verdict] = seen.get(verdict, 0) + 1
+        if stop_when_split and len(seen) > 1:
+            break
+    return seen
 
 
 CASES: list[tuple[str, str, str, str]] = [
@@ -314,6 +369,8 @@ for name, intent, src, why in CASES:
             fail(f"{name}: forbidden evaluator ACCEPTED by round 3")
         else:
             print(f"       refused because: {'; '.join(r3)[:96]}")
+print("  (flips? is sampled within ONE process; the cross-process sample is under "
+      "the gaps below)")
 print()
 
 # --- the two attacks that need a doctored namespace, not doctored source ---
@@ -395,7 +452,8 @@ if before == "accepted" and flips(fn):
 else:
     fail("TOCTOU demonstration did not reproduce — the gap claim is unmeasured")
 
-# A pristine builtin can still be impure. Identity is necessary, not sufficient.
+# A pristine builtin can still be impure: address-derived. `id` is off the
+# list and is shown by putting it on; `str` is ON the list and needs no help.
 fn, g = build(f"""
 def evaluate(rows, arg):
     {HIT}
@@ -403,15 +461,27 @@ def evaluate(rows, arg):
 """)
 ALLOWED_GLOBALS.add("id")
 try:
-    if not static_check(fn):
-        gap("`id` resolves to the pristine `builtins.id` and is address-derived. "
-            "Object identity to a pristine builtin is NECESSARY, not SUFFICIENT: "
-            "the SHORT CURATED list is what refuses id/hash/getattr/open, not "
-            "the identity test. Adding a name to that list is a spec change.")
-    else:
-        fail("the id() demonstration did not reproduce")
+    id_accepted = not static_check(fn)
 finally:
     ALLOWED_GLOBALS.discard("id")
+str_fn, _g = build(f"""
+def evaluate(rows, arg):
+    {HIT}
+    return str((r for r in rows)) if hit else ""
+""")
+str_accepted = not static_check(str_fn)
+str_out = seal(str_fn)(ROWS, ARG)
+if id_accepted and str_accepted and " at 0x" in str_out:
+    gap("address-derived builtins: `id` resolves to the pristine `builtins.id` "
+        "and is address-derived, and so is `str` of anything with a default "
+        f"repr — `str(<genexp>)` passes both halves and returns {str_out!r}. "
+        "`str` is ON ALLOWED_GLOBALS today, so the short list is NOT a control "
+        "against this class; identity to a pristine builtin is NECESSARY, not "
+        "SUFFICIENT. Removing `str` would close this one spelling and nothing "
+        "of gap 7, which has no name to remove.")
+else:
+    fail(f"the address-derived demonstration did not reproduce (id accepted="
+         f"{id_accepted}, str accepted={str_accepted}, str -> {str_out!r})")
 
 # Non-termination: no name at all, so no name-based check can see it.
 fn, _g = build("""
@@ -457,6 +527,60 @@ if not static_check(fn) and flips(seal(fn), [ClockRow(source="row-A")]):
         "that closes it. The two criteria hold only together.")
 else:
     fail("the argument-mediated demonstration did not reproduce")
+
+# Language-level nondeterminism: NO name beyond the pure control's, so no list,
+# no seal and no in-process sample can see it. Only a fresh interpreter per
+# sample can — and a tick is a fresh interpreter, so two ticks disagree.
+print()
+print("== across processes: a fresh interpreter and a distinct PYTHONHASHSEED each,"
+      " sealed call")
+SET_ORDER_SRC = f"""
+def evaluate(rows, arg):
+    {HIT}
+    for x in {{"row-A", "row-B", "row-C"}}:
+        return hit and x == "row-A"
+"""
+STR_ADDR_SRC = f"""
+def evaluate(rows, arg):
+    {HIT}
+    return hit and (str((r for r in rows))[-5] in "02468")
+"""
+set_fn, _g = build(SET_ORDER_SRC)
+set_static = static_check(set_fn)
+set_inproc = flips(set_fn, n=40, gapsec=0)
+set_xproc = verdicts_across_processes(SET_ORDER_SRC, range(64), stop_when_split=True)
+str_static = static_check(build(STR_ADDR_SRC)[0])
+str_xproc = verdicts_across_processes(STR_ADDR_SRC, range(8))
+ctl_xproc = verdicts_across_processes(CASES[0][2], range(8))
+_v = lambda bad: "allowed" if not bad else "REFUSED"
+print(f"  {'set-order (zero names)':<28} static={_v(set_static):<8} in-process "
+      f"flips={'YES' if set_inproc else 'no':<4} "
+      f"across {sum(set_xproc.values())} processes -> {set_xproc}")
+print(f"  {'str(genexp) address digit':<28} static={_v(str_static):<8} "
+      f"{'':<21} across {sum(str_xproc.values())} processes -> {str_xproc}  "
+      "(measured, not asserted: whether an address moves is the allocator's)")
+print(f"  {'CONTROL pure':<28} {'':<36} "
+      f"across {sum(ctl_xproc.values())} processes -> {ctl_xproc}")
+if set_static:
+    fail(f"the set-order evaluator was refused — the demonstration is invalid: {set_static}")
+elif set_inproc:
+    fail("the in-process sampler saw the set-order flip; it is supposed to be "
+         "blind to a per-process constant, so the blindness claim is unmeasured")
+elif len(set_xproc) < 2:
+    fail(f"set-order did not flip across {sum(set_xproc.values())} hash seeds — "
+         "the gap-7 claim is unmeasured")
+elif str_static:
+    fail(f"the str(genexp) evaluator was refused — the demonstration is invalid: {str_static}")
+elif ctl_xproc != {"True": sum(ctl_xproc.values())}:
+    fail(f"the pure control is not stable across processes: {ctl_xproc}")
+else:
+    gap("language-level nondeterminism: set iteration order is hash-seeded per "
+        "process and `str` of a default repr is address-derived. The set-order "
+        "evaluator has NO name beyond the pure control's, so no list, no seal and "
+        "no in-process sample can see it; sealed, across fresh interpreters, it "
+        f"returned {set_xproc}. A tick is a process. Only the cross-process "
+        "sampler sees this, and it is bounded by the seeds it ran — evidence, "
+        "never the gate.")
 
 gap("hand-assembled bytecode: a code object whose linear disassembly disagrees "
     "with execution would defeat part (d). NOT demonstrated here — claimed as "

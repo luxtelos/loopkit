@@ -493,7 +493,9 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
 
    It closes nothing else, and the boundary is exact. What the module bound is
    unreachable; what the *sealed list itself* contains is still whatever it
-   contains, so a careless `id` on that list is as impure sealed as unsealed. A
+   contains, so a careless `id` on that list — or the `str` that is on it
+   today, address-derived through any default repr — is as impure sealed as
+   unsealed. A
    value captured before sealing — a parameter default, a closure cell — is
    already a value and not a name, which is why parts (b) and (c) below are not
    made redundant by (A).
@@ -593,15 +595,20 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    pristine is not the same as pure.** `id` resolves to the genuine
    `builtins.id` and is address-derived; `hash` of a string is randomised per
    process, so two ticks in two processes disagree. Both pass (d1)'s identity
-   test the moment their names are on the list. **The identity test is
-   necessary, not sufficient — the short list is the control, and lengthening it
-   is a spec change, not a fix.**
+   test the moment their names are on the list — and `str`, which **is** on the
+   list, already does: `str(<generator>)` is `<generator object … at 0x…>`, an
+   address wearing a string. **The identity test is necessary, not sufficient,
+   and the short list is not a control against this class.** It refuses `id`
+   and `hash` because nobody wrote them down and admits `str` because somebody
+   did. Gap 3 below measures it. Lengthening the list is a spec change, not a
+   fix; shortening it by `str` would close `str(<default repr>)` and nothing of
+   gap 7, which has no name to remove.
 
    **Measured.**
 
    Round two's check and round three's, run against the same corpus. The
-   `flips?` column is ground truth: does the evaluator return different answers
-   for identical inputs?
+   `flips?` column is the in-process sample: does the evaluator return
+   different answers for identical inputs within one process?
 
    ```
    evaluator                                      intent     round2    round3    flips?
@@ -623,7 +630,8 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    happened to cover, and the contrast with R1 is the whole lesson. `flips?` is
    evidence, not a gate: `index = os.getpid` never flips within one process and
    is forbidden anyway, which is precisely why determinism sampling cannot be
-   the check.
+   the check. That column is sampled within **one** process; what only a fresh
+   process per sample can see is measured under gap 7.
 
    **Two earlier shapes, kept because they are the ones a reader reaches for.**
    The deny-list of round one got 8 of 17 right on the corpus it was built
@@ -658,8 +666,9 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    **What this does NOT close, named rather than left for the next reviewer.**
 
    An allow-list with an unnamed gap is a deny-list wearing better clothes.
-   Six gaps: **four measured** by the pin (1 to 4) and **two asserted** (5 and
-   6), said to be asserted rather than folded in with the measured ones. The pin
+   Seven gaps: **five measured** by the pin (1 to 4, and 7) and **two
+   asserted** (5 and 6), said to be asserted rather than folded in with the
+   measured ones. The pin
    **fails if it reports zero gaps** — a clean sheet would mean the
    demonstrations stopped running, not that the misses were closed.
 
@@ -672,8 +681,13 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    2. **Non-termination.** `while True: pass` has an **empty** `co_names`, so
       both halves accept it and the tick hangs. Purity is not termination.
       Criterion 5 does not bound runtime and does not claim to.
-   3. **A pristine builtin that is not pure.** `id`, `hash`. Refused today by
-      the shortness of the list, not by any mechanism. See above.
+   3. **Address-derived builtins.** `id`, and `str`. `str` is on
+      `ALLOWED_GLOBALS`, and `str(<anything with a default repr>)` embeds an
+      address exactly as `id` does. Measured: `str((r for r in rows))` passes
+      both halves and the sealed call returns `<generator object … at 0x…>`.
+      `id` is refused today only because it was never written down; `str` is
+      admitted because it was. The list is not a mechanism against this class
+      and never was; the class it belongs to is gap 7.
    4. **Time-of-check on the unsealed path.** Measured: the static check
       accepts, the module then rebinds a name, and the unsealed evaluator flips.
       The sealed one does not. This is why (A) is a SHALL and not an
@@ -686,6 +700,46 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    6. **Non-CPython.** `dis`, `co_names` and opcode spellings are CPython
       details. On another runtime part (B) cannot run at all; part (A) still can,
       which is a further argument for enforcement over detection.
+   7. **Language-level nondeterminism — no name involved.** Set iteration
+      order is hash-seeded per process; `str` of a default repr is
+      address-derived. Neither reaches for a name the pure control does not
+      already use, so no list, no seal and no in-process sample can see either:
+
+      ```python
+      def evaluate(rows, arg):                 # names: the pure control's, nothing more
+          hit = any(r.get("source") == arg and r.get("status") == "done" for r in rows)
+          for x in {"row-A", "row-B", "row-C"}:   # order is this process's hash seed
+              return hit and x == "row-A"
+      ```
+
+      Measured, one fresh interpreter per call, sealed call each. The
+      reviewer's figures first (12 processes, the platform's own seed each),
+      then the pin's (a distinct `PYTHONHASHSEED` per process; the set-order
+      run stops at the first disagreement because one disagreement is the
+      claim):
+
+      ```
+      evaluator                   static    in-process   across processes
+      set-order (zero names)      allowed   no           3.12 {True 5, False 7}   3.14 {False 11, True 1}
+      str(genexp) address digit   allowed   no           3.12 {True 5, False 7}   3.14 {False 12}
+      CONTROL pure                allowed   no           {True 12} on both
+      -- the pin, 3.11 / 3.12 / 3.13 / 3.14 --
+      set-order (zero names)      allowed   no           seeds 0,1 -> {True 1, False 1} on all four
+      str(genexp) address digit   allowed   no           8 seeds -> {False 8} on 3.11-3.13, {True 5, False 3} on 3.14
+      CONTROL pure                allowed   no           8 seeds -> {True 8} on all four
+      ```
+
+      The pin asserts three things and fails if any is missing: the set-order
+      evaluator is accepted by both halves, the in-process sampler does **not**
+      see it flip, and the cross-process sampler does; the pure control must
+      return one verdict across every seed it is given. The address case is
+      printed and not asserted — the reviewer measured it stable on 3.14 and
+      the pin measured it flipping there; whether an address moves between two
+      processes belongs to the allocator, not to this check. **A tick is a
+      process**, so two ticks disagree — the failure this criterion names for
+      `hash`, arrived at without `hash`. Nothing static closes this. What
+      bounds it is the sampler under "Determinism" below, and the bound is the
+      seeds it ran.
 
    **If you are reading this because the check refused something, do not add a
    name to make it pass.** There is no deny-list here to lengthen. A refusal
@@ -694,19 +748,36 @@ satisfy it. Criterion 9 exists to close that gap, and its check runs today.
    list genuinely wants one more `str` method. `count` is the first of those.
    `casefold` is the second.
 
-   **Determinism, the weaker half, kept — and re-scoped.** Call the evaluator
-   with identical inputs and compare. Round two called it "the determinism half"
-   and meant two adjacent calls, which is why `count = time.time` passed it: two
-   calls a microsecond apart agree. Two adjacent calls are worth nothing here.
+   **Determinism, the weaker half, kept — and re-scoped twice.** Call the
+   evaluator with identical inputs and compare. Round two called it "the
+   determinism half" and meant two adjacent calls, which is why `count =
+   time.time` passed it: two calls a microsecond apart agree. Two adjacent
+   calls are worth nothing here.
 
-   What the sampling IS worth is gap 1. Repeated over a window, it is the only
-   part of this criterion that notices **argument-mediated** impurity — the pure
-   control flipped under 200 sampled calls when a row's `.get` read the clock,
-   and neither half of the check above can see that at all. So it is kept, and
-   its job is named: it does not grade the evaluator's text, which (A) and (B)
-   do; it is a smoke alarm for impurity arriving through a route nobody
-   modelled. It is evidence, never the gate — an evaluator that flips is
-   certainly broken, an evaluator that does not flip has proved nothing.
+   Round three sampled 200 calls over a second **in one process**, which is
+   worth gap 1 and only gap 1: the pure control flipped under that sample when
+   a row's `.get` read the clock, and neither half of the check above can see
+   that at all. But one process has one hash seed and one heap, so a
+   per-process constant never moves during the sample, and the in-process
+   sampler is blind to gap 7 by construction. The pin asserts that blindness
+   rather than hoping past it: `flips()` on the set-order evaluator must say
+   `no`, and the pin fails if it ever says `YES`.
+
+   So the sampler runs in two shapes, each named for what it can see.
+   `flips()` samples within a process and sees what moves during the sample —
+   a clock, or an argument that reads one. `verdicts_across_processes()` runs
+   the **sealed** evaluator once per fresh interpreter with a distinct
+   `PYTHONHASHSEED` each, and sees what is constant within a process and
+   different between two: hash-seeded order and, where the allocator
+   cooperates, an address. Its bound is exactly the seeds it ran on the one
+   host it ran on. It has proved nothing about a seed it did not run, and
+   nothing about a constant that differs between hosts rather than between
+   seeds — a platform string, a heap layout the allocator happens to hold
+   still. Both shapes are evidence, never the gate: an evaluator that flips is
+   certainly broken, an evaluator that does not flip has proved nothing. Their
+   job is unchanged — a smoke alarm for impurity arriving through a route
+   nobody modelled — and it is now written which routes each alarm is wired
+   to, so a reader does not take the silence of the wrong one for proof.
 
    The draft before last named only "call it twice under a frozen clock", which
    cannot fail: freezing the clock removes the variable it exists to detect. The
