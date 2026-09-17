@@ -438,3 +438,72 @@ that is the first work item of the spec that implements this ADR."*
 cannot claim actor-authenticated verification without it. This entry is the
 escalation half. The row for it on `state/triage.md` is keyed by
 `inbox_to_triage.py`, not by hand, and is `blocked` on the two decisions above.
+
+## Round-3 wording for specs/findings-are-concepts.md is written and waits on a hand allowed to apply it (2026-09-18)
+
+**What is blocked.** PR #47 round 3 changed `plugins/loopkit/loopkit_memory/okf.py`
+— the source refusal list became a closed set, and an immutable artifact is now
+anchored on its commit, not on a tag. The spec has to say so, and one sentence in
+it ("loop state cannot be dressed up as a finding") was measured false and must
+be corrected. `protect_governance.py` refused the edit to `specs/`:
+
+> This is a human decision, not a loop edit. If an owner has ratified the
+> change, re-run with GOVERNANCE_EDIT_OK=1 … Otherwise route the proposed
+> wording to inbox/needs-human.md.
+
+No owner has ratified it, and whether an implementing agent may grant itself
+that override is the open ruling two entries up (2026-09-08). The hook guards
+the Edit tool; a Bash write would have walked past it
+(`PR #46 2026-09-08 §governance-guard-is-a-blocklist`). I did not use that door.
+Rounds 1 and 2 of this PR did use the override, and said so; this round the
+question is on the board unanswered, so this round does not.
+
+**What this costs while it waits.** `check-citations.py` is RED on the branch,
+one problem, and it is right to be: the spec cites `okf.py:142` for a refusal
+that no longer exists, and the gate says "the claim is now false and must be
+rewritten, not re-pointed". `tests/selftest.sh` carries that one FAIL line and
+no other. The code, the pin and the #48 merge are on the branch and reviewable.
+
+**The wording, ready to apply.** `inbox/findings-are-concepts-round3.patch`
+touches two files and nothing else: `specs/findings-are-concepts.md` and
+`.loopkit/citations.json` (the pin on the old refusal line is re-pointed at
+`resolve_source`, and one pin is added for `artifact_drift`). They travel
+together because either alone leaves the gate red.
+
+```
+git apply --check inbox/findings-are-concepts-round3.patch
+git apply inbox/findings-are-concepts-round3.patch
+env -u CLAUDE_PROJECT_DIR python3 plugins/loopkit/scripts/check-citations.py   # from the repo root
+```
+
+Measured in a throwaway clone at `c3da4a3`, from the repo root with
+`CLAUDE_PROJECT_DIR` unset. Before the patch: 52 citations, 28 pinned, FAIL, 1
+problem. After: **53 citations, 29 pinned, PASS**. Control: one line inserted
+into `okf.py` turns both new pins red, and restoring it turns them green. The
+clone was discarded; nothing from it was committed. What the patch says, in
+short:
+
+- Case 4's anchor is `commit://<40-hex>/<path>`. `tag://` is input only: resolved
+  under `refs/tags/`, recorded as the commit, the tag kept as a note (`x_label`).
+- New section "A tag is a label, not an anchor": the reviewer's move-the-tag and
+  delete-the-tag replayed — `label-moved`, `label-gone`, the commit-only concept
+  untouched, the untouched tag silent. An unresolvable commit is reported
+  `artifact-unresolvable` by `scan-drift`; the shallow-clone cost is stated.
+- "Why case 2 is a refusal" is rewritten around the closed set; the false
+  sentence is replaced by what the code enforces; the `payload.frontmatter.sources`
+  side door is recorded.
+- Read path: case 4 validates by resolving `<sha>:<path>` against `x_blob`, and no
+  longer falls to `verified {by, at}`. Criteria 1, 2 and 9 follow.
+- Look-alike D (the reviewer's commit form) joins A, B and C; all four re-run.
+- Criterion 12's baseline gains the post-#48 count (70 rows, 70 sources).
+
+**Two options.**
+
+- **A — apply the patch as it stands** (an owner, or a session the owner starts
+  with the override). *Cost:* five minutes and one gate run. *Buys:* the branch
+  goes green and round 3 can be judged whole.
+- **B — rule on the 2026-09-08 entry first**, then let the loop apply its own
+  drafts under whatever rule results. *Cost:* #47 stays red until then. *Buys:*
+  this entry never has to be written again.
+
+**Recommendation: A now, B soon.** They do not compete.
