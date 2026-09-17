@@ -1248,6 +1248,16 @@ printf '%s\n' "$ss" | grep '^  FAIL' || true
 [ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
   || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
 
+echo "== a concept's source is one of a closed set, and an artifact is anchored on the commit"
+# specs/findings-are-concepts.md, criteria 1, 2 and 9. The write path used to
+# refuse four queues by prefix and accept everything else, so a scheme walked
+# past it and a movable tag was recorded as an immutable anchor. The pin runs
+# the real enqueue -> drain, then replays move-the-tag and delete-the-tag.
+fs_out="$(python3 "$REPO/tests/pins/finding-sources-closed-set.py" 2>&1)"; fs_rc=$?
+printf '%s\n' "$fs_out" | grep '^  FAIL' || true
+[ "$fs_rc" = 0 ] && ok "every accepted source shape passes, every other is refused, a moved or deleted tag is reported" \
+  || fail "finding sources: $(printf '%s' "$fs_out" | tail -1)"
+
 echo "== a secret on a Bash command line is refused, and never echoed"
 # The 2026-09-07 vector itself. check-tools.py reads .mcp.json and nothing
 # else, so until this guard existed the command that burned the token ran

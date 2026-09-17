@@ -55,6 +55,24 @@ The guard rail that was only a sentence.
 
 ### Fixed
 
+- **A concept's source is now one of a closed set, not "anything that is not
+  on a list".** `loopkit_memory/okf.py` refused four queues by `startswith` on
+  the raw string and accepted everything else, so `x://state/triage.md`, a
+  branch under `tag://`, a tag that did not exist, `../outside.md`, an absolute
+  path and the queue passed as `payload.frontmatter.sources` were all written.
+  Every source now goes through `resolve_source`, which accepts a repo file
+  named by its exact path, or `commit://<40-hex>/<path>` resolving to a regular
+  file in a commit of this repository, and refuses the rest with rc=3.
+  **Behaviour change:** a source that does not exist, and an `https://` source,
+  are refused at enqueue where they used to be accepted.
+- **An immutable artifact is anchored on the commit, never on a tag.**
+  `tag://<tag>/<path>` is input only: resolved under `refs/tags/`, recorded as
+  `commit://<sha>/<path>` with the blob id (`x_blob`) and the tag as a note
+  (`x_label`). `OkfKnowledge.artifact_drift`, merged into `knowledge
+  scan-drift`, reports `label-moved`, `label-gone`, `artifact-unresolvable`,
+  `artifact-changed` and `source-shape-unknown`; `knowledge verify` exits 4 on
+  the last. A moved or deleted tag used to be silent on both. Pinned both ways
+  in `tests/pins/finding-sources-closed-set.py`.
 - **A citation pin bound a SET of lines, not the line it named.** Pass 2 of
   `check-citations.py` matched a pin with `any(...)` across every citation of
   that path in that document. Where a document cites a file once that is exact;
