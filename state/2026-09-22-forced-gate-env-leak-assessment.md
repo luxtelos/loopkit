@@ -22,7 +22,7 @@ Two runs on a pristine detached worktree of `de64af9`, nothing edited between:
    the reviewer's). Verdict lines, quoted:
 
    ```
-   >> bash tests/selftest-report.sh /Volumes/evm/tmp-agent/test-report.json.7rEvoN
+   >> bash tests/selftest-report.sh $TMPDIR/test-report.json.7rEvoN
    selftest-report: 332 assertions, 6 failed, rc=1
    FAIL: 6 NEW test failure(s) not in the baseline:
    FAIL: new test failures vs state/known-test-failures.txt
