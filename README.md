@@ -37,7 +37,7 @@ that transfers.
 | Things that need a human get guessed                 | `inbox/needs-human.md` with a required shape: whole context, both options costed. Edits ping a webhook. Rows can sit `blocked`, counted but never polled. |
 | Findings become code whether or not code was the fix | `loop-assess` classifies first — measurement, code, tool, spec, process, architecture, prompt, decision — and only `code` reaches the spec-writer.        |
 | A design has two writers or a guard-then-write       | `run-state-model` — FizzBee, Quint/Apalache and TLA+ behind one driver with one honest exit-code contract (PASS / VIOLATION / ERROR / UNPROVEN).           |
-| `file:line` citations rot                            | `check-citations.py` — structural check on every citation, regex pins on the load-bearing ones; a run that finds no citation reports EMPTY, never a green PASS.                                                            |
+| `file:line` citations rot                            | `check-citations.py` — structural check on every citation, regex pins on the load-bearing ones, each bound to the ONE citation that makes its claim; a run that finds no citation reports EMPTY, never a green PASS.                                                            |
 
 ## Install
 

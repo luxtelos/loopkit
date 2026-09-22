@@ -31,7 +31,8 @@ tags: [domain/loop, origin/constitution, lane/billing]
 status: draft                       # draft | stable | deprecated  (stable = a human ratified it)
 sources:
   - id: constitution
-    resource: constitution.md       # a FILE in the repo, never a directory, never a queue
+    resource: constitution.md       # a FILE in the repo by its exact path, or commit://<40-hex>/<path>;
+                                    # a closed set — a queue, a directory, a tag or any other scheme is refused
 enforced_by:                        # Invariant and Gate only — what makes it real
   - hook: block_dangerous.py
 generated: {by: process:loopkit/seed, at: "2026-09-06T…"}
@@ -67,7 +68,7 @@ human repair.
 | `drain` | apply the queue | 0 / 6 dead-lettered (escalated to `inbox/needs-human.md`) |
 | `verify` | OKF conformance + house rules | 0 / 4 |
 | `reindex [--check]` | regenerate `index.md`; `--check` exits 5 if bytes would change | 0 / 5 |
-| `scan-drift` | which concepts cite sources whose bytes moved | 0 |
+| `scan-drift` | which concepts cite sources whose bytes moved — and, for a `commit://` source, whose commit no longer resolves or whose noted tag moved or went | 0 |
 
 ## Rulings, and proving they are enforced
 

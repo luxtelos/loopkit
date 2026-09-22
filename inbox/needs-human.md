@@ -72,7 +72,11 @@ and stops. What happens next is undecided.
   different budget on a slow network, so fixtures cannot pin it and CI is flaky
   by construction.
 
-**Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
+**RESOLVED 2026-09-08 — Q5 — criterion 23 says usage must be `0`; the code says absent. (criteria 21, 23)**
+
+Ruled in ADR 0005: the budget is spent against a pre-flight estimate, so
+`usage` is no longer load-bearing; it must be explicit rather than a fabricated
+`0`, and nothing dangerous rides on it. `provider.py`'s absent-not-zero stands.
 
 Only you can settle this, because it is the spec that has to move, and a spec
 is not an agent's to edit. `plugins/loopkit/loopkit_core/provider.py` implements
@@ -330,3 +334,184 @@ What I would fix before submitting, and would rather you decide on:
 
 Neither blocks a submission. Both are things I would rather you knew before
 your name is on it.
+
+## Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08)
+
+Raised 2026-09-07 from the PR #29 round-2 review. **Not urgent, but it recurs
+every time an agent touches `specs/`.**
+
+`protect_governance.py` guards `specs/`. The round-2 implementer needed to edit
+its own spec, used the documented inline `GOVERNANCE_EDIT_OK=1` override, and
+disclosed it on the PR as its own call rather than an owner's. The reviewer
+judged it legitimate on the facts and then named the real problem:
+
+> the hook cannot distinguish a draft-on-a-branch from a ratified-spec-on-main.
+
+That is the whole issue. Editing an unmerged draft of your own spec is ordinary
+work. Editing a ratified spec on `main` is a governance act. The hook sees one
+path and cannot tell them apart, so the override is currently the same gesture
+for both — and an agent can perform it unilaterally.
+
+**Option A — teach the hook the difference.** Allow the override when the target
+spec is not yet an ancestor of `main`; refuse otherwise.
+*Cost:* the hook must ask git about merge-base on every write, so it gets slower
+and gains a failure mode (a hook that cannot reach git must then decide whether
+to fail open or closed — and either choice is wrong in one direction).
+*Buys:* agents stop needing the override for ordinary drafting, so the gesture
+becomes rare enough that using it means something.
+
+**Option B — keep one override, require it be declared.** Any use must name a
+reason in the PR body, and a reviewer must judge it.
+*Cost:* it stays a social control, not a technical one — it works exactly as
+well as reviewers are attentive, which today's record does not flatter.
+*Buys:* nothing to build; works now; no new failure mode in the hook.
+
+**Recommendation: A**, because B is the shape this repo keeps getting burned by
+— a rule that holds only while someone remembers to look. But A costs real work
+and adds a fail-open/fail-closed decision, so it is your call, not mine.
+
+Blocking nothing today. PR #29 proceeds either way.
+
+## Criterion 4 of specs/findings-are-concepts.md: patch the vendored actor or wait upstream (2026-09-09)
+
+Two decisions, one entry, because they share a transcript.
+
+**What was measured.** ADR 0007 (accepted 2026-09-07) rests Option C on
+"`apply_verify` refuses a self-authenticated human claim". The spec for it
+measured the vendored actor instead of reading the ADR, and the reviewer of
+PR #47 reproduced it independently in a scratch git repo — one message per
+door, then `drain --json`:
+
+```
+door3  UPSERT by process:probe/1, payload frontmatter carries verified human:akul
+       -> APPLIED  verified=[{by: human:akul}]  trust=human-reviewed
+door2  VERIFY by process:probe/1 claiming human:akul, message NOT committed
+       -> APPLIED  verified=[{by: human:akul}]  trust=human-reviewed
+door1  VERIFY by process:probe/1 claiming human:akul, message committed by github-actions[bot]
+       -> DEAD-LETTERED  (verified=None, trust=unverified)
+ctl    VERIFY by human:akul -> APPLIED;  VERIFY by process:x/1 as process:x/1 -> APPLIED
+```
+
+`_assert_human_claim_is_credible` runs only on the `verify` branch, and
+`apply_upsert` copies payload frontmatter wholesale. Door 2 is the door the
+loop walks every tick (enqueue and drain, nothing committed in between); door 3
+needs no guard at all. So the ADR's sentence is true of one op and false of the
+path in use, and the trust tiers it was chosen to make real are forgeable
+today. Criterion 4 of the spec is deliberately RED for this; criterion 5's
+detector is satisfiable by a forged entry until it lands.
+
+**Decision 1 — where the fix goes.** The fix is small and does not depend on
+git: refuse a `human:` claim whose message actor is not `human:`, on every op,
+and strip `verified` from upsert payload frontmatter. It lands in
+`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py`, whose header reads
+"VENDORED verbatim … Do not edit here: fix upstream, re-vendor, keep this
+header." The implementer cannot satisfy the criterion without either breaking
+that header or waiting on a repository this loop does not drive. That is yours.
+
+- **Option A — patch the vendored copy locally and carry the patch.** About
+  twenty lines in two functions, plus a header note naming the divergence and
+  a pin that goes red if a re-vendor drops it. Cost: the header stops being
+  true ("verbatim" becomes "verbatim plus one patch"), and every future
+  re-vendor must re-apply it or the pin fails the suite. Benefit: criterion 4
+  goes green in the implementation PR for this spec, on this repo's own
+  schedule.
+- **Option B — fix upstream (origin project, commit 48d75b05 lineage) and
+  re-vendor.** Cost: latency nobody here controls, and the spec's write-path
+  table claims a protection it does not have for as long as that takes;
+  criterion 5's `human:` half is decorative meanwhile. Benefit: the header stays
+  true and the two copies never diverge.
+- If you want a recommendation rather than a menu: A, with the pin, and an
+  upstream issue opened the same day so B happens anyway and the patch retires
+  on the next re-vendor. That is a recommendation, not a decision, and the spec
+  does not encode it.
+
+**Decision 2 — the ADR sentence.** `docs/adr/0007-routing-findings-through-the-knowledge-layer.md`
+says `apply_verify` refuses a self-authenticated human claim. Measured false on
+the upsert path and on the uncommitted verify path. An accepted ADR is
+governance and is not the loop's to correct. Proposed wording, for you to
+accept, edit or refuse: *"`apply_verify` refuses a self-authenticated human
+claim only when the message file has a known non-human git author; on the
+uncommitted path the loop uses, and on `upsert`, the claim is accepted. Closing
+that is the first work item of the spec that implements this ADR."*
+
+**Where this sits.** Criterion 4 stays in the spec as a dependency — the spec
+cannot claim actor-authenticated verification without it. This entry is the
+escalation half. The row for it on `state/triage.md` is keyed by
+`inbox_to_triage.py`, not by hand, and is `blocked` on the two decisions above.
+
+## Round-3 wording for specs/findings-are-concepts.md is written and waits on a hand allowed to apply it (2026-09-18)
+
+**RESOLVED 2026-09-22 — applied in `d18901f` on PR #47.** The owner enabled Autofix on
+the PR (standing authorization to fix a failing check and push), and the patch was
+applied under it with `GOVERNANCE_EDIT_OK=1` disclosed in the commit message and the
+PR comment. `inbox/findings-are-concepts-round3.patch` no longer exists; the citation
+gate is green on `d18901f`. The commands below are history, not instructions. The
+general ruling — whether an implementing agent may grant itself that override —
+is the 2026-09-08 entry above and is still open; this resolution does not answer it.
+
+**What is blocked.** PR #47 round 3 changed `plugins/loopkit/loopkit_memory/okf.py`
+— the source refusal list became a closed set, and an immutable artifact is now
+anchored on its commit, not on a tag. The spec has to say so, and one sentence in
+it ("loop state cannot be dressed up as a finding") was measured false and must
+be corrected. `protect_governance.py` refused the edit to `specs/`:
+
+> This is a human decision, not a loop edit. If an owner has ratified the
+> change, re-run with GOVERNANCE_EDIT_OK=1 … Otherwise route the proposed
+> wording to inbox/needs-human.md.
+
+No owner has ratified it, and whether an implementing agent may grant itself
+that override is the open ruling two entries up (2026-09-08). The hook guards
+the Edit tool; a Bash write would have walked past it
+(`PR #46 2026-09-08 §governance-guard-is-a-blocklist`). I did not use that door.
+Rounds 1 and 2 of this PR did use the override, and said so; this round the
+question is on the board unanswered, so this round does not.
+
+**What this costs while it waits.** `check-citations.py` is RED on the branch,
+one problem, and it is right to be: the spec cites `okf.py:142` for a refusal
+that no longer exists, and the gate says "the claim is now false and must be
+rewritten, not re-pointed". `tests/selftest.sh` carries that one FAIL line and
+no other. The code, the pin and the #48 merge are on the branch and reviewable.
+
+**The wording, ready to apply.** `inbox/findings-are-concepts-round3.patch`
+touches two files and nothing else: `specs/findings-are-concepts.md` and
+`.loopkit/citations.json` (the pin on the old refusal line is re-pointed at
+`resolve_source`, and one pin is added for `artifact_drift`). They travel
+together because either alone leaves the gate red.
+
+```
+git apply --check inbox/findings-are-concepts-round3.patch
+git apply inbox/findings-are-concepts-round3.patch
+env -u CLAUDE_PROJECT_DIR python3 plugins/loopkit/scripts/check-citations.py   # from the repo root
+```
+
+Measured in a throwaway clone at `c3da4a3`, from the repo root with
+`CLAUDE_PROJECT_DIR` unset. Before the patch: 52 citations, 28 pinned, FAIL, 1
+problem. After: **53 citations, 29 pinned, PASS**. Control: one line inserted
+into `okf.py` turns both new pins red, and restoring it turns them green. The
+clone was discarded; nothing from it was committed. What the patch says, in
+short:
+
+- Case 4's anchor is `commit://<40-hex>/<path>`. `tag://` is input only: resolved
+  under `refs/tags/`, recorded as the commit, the tag kept as a note (`x_label`).
+- New section "A tag is a label, not an anchor": the reviewer's move-the-tag and
+  delete-the-tag replayed — `label-moved`, `label-gone`, the commit-only concept
+  untouched, the untouched tag silent. An unresolvable commit is reported
+  `artifact-unresolvable` by `scan-drift`; the shallow-clone cost is stated.
+- "Why case 2 is a refusal" is rewritten around the closed set; the false
+  sentence is replaced by what the code enforces; the `payload.frontmatter.sources`
+  side door is recorded.
+- Read path: case 4 validates by resolving `<sha>:<path>` against `x_blob`, and no
+  longer falls to `verified {by, at}`. Criteria 1, 2 and 9 follow.
+- Look-alike D (the reviewer's commit form) joins A, B and C; all four re-run.
+- Criterion 12's baseline gains the post-#48 count (70 rows, 70 sources).
+
+**Two options.**
+
+- **A — apply the patch as it stands** (an owner, or a session the owner starts
+  with the override). *Cost:* five minutes and one gate run. *Buys:* the branch
+  goes green and round 3 can be judged whole.
+- **B — rule on the 2026-09-08 entry first**, then let the loop apply its own
+  drafts under whatever rule results. *Cost:* #47 stays red until then. *Buys:*
+  this entry never has to be written again.
+
+**Recommendation: A now, B soon.** They do not compete.

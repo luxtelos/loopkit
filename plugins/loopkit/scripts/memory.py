@@ -86,7 +86,7 @@ def main() -> int:
     ks.add_parser("get", parents=[common]).add_argument("path")
     ke = ks.add_parser("enqueue", parents=[common]); ke.add_argument("--op", default="upsert"); ke.add_argument("--target", required=True)
     ke.add_argument("--reason", required=True); ke.add_argument("--by", default="process:loopkit/memory.py"); ke.add_argument("--type", dest="ctype")
-    ke.add_argument("--title"); ke.add_argument("--description"); ke.add_argument("--tags"); ke.add_argument("--sources", help="comma-separated repo-relative files")
+    ke.add_argument("--title"); ke.add_argument("--description"); ke.add_argument("--tags"); ke.add_argument("--sources", help="comma-separated: repo-relative files, or commit://<40-hex>/<path> for an immutable artifact (tag://<tag>/<path> is resolved to its commit and recorded as one); anything else is refused")
     ke.add_argument("--enforced-by", help="comma-separated kind:ref, e.g. hook:protect_tests.py,test:tests/x.test.ts")
     ke.add_argument("--body"); ke.add_argument("--body-file"); ke.add_argument("--status", dest="cstatus", default="draft")
     ks.add_parser("drain", parents=[common]); ks.add_parser("verify", parents=[common]); ks.add_parser("scan-drift", parents=[common])

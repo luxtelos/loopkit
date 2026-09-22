@@ -280,6 +280,52 @@ expect_rc 1 "citations: a line past EOF fails" python3 "$P/scripts/check-citatio
 printf '# CLAUDE.md\nSee `app.ts:1`.\n' > "$T/CLAUDE.md"
 expect_rc 0 "citations: a real line passes" python3 "$P/scripts/check-citations.py" --root "$T"
 
+# ── a pin must bind the LINE it names, not the SET of cited lines ──────────
+# Until 2026-09-08, pass 2 of the citation gate was `any(...)` over EVERY
+# citation of that path in that document. So a pin over a multiply-cited file
+# asserted only that SOME citation in the document landed on a matching line —
+# never that the sentence making the claim did. Measured on this repo before
+# the fix: rotating all 16 `triage_state.py` citations in the M2 spec onto each
+# other's lines (every citation wrong, the cited SET unchanged) still printed
+# "PASS — every citation points at what it claims", and 12 of the 15 pins were
+# non-binding. Nothing in the repo was wrong; the tripwire was absent, which is
+# the defect class this project hunts hardest.
+#
+# The five cases below ARE that missing tripwire, and they are the reason the
+# 5th pin element exists. Each was run against the pre-fix script first: cases
+# 1, 3 and 5 passed it, which is the bug.
+echo "== citations: a pin binds one line, not the set of cited lines"
+PT="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-pin.XXXXXX")"
+mkdir -p "$PT/.loopkit"
+printf 'alpha\nbeta\n' > "$PT/app.py"
+# Two claims, two citations of the same path. The blank run between them keeps
+# each citation outside the other's anchor window, which is why that window is
+# deliberately small.
+pin_doc() {  # $1 = line cited for alpha, $2 = line cited for beta
+  printf 'the alpha rule is enforced at `app.py:%s`\n\n\n\n\n\nthe beta rule is enforced at `app.py:%s`\n' \
+    "$1" "$2" > "$PT/CLAUDE.md"
+}
+pin_cfg() { printf '{"scanned": ["CLAUDE.md"], "pins": [%s]}\n' "$1" > "$PT/.loopkit/citations.json"; }
+
+pin_doc 1 2
+pin_cfg '["CLAUDE.md", "app.py", "^alpha$", "the alpha rule"]'
+expect_rc 1 "citations: an unanchored pin over a twice-cited path is REFUSED, not passed" \
+  python3 "$P/scripts/check-citations.py" --root "$PT"
+pin_cfg '["CLAUDE.md", "app.py", "^alpha$", "the alpha rule", "alpha rule is enforced"]'
+expect_rc 0 "citations: an anchored pin passes while its own citation is right" \
+  python3 "$P/scripts/check-citations.py" --root "$PT"
+# The rotation, minimised: both lines are still cited, each by the wrong sentence.
+pin_doc 2 1
+expect_rc 1 "citations: an anchored pin fails when the two citations are swapped" \
+  python3 "$P/scripts/check-citations.py" --root "$PT"
+pin_cfg '["CLAUDE.md", "app.py", "^alpha$", "the alpha rule", "*"]'
+expect_rc 0 'citations: "*" still means cited-somewhere, but has to be asked for' \
+  python3 "$P/scripts/check-citations.py" --root "$PT"
+pin_doc 1 2
+pin_cfg '["CLAUDE.md", "app.py", "^alpha$", "the alpha rule", "prose that is not there"]'
+expect_rc 1 "citations: an anchor matching nothing fails, never silently widens" \
+  python3 "$P/scripts/check-citations.py" --root "$PT"
+
 # A citation checker that finds nothing must not print PASS. It also must not
 # fail a project that legitimately cites no line numbers — so the verdict word
 # changes and the exit code is the project's decision. And the scan has to
@@ -1201,6 +1247,16 @@ ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
 printf '%s\n' "$ss" | grep '^  FAIL' || true
 [ "$ss_rc" = 0 ] && ok "every token shape is caught, and prose about tokens is not" \
   || fail "secret shapes: $(printf '%s' "$ss" | tail -1)"
+
+echo "== a concept's source is one of a closed set, and an artifact is anchored on the commit"
+# specs/findings-are-concepts.md, criteria 1, 2 and 9. The write path used to
+# refuse four queues by prefix and accept everything else, so a scheme walked
+# past it and a movable tag was recorded as an immutable anchor. The pin runs
+# the real enqueue -> drain, then replays move-the-tag and delete-the-tag.
+fs_out="$(python3 "$REPO/tests/pins/finding-sources-closed-set.py" 2>&1)"; fs_rc=$?
+printf '%s\n' "$fs_out" | grep '^  FAIL' || true
+[ "$fs_rc" = 0 ] && ok "every accepted source shape passes, every other is refused, a moved or deleted tag is reported" \
+  || fail "finding sources: $(printf '%s' "$fs_out" | tail -1)"
 
 echo "== a secret on a Bash command line is refused, and never echoed"
 # The 2026-09-07 vector itself. check-tools.py reads .mcp.json and nothing
