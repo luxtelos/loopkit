@@ -441,6 +441,14 @@ escalation half. The row for it on `state/triage.md` is keyed by
 
 ## Round-3 wording for specs/findings-are-concepts.md is written and waits on a hand allowed to apply it (2026-09-18)
 
+**RESOLVED 2026-09-22 — applied in `d18901f` on PR #47.** The owner enabled Autofix on
+the PR (standing authorization to fix a failing check and push), and the patch was
+applied under it with `GOVERNANCE_EDIT_OK=1` disclosed in the commit message and the
+PR comment. `inbox/findings-are-concepts-round3.patch` no longer exists; the citation
+gate is green on `d18901f`. The commands below are history, not instructions. The
+general ruling — whether an implementing agent may grant itself that override —
+is the 2026-09-08 entry above and is still open; this resolution does not answer it.
+
 **What is blocked.** PR #47 round 3 changed `plugins/loopkit/loopkit_memory/okf.py`
 — the source refusal list became a closed set, and an immutable artifact is now
 anchored on its commit, not on a tag. The spec has to say so, and one sentence in
