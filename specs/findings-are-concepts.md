@@ -14,7 +14,9 @@ number below was re-measured. Two moved since the first draft measured them at
 `3ea14d9`: `check-citations.py`'s `CITATION` pattern, which #45 pushed from line
 120 to 174, and line 36 of `okf.py`, whose *number* holds while this PR changes its
 *content* by one token (`Finding` joins `TYPES`) — the pin on it is what proves
-the number. To re-verify one: `git diff 039b4c5..HEAD -- <path>`; an empty diff
+the number. Round 3 replaced `okf.py`'s refusal list with a closed set, so every
+citation of that file below the `TYPES` line is written **as of `c3da4a3`**, the
+commit that made the change, and was measured there. To re-verify one: `git diff 039b4c5..HEAD -- <path>`; an empty diff
 means the number still holds. `check-citations.py` matches `path:line` and ignores the
 suffix, so the convention costs the gate nothing and is still checked by it.
 
@@ -115,12 +117,16 @@ the hole it fills is described below it.
 >    It belongs in a triage row's cells. Do not write a concept.
 > 3. You can name **no file at all** → it is neither. It is a judgement waiting
 >    on a person → `inbox/needs-human.md`, with the whole context.
-> 4. The file you name is **immutable** — it lives at a tag, a sha or a released
->    version (`git show v0.2.2:<path>`), and no commit can change those bytes →
->    it is a **finding**, and its anchor is the artifact id, never a HEAD path.
->    Its `sources` entry names the artifact with a scheme —
->    `tag://v0.2.2/<path>` or `commit://<sha>/<path>` — the actor digests
->    nothing for it, and validation resolves `verified {by, at}` instead.
+> 4. The file you name is **immutable** — it is a file *in a commit*
+>    (`git show <sha>:<path>`), and no later commit can change those bytes → it
+>    is a **finding**, and its anchor is the commit id: never a HEAD path, and
+>    never a *name* for a commit. Its `sources` entry is
+>    `commit://<40-hex sha>/<path>`. A tag, a release or a version number is a
+>    label for a commit, and a label can be moved or deleted. You may hand the
+>    write path `tag://<tag>/<path>`; it resolves the tag to its commit and
+>    records the commit, keeping the tag name beside it as a note. The actor
+>    digests nothing for such a source; validation resolves `<sha>:<path>` in
+>    git instead.
 
 The rule is not asked in the abstract, and it is not asked twice. It is asked
 about the one sentence you were about to write down, and the file you name
@@ -132,68 +138,169 @@ under ADR 0006, and must not be written as a concept at all.
 
 Take the worked table's third row, *"v0.2.2's `loop-next.sh` reports IDLE on a
 six-column queue"*, and apply the three-answer rule without judgement. The bytes
-that make it true are `git show v0.2.2:plugins/loopkit/scripts/loop-next.sh` —
-a tagged file, which cannot change. So no file whose bytes *can* change obliges
+that make it true are `plugins/loopkit/scripts/loop-next.sh` as it stood in the
+commit v0.2.2 names, `ef336b4` — a file in a commit, which cannot change. So no file whose bytes *can* change obliges
 a re-read → case 3 → `inbox/`. Wrong: it is plainly a finding and needs no
 human. The escape is to name `plugins/loopkit/scripts/loop-next.sh` at HEAD →
 case 1 → a concept anchored to a file the fact is **not about**: the next edit
 to `loop-next.sh` marks it stale while the fact about v0.2.2 stays true forever.
 Both answers the three-answer rule gives are wrong, and choosing between them
 is judgement — the one thing the rule exists to remove. The class is *facts
-about immutable artifacts*: a tag, a sha, a released version, a prior commit.
+about a file in a commit*. A tag, a release and a version are how people *name*
+such a commit; none of them is the immutable thing. Round 2 of this spec got
+that wrong, and "A tag is a label, not an anchor" below is the correction.
 
 The write path already has the slot; the rule was not pointing at it.
 `_capture_digests` records nothing for a resource that carries a scheme
 (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:706 as of 039b4c5`),
 and `scan_drift` walks only `repo-file` entries
 (`plugins/loopkit/loopkit_memory/vendor/knowledge_actor.py:1270 as of 039b4c5`),
-so a scheme-carrying source is never digested and never drifts — which is
-exactly right for bytes that cannot move. Validation of such a concept falls to
-the read path's second branch, `verified {by, at}`, the same slot a
-non-version-controlled target uses. Measured on this branch, in a scratch
-project with the adapter enabled:
+so a scheme-carrying source is never digested and never drifts in the actor's
+scan — which is right for bytes that cannot move, and is also why the actor
+cannot be what validates it. LoopKit's own adapter does that:
+`artifact_drift`, at
+`plugins/loopkit/loopkit_memory/okf.py:328 as of c3da4a3`, resolves
+`<sha>:<path>` for every such source and `knowledge scan-drift` lists what it
+finds beside the actor's reports.
+
+### A tag is a label, not an anchor
+
+Round 2 of this spec recorded `tag://v0.2.2/<path>` as the source and called it
+immutable. A reviewer then ran `git tag -f v0.2.2 HEAD`: the bytes under the tag
+differed, and `scan-drift` and `verify` both said nothing. Then `git tag -d
+v0.2.2`: still nothing. The concept had no digest by construction and validated
+on `verified {by, at}`, which records who and when and never *which bytes* — so
+a fact about "v0.2.2's `loop-next.sh`" stayed validated after v0.2.2 meant
+something else, and after it meant nothing. The same reviewer showed what does
+work: a `commit://<sha>/<path>` source was accepted, never drifted, and read
+back. A commit id is the immutable thing; a tag is a movable name for one.
+
+So the write path anchors on the object. `tag://<tag>/<path>` is accepted as
+INPUT and never recorded: the tag is resolved through `refs/tags/` alone — a
+branch cannot wear the scheme — peeled to its commit, and the concept's source
+becomes `commit://<sha>/<path>`, with the blob id of the cited bytes (`x_blob`)
+and the tag name as a note (`x_label`). A tag name may contain slashes; git
+refuses `refs/tags/a` beside `refs/tags/a/b`, so at most one split of the input
+names a tag and there is no choice to make.
+
+Measured on this branch in a standalone clone, adapter enabled, through
+`memory.py knowledge enqueue` → `drain`. C is the tag form, D the reviewer's
+commit form, CTL a HEAD file:
 
 ```
-enqueue  --type Finding --sources tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh   rc=0
-drain                                                                            rc=0
-applied  sources: [{id: loop-next, resource: "tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh"}]
-         x_source_digests: ABSENT on disk (no repo-file source, nothing to record)
-verify-bundle                                                                    rc=0
-scan-drift  before an edit: 8 drifted, case-4 concept not among them
-scan-drift  after a one-line edit to the CONTROL's source (a HEAD file): 9 drifted,
-            the control newly listed, the case-4 concept still absent
+enqueue C    tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh                 rc=0
+enqueue D    commit://ef336b4d60e1…e17a/plugins/loopkit/scripts/loop-next.sh   rc=0
+enqueue CTL  docs/GETTING-STARTED.md                                           rc=0
+drain        applied 4, dead-lettered 0
+on disk C    resource commit://ef336b4d60e1…e17a/…/loop-next.sh  x_blob ae2c0c41a01a  x_label tag:v0.2.2  digests 0
+on disk D    resource commit://ef336b4d60e1…e17a/…/loop-next.sh  x_blob ae2c0c41a01a  (no label)         digests 0
+on disk CTL  resource docs/GETTING-STARTED.md                                                           digests 1
+
+scan-drift   tag untouched, nothing edited              none listed               <-- CONTROL
+scan-drift   one-line edit to CTL's source              /findings/CTL.md  source-changed   <-- CONTROL: the scan fires at all
+git tag -f v0.2.2 HEAD                                  bytes under the tag differ: YES
+             recorded source ef336b4:…/loop-next.sh     still resolves to ae2c0c41a01a
+scan-drift                                              /findings/C.md  label-moved    (D not listed)
+git tag -d v0.2.2
+scan-drift                                              /findings/C.md  label-gone     (D not listed)
+git tag v0.2.2 ef336b4 (put back)
+scan-drift                                              none listed               <-- CONTROL
 ```
 
-The control is the half that matters: a scan that reports zero for the case-4
-concept proves nothing unless the same scan reports the edit to a sibling whose
-source *is* a HEAD file. It did.
+Two different things are being said there and they must not be confused. **The
+bytes are anchored on the commit and never depended on the tag**: after both
+attacks the recorded source resolves to the recorded blob, and D, which never
+named the tag, is not listed at any point. **The label is watched separately**:
+C's words say "v0.2.2", so the day v0.2.2 stops naming that commit the concept
+is reported, by kind, and a reader about to act on it treats it as failed (see
+"Reading to act"). Before this round both attacks were silent.
+
+**When the recorded commit no longer resolves** — history was rewritten and the
+object pruned, or the clone is shallow and never had it — `artifact_drift`
+reports `artifact-unresolvable`, `knowledge scan-drift` lists the concept, and
+a reader SHALL treat it as failed validation: `stale`, escalate, do not act.
+Pinned in `tests/pins/finding-sources-closed-set.py` by pruning a real commit
+out of a scratch repository; the sha that still resolves is that pin's control.
+It is reported by `scan-drift` and not by `verify`, on purpose: whether an
+object is present depends on the clone, and `verify` is conformance, which must
+give one answer for one tree. The cost is stated rather than hidden: in a
+shallow CI checkout every case-4 concept reports unresolvable. That is the
+correct answer there — nothing in that clone can prove the bytes — and it is
+loud, which the old behaviour was not.
 
 ### Why case 2 is a refusal rather than advice
 
-The four paths in case 2 are the four the write path already rejects, plus
-directories, at
-`plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5`. That is not a
-coincidence to be maintained by hand — it is the same list, and the spec quotes
-the code rather than the code implementing the spec. Loop state cannot be
-dressed up as a finding, because the message is refused before it is written.
-Measured on this branch:
+The write path accepts a **closed set** of source shapes and refuses everything
+else, at the single function every source passes through,
+`plugins/loopkit/loopkit_memory/okf.py:136 as of c3da4a3`:
+
+| Shape | Accepted when | Recorded as |
+|---|---|---|
+| repo file | every `/`-separated segment is, spelled exactly, an entry of the directory before it; every segment but the last is a real directory and the last a real regular file (`lstat`, so a symlink is neither) | itself |
+| artifact | `commit://<40 lowercase hex>/<path>`; the id is a **commit** object in this repository and `<path>` is a regular-file blob in its tree | itself, plus `x_blob` |
+| tag (input only) | `tag://<tag>/<path>`; `<tag>` resolves under `refs/tags/` and the artifact rule then holds for its commit | the **artifact** shape, plus `x_label` |
+
+and, for whichever shape it was, the path is not under `inbox/` and does not
+begin `state/triage`, `state/ticks` or `state/progress` — case 2.
+
+**This used to be a refusal list, and that was the defect.** Until round 3 the
+code was `res.startswith(("inbox/", "state/triage", …))` on the raw string: it
+named the known-bad and permitted the unknown. This spec then said "loop state
+cannot be dressed up as a finding", and that sentence was false — a reviewer
+wrote `x://state/triage.md` and `tag://main/state/triage.md` (a *branch* under
+the tag scheme) straight through it, along with a tag that did not exist.
+Adding those three to the list would have fixed three instances and kept the
+class; this repository has paid for that mistake more than once. The rule is
+now stated the other way round: a source is accepted only when it **is** one of
+the shapes above. The corrected sentence is narrower and is what the code
+enforces: **a source is refused unless it is one of the three shapes, and a
+path that is one of the loop's four queues is refused in every shape.** The
+four-queue list is still an enumeration, deliberately — it *is* case 2, four
+named files — and it is safe now where it was not before because it runs on a
+path already proven canonical: `..`, `./`, `//`, an absolute path, a scheme, a
+case-dressed name and a symlink are none of them a directory entry, so there is
+no spelling left for a queue to hide in.
+
+It also closes a door no reviewer had tried. `apply_upsert` copies
+`payload.frontmatter` onto the concept wholesale, `sources` included, and the
+old check read only `payload.sources` — so the queue passed as
+`payload.frontmatter.sources` was accepted. Both are resolved now.
+
+Measured on this branch through the real write path, and pinned both ways in
+`tests/pins/finding-sources-closed-set.py`:
 
 ```
-REFUSED-at-okf.py      state/triage.md                                the queue
-REFUSED-at-okf.py      state/ticks.jsonl                              the tick log
-REFUSED-at-okf.py      state/progress.md                              the progress file
-REFUSED-at-okf.py      inbox/needs-human.md                           the escalation door
-REFUSED-at-okf.py      plugins/                                       a directory
-rc=0                   state/2026-09-07-blocked-conflates-two-waits.md a dated note
-rc=0                   plugins/loopkit/loopkit_core/loop_next_pick.py  a mechanism file  <-- CONTROL
-rc=0                   tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh  an immutable artifact (case 4)
+ACCEPTED  plugins/loopkit/loopkit_core/loop_next_pick.py      a mechanism file          <-- CONTROL
+ACCEPTED  state/2026-09-07-blocked-conflates-two-waits.md     a dated note              <-- CONTROL
+ACCEPTED  commit://<sha>/<path>                               an artifact (case 4)
+ACCEPTED  tag://v1/<path>, tag://rel/1.0/<path>               recorded as commit://…, lightweight and annotated
+REFUSED   state/triage.md · state/ticks.jsonl · state/progress.md · inbox/needs-human.md · plugins/ · plugins
+REFUSED   tag://v9.9.9-never/…        a tag that does not exist            (reviewer's F)
+REFUSED   tag://main/state/triage.md  a branch under the tag scheme        (reviewer's G)
+REFUSED   x://state/triage.md         an arbitrary scheme                  (reviewer's H)
+REFUSED   tag://main/<good path> · x://<good path>          G and H again, isolated from the queue
+REFUSED   tag://v1/state/triage.md · commit://<sha>/state/triage.md · commit://<sha>/inbox/…
+REFUSED   abbreviated sha · uppercase sha · sha of nothing · 40 hex that is a BLOB · a ref name in the sha slot
+REFUSED   commit path not in the commit · a tree · a symlink in the commit
+REFUSED   COMMIT:// · https:// · file:// · v1:<path> (git revision syntax)
+REFUSED   absolute path · ../outside · src/../state/triage.md · ./state/triage.md · ./<good path> · src//mech.py
+REFUSED   State/Triage.md (case-dressed) · a symlink to the queue · a file that does not exist
+REFUSED   trailing space · trailing newline · empty · no resource key · non-string · a list · a bare dict naming the queue
+REFUSED   one good source beside one queue · the queue, and a scheme, via payload.frontmatter.sources
 ```
 
-The dated note and the mechanism file are the control. A refusal list that
-refuses everything is not a boundary, and a check fed only the bad cases could
-not tell the difference. The eighth row is case 4, accepted by the same write
-path with no change to it; what the actor then records for it is measured under
-"Why there is a fourth answer".
+Every refused row returns rc=3 and queues nothing, and no refused probe ever
+became a concept. Most refused rows cite a path that is accepted on its own, so
+each isolates the one thing wrong with it: the reviewer's G is wrong twice (a
+branch *and* a queue) and on its own cannot say which check caught it. The pin
+was run red first against the unchanged adapter — 57 FAIL, the accepted rows
+and controls passing — and each part of the fix was then broken on a copy, one
+at a time, and the pin named it: the side door (3 rows), `refs/tags/` dropped
+(1), the segment walk replaced by `is_file()` (7), the label check (4), commit
+resolution (5), the queue rule inside a commit (3), the unresolvable report (2).
+
+The accepted rows are the control. A closed set that accepts nothing is not a
+boundary either, and a check fed only the bad cases could not tell.
 
 ### Worked examples
 
@@ -203,7 +310,7 @@ Ordinary cases first, then the two that look like the wrong side.
 |---|---|---|
 | `loop_next_pick.WANT` omits `blocked`, so a blocked row is counted and never served | `loop_next_pick.py` at HEAD, mutable | finding (case 1) |
 | The offload timing pin budgets 200 ms and fails under load, not under regression | the pin script at HEAD, mutable | finding (case 1) |
-| v0.2.2's `loop-next.sh` reports IDLE on a six-column queue | `git show v0.2.2:plugins/loopkit/scripts/loop-next.sh` — immutable; source `tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh` | finding (case 4) |
+| v0.2.2's `loop-next.sh` reports IDLE on a six-column queue | `plugins/loopkit/scripts/loop-next.sh` in the commit v0.2.2 names — immutable; given as `tag://v0.2.2/…`, recorded as `commit://ef336b4d60e1…e17a/plugins/loopkit/scripts/loop-next.sh` | finding (case 4) |
 | Row `plan §0.3 judge-runner` is at `new` | `state/triage.md` only | loop state (case 2) |
 | The backlog is 39 rows, 12 blocked | `state/triage.md` only | loop state (case 2) |
 | Whether agents may self-authorize the `specs/` override | no file — nobody has ruled | `inbox/` (case 3) |
@@ -249,16 +356,28 @@ queue."* Nothing about it looks like loop state and nothing about it needs a
 person, yet under three answers it lands in `inbox/` (no mutable file) or on a
 HEAD path it is not about (false drift on the next edit). Under four answers the
 question is answered the same way and the answer has a slot: the file is
-immutable → case 4 → finding, source `tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh`,
-no digest, validated on `verified`. A and B were not the whole test; C is what
-a rule that only routes mutable files cannot see.
+immutable → case 4 → finding. The author may write
+`tag://v0.2.2/plugins/loopkit/scripts/loop-next.sh`; what is recorded is
+`commit://ef336b4d60e1…e17a/plugins/loopkit/scripts/loop-next.sh`, no digest,
+validated by resolving it. A and B were not the whole test; C is what a rule
+that only routes mutable files cannot see.
 
-**All three, re-run under four answers.** A still splits: *the row says
+**Look-alike D — the reviewer's: the same fact, named by its commit.** *"At
+`ef336b4`, `loop-next.sh` reports IDLE on a six-column queue."* Nobody wrote a
+tag, so there is no label to watch: case 4, source `commit://ef336b4…/…`,
+recorded as given. C and D end with the same anchor and the same `x_blob`; the
+only difference on disk is C's `x_label`.
+
+**All four, re-run on the round-3 write path.** A still splits: *the row says
 `blocked`* names only `state/triage.md` → case 2; *no tick will ever serve it*
 names `loop_next_pick.py` at HEAD, mutable → case 1. B still names only
-`state/triage.md` → case 2, and the write path still refuses the concept. C →
-case 4, measured above. Case 4 changes nothing for A and B, because neither
-names an immutable artifact; it is a fourth answer, not a new tie-breaker.
+`state/triage.md` → case 2, and the write path still refuses the concept. C and
+D → case 4. Measured, in the same run as the transcript under "A tag is a label":
+A's state half rc=3, A's mechanism half rc=0 with a digest, B rc=3, C rc=0, D
+rc=0, and no concept exists for either refused half. None of the four needed a
+judgement: each was routed by the one question, and the closed set changed none
+of their answers. Case 4 changes nothing for A and B, because neither names a
+file in a commit; it is a fourth answer, not a new tie-breaker.
 
 ### The shape of the mistake this rule is guarding against
 
@@ -280,12 +399,12 @@ and the actor's idempotency layer assumes it owns the bytes.
 | `type` | required, exactly `Finding` | agent | this spec, criterion 2 |
 | `title` | required | agent | this spec, criterion 2 |
 | `status` | required; `draft` on write | agent may write `draft` only | this spec, criterion 5 |
-| `sources` | required, ≥1, repo-relative files or artifact ids (case 4) | agent | `plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5`; criteria 1, 2 |
+| `sources` | required, ≥1, each one of the closed set: a repo file, or `commit://<sha>/<path>` (case 4; `tag://` is input only) | agent; `x_blob` and `x_label` inside an entry are **the adapter's, never the agent's** — typed values are dropped | `plugins/loopkit/loopkit_memory/okf.py:136 as of c3da4a3`; criteria 1, 2 |
 | `generated {by, at}` | always present | **the actor, never the agent** | the code, criterion 3 |
 | `verified {by, at}` | optional | `verify` op only; `human:` only by a human actor | criterion 4 — **not enforced today** |
 | `stale_after` | optional | `stale` op, or the reader on a failed validation | the code, criterion 7 |
 | `superseded_by` | optional | `deprecate` op | the code |
-| `x_source_digests` | one record per repo-file source; absent on disk when every source is an artifact id (measured, case 4) | the actor, never the agent | the code, criterion 9 |
+| `x_source_digests` | one record per repo-file source; absent on disk when every source is an artifact (measured, case 4) — such a source carries `x_blob` instead | the actor, never the agent | the code, criterion 9 |
 
 Four notes on that table, each measured on this branch.
 
@@ -339,11 +458,24 @@ Normative, and it is ADR 0006 applied to a concept rather than to prose.
   and the reader SHALL reuse that comparison rather than write a second one. Two
   implementations of one rule diverge, and the day they diverge is the day
   somebody trusts the wrong one.
-- **Where the target is not version-controlled, or is immutable** — a released
-  runtime's behaviour, a tagged or sha-pinned file (case 4), an external
-  service, a decision taken in a meeting — there is no digest to compare (the
-  actor records none for a scheme-carrying source), so validation resolves
-  `verified {by, at}` instead. The
+- **Where the target is a file in a commit (case 4)** — every source shaped
+  `commit://<sha>/<path>`: resolve `<sha>:<path>` in git and compare the blob
+  id with the recorded `x_blob`. Equal → validated. If it does not resolve
+  (`artifact-unresolvable`), resolves to other bytes (`artifact-changed`), or
+  the entry carries an `x_label` whose tag no longer names `<sha>`
+  (`label-moved`, `label-gone`) → failed. A failed label with sound bytes is
+  still failed: the concept's words name the label, and a reader cannot act on
+  "v0.2.2's …" once v0.2.2 is something else. The report says which half
+  broke. A source on disk in any other scheme (`source-shape-unknown`) → failed,
+  and `verify` exits 4 on it. This is the comparison `artifact_drift` performs
+  and the reader SHALL reuse it, for the reason given above. It does **not**
+  fall back to `verified {by, at}`: round 2 sent it there, to the one slot
+  criterion 4 measures as forgeable, when a byte check was free.
+- **Where the target is not version-controlled** — a released runtime's
+  behaviour, an external service, a decision taken in a meeting — there is no
+  digest and no object to resolve, so validation resolves `verified {by, at}`
+  instead. No source shape exists for such a target today — the closed set has
+  none — so a concept about one cites the repo file that records it. The
   concept must carry at least one entry, and the reader SHALL report it verbatim
   with its actor and its date, so the human reading the tick output can judge a
   three-month-old machine confirmation for themselves.
@@ -419,17 +551,25 @@ to be.
 1. WHEN an agent enqueues a finding-concept whose `sources` name only
    `state/triage.md`, `state/ticks.jsonl`, `state/progress.md`, a path under
    `inbox/`, or a directory, the write path SHALL refuse the message and SHALL
-   NOT write a concept.
+   NOT write a concept. The refusal SHALL apply to the path part of every
+   accepted shape, and to `payload.frontmatter.sources` as to
+   `payload.sources`. More generally the write path SHALL accept a source only
+   when it is one of the closed set in "Why case 2 is a refusal", and SHALL
+   refuse every other shape, named or not.
 
-   Check `[today]`: the seven-row transcript in "Why case 2 is a refusal". Five
-   refusals, and **two controls that must not be refused** — a dated note and a
-   mechanism file. Assert both halves in one run; a check fed only the five
-   passes against an `enqueue` that refuses everything.
+   Check `[today]`: `tests/pins/finding-sources-closed-set.py`, wired into
+   `tests/selftest.sh`. It asserts both halves in one run — six accepted rows
+   that must not be refused, among them a dated note and a mechanism file, and
+   forty-five refused rows that must each return rc=3 and queue nothing. A check
+   fed only the refusals passes against an `enqueue` that refuses everything.
+   Run red before the fix (57 FAIL) and against seven single mutations of it.
 
 2. A finding-concept SHALL carry `type: Finding`, a non-empty `title`, a
    `status`, and at least one `sources` entry naming an existing regular file
-   or an immutable artifact id (`tag://`, `commit://` — case 4). `Finding`
-   SHALL be listed in `okf.TYPES`.
+   or a file in a commit, `commit://<40-hex>/<path>` (case 4). The commit and
+   the path in it SHALL resolve at write time; a `tag://` input SHALL resolve
+   under `refs/tags/` and SHALL be recorded as its commit, never as the tag.
+   `Finding` SHALL be listed in `okf.TYPES`.
 
    Check `[today]`: a validator over a fixture bundle, with a control per field.
    `type: Finding` must be accepted by `okf_bundle.conformance_errors` — measured
@@ -557,10 +697,17 @@ to be.
      the control and it is the half that matters: a drift detector first run
      after the edit cannot tell a real detection from a detector that always
      fires.
+   - `[today]`: the case-4 half. A concept written from a `tag://` input
+     reports nothing while the tag is untouched (the control), `label-moved`
+     after `git tag -f`, `label-gone` after `git tag -d`, and nothing again once
+     the tag is put back; a concept written from a `commit://` input is listed
+     at no point; a concept whose commit has been pruned reports
+     `artifact-unresolvable` while a sibling whose commit resolves does not.
+     Same pin as criterion 1, and the transcript under "A tag is a label".
    - `[M2c]`: the non-version-controlled half — a concept with no `repo-file`
-     source validates on `verified` alone, and the reader prints the actor and
-     date verbatim. The case-4 concept measured above is the fixture: a
-     `tag://` source and no digest record on disk.
+     and no `commit://` source validates on `verified` alone, and the reader
+     prints the actor and date verbatim. `[M2c]` also owns the reader calling
+     `artifact_drift` before it acts; today an operator's `scan-drift` does.
 
 10. Nothing SHALL schedule re-validation. `scan-drift` SHALL remain invoked only
     by a person.
@@ -601,7 +748,9 @@ to be.
     parses to the same row count and the same status histogram; and
     `tests/pins/loop-next-output-parity.py` passes unmodified. Measured on this
     branch as the baseline: 39 rows —
-    `{blocked: 12, done: 19, fixing: 1, inbox: 1, new: 5, spec-ready: 1}` —
+    `{blocked: 12, done: 19, fixing: 1, inbox: 1, new: 5, spec-ready: 1}` — and,
+    at `0848e3a`, the merge of #48 into this branch, 70 rows over 70 distinct sources —
+    `{blocked: 14, done: 22, fixing: 1, inbox: 1, new: 31, spec-ready: 1}` —
     `COLUMNS = ['finding', 'source', 'priority', 'spec', 'status']`. Assert
     against a freshly parsed count of the same file, **never against the numbers
     in this paragraph**: the totals move with every triage run, and a check that
@@ -665,8 +814,9 @@ control or is itself a control. Counted mechanically over this section: 14 of 14
 - **Error.** A concept with a repo-file-shaped source (no scheme) and no
   matching `x_source_digests` record (hand-written, or upserted with
   `record_digests: false`): failed validation, never passed. A concept whose
-  every source carries a scheme has no digest record by construction (case 4,
-  measured) and validates on `verified`; with no `verified` entry, failed.
+  every source is `commit://` has no digest record by construction (case 4,
+  measured) and validates by resolving it; a `commit://` entry with no `x_blob`
+  (hand-written) still has to resolve, and one that does not is failed.
   Absence of an anchor is not evidence of freshness, in either shape.
 - **Supersession.** A finding replaced by a later one: `deprecate` with
   `superseded_by`, then `link`. A `link` naming a concept that does not exist
@@ -680,10 +830,11 @@ control or is itself a control. Counted mechanically over this section: 14 of 14
 - **Concurrency.** Two agents draining one mailbox: the actor's lock and
   idempotency keys already cover it. Not re-specified here.
 - **A finding about the queue itself.** Legal, and Look-alike A is one. Its
-  `sources` name the queue's *code*, never the queue's *file*. The refusal at
-  `plugins/loopkit/loopkit_memory/okf.py:142 as of 039b4c5` makes the wrong
-  version of it impossible to write, which is why that refusal is quoted in the
-  boundary rather than paraphrased.
+  `sources` name the queue's *code*, never the queue's *file*. The closed set at
+  `plugins/loopkit/loopkit_memory/okf.py:136 as of c3da4a3` refuses the
+  wrong version of it in every spelling the pin tries, which is a measured claim
+  about forty-five shapes and not a proof about all of them — the reason it is
+  an allow-list is that the unmeasured ones are refused by default.
 
 ## Control case
 

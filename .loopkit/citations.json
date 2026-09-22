@@ -109,9 +109,16 @@
     [
       "specs/findings-are-concepts.md",
       "plugins/loopkit/loopkit_memory/okf.py",
-      "^\\s+if res\\.startswith\\(\\(\"inbox/\", \"state/triage\"",
-      "the write path refuses the queue, the tick log, the progress file and inbox/ as sources — this IS the boundary rule's case 2, quoted rather than restated",
-      "^directories, at$"
+      "^def resolve_source\\(root: Path, entry: Any\\) -> dict:$",
+      "every source passes through ONE function that accepts a closed set of shapes and refuses the rest — the boundary rule's case 2 and case 4 are enforced here, as an allow-list, not a refusal list",
+      "^else, at the single function every source passes through,$"
+    ],
+    [
+      "specs/findings-are-concepts.md",
+      "plugins/loopkit/loopkit_memory/okf.py",
+      "^\\s+def artifact_drift\\(self\\) -> list\\[dict\\]:$",
+      "a commit:// source is validated by LoopKit's own adapter, because the vendored scan never walks a scheme-carrying source — this is what notices an unresolvable commit and a moved or deleted tag",
+      "^`artifact_drift`, at$"
     ],
     [
       "specs/findings-are-concepts.md",
