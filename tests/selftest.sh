@@ -12,6 +12,18 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 P="$REPO/plugins/loopkit"
+
+# This suite runs the stop gate as a child, many times, against scratch repos.
+# It is also what the stop gate RUNS on this repo — so on the reviewer's
+# `LOOP_FORCE_GATE=1 bash stop_gate.sh`, every nested gate inherited the outer
+# gate's environment (LOOP_FORCE_GATE=1, and config.env's LOOP_*_CMD lines
+# exported by its `set -a`) and the forced gate could never go green here:
+# 6 failures on 2026-09-18, all the suite's own environment. Scrub it at entry;
+# what a test sets on purpose below still takes. The helper is the one list —
+# see tests/lib/scrub-gate-env.sh, pinned by tests/pins/nested-gate-env-hermetic.sh.
+. "$REPO/tests/lib/scrub-gate-env.sh" || { echo "  FAIL cannot source tests/lib/scrub-gate-env.sh"; exit 2; }
+scrub_gate_env
+
 fails=0
 ok()   { echo "  ok   $1"; }
 fail() { echo "  FAIL $1"; fails=$((fails+1)); }
@@ -1133,6 +1145,15 @@ bsr_n="$(printf '%s' "$bsr_out" | grep -c 'RED, as required' || true)"
 bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
 [ "$bsr_n" = 4 ] && [ "$bsr_not" = 0 ] && ok "all four halves of the branch-shape fix are provably catchable" \
   || fail "branch-shape mutations: $bsr_n/4 red, $bsr_not not red"
+
+echo "== stop gate: nested gate runs are hermetic to the outer gate's environment"
+# The reviewer's forced gate runs THIS suite, and this suite runs the gate as a
+# child. Without a scrub the child inherits LOOP_FORCE_GATE=1 and config.env's
+# exported LOOP_*_CMD lines, and the forced gate can never pass on this repo.
+ng_out="$(bash "$REPO/tests/pins/nested-gate-env-hermetic.sh" "$REPO" 2>&1)"; ng_rc=$?
+printf '%s\n' "$ng_out" | grep -E '^  FAIL' || true
+[ "$ng_rc" = 0 ] && ok "nested stop-gate runs ignore the outer gate's LOOP_* / CLAUDE_PROJECT_DIR" \
+  || fail "nested gate env: $(printf '%s' "$ng_out" | tail -1)"
 
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so

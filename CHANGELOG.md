@@ -72,6 +72,24 @@ The guard rail that was only a sentence.
   run). Reversed text is deliberately NOT decoded, and the module says so: it is
   not a shape anybody produces by accident, and it would widen the
   false-positive surface for no real case.
+- **The forced stop gate could never pass on this repo.** The reviewer's
+  `LOOP_FORCE_GATE=1 bash stop_gate.sh` runs `tests/selftest.sh`, and that
+  suite runs the same gate a dozen times as a child against scratch repos. Every
+  nested run inherited the outer gate's environment — the `LOOP_FORCE_GATE=1`
+  from the command line, and `config.env`'s `LOOP_*_CMD` lines exported by the
+  gate's `set -a` — so the "unchanged tree must SKIP" assertions ran a suite
+  instead, and the nested gate went looking for `tests/selftest-report.sh`
+  inside a scratch repo. Six failures on 2026-09-18, all the harness's own
+  environment; the same tree in a clean shell had none. A gate that cannot pass
+  is the same defect as one that cannot fail. Fixed in the harness, not the
+  gate: one helper, `tests/lib/scrub-gate-env.sh`, sourced at the top of every
+  test that runs the gate as a child, scrubs exported `LOOP_*`, `GATE_BASE`,
+  `CLAUDE_PROJECT_DIR` and `CLAUDE_PLUGIN_ROOT` at entry and keeps whatever a
+  test sets afterwards. `tests/pins/nested-gate-env-hermetic.sh` runs the
+  branch-shapes pin and the suite's nested assertions under that exact
+  environment, finds every caller by grep, and is red when the scrub is
+  reverted. `stop_gate.sh` is unchanged on purpose: its export is what lets
+  `test-regressions.sh` read the config at all.
 
 ### Changed
 
