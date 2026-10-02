@@ -33,6 +33,17 @@ MUST_ALLOW = [
     ("read-only PR view", "gh" " pr view 2404 --json state"),
     ("prose mentioning it", 'echo "do not use git add -A"'),
     ("prose mentioning merge", 'echo "the loop never runs gh pr merge"'),
+    # Push rules stop at a separator. Found 2026-10-02: a plain push chained
+    # into `gh pr create` whose title said "-F ... -f" was refused.
+    ("push then a PR title with -f",
+     "git" " push -u origin fix/x 2>&1 | tail -2 && gh pr create --title 'a: -F no longer reads as -f'"),
+    ("push then rm -f", "git" " push origin main; rm -f /tmp/x"),
+    ("push then --delete elsewhere", "git" " push origin fix/a && gh api --method DELETE x --delete"),
+    ("push then a colon elsewhere", "git" " push origin a && echo 'time :10'"),
+    ("plain push -u", "git" " push -u origin fix/x"),
+    ("branch name containing force", "git" " push origin fix-force-thing"),
+    ("non-deleting src:dst refspec", "git" " push origin HEAD:refs/heads/fix/x"),
+    ("--dry-run and --follow-tags", "git" " push --dry-run --follow-tags origin fix/x"),
     # The secret guard's must-not-block half. Every one of these is something
     # somebody types here on an ordinary day; any one of them firing is how the
     # guard gets switched off, and a guard that is off catches nothing.
@@ -60,6 +71,15 @@ MUST_BLOCK = [
     ("hard reset", "git" " reset --hard HEAD~3"),
     ("rm -rf", "rm" " -rf build/"),
     ("tool cache add", "git" " add .mempalace/"),
+    ("force push -f", "git" " push -f origin main"),
+    ("force push --force-with-lease", "git" " push --force-with-lease origin x"),
+    ("force push in a -uf cluster", "git" " push -uf origin x"),
+    ("force push via +refspec", "git" " push origin +main"),
+    ("force push via +src:dst", "git" " push origin +HEAD:main"),
+    ("force push after &&", "cd x && git" " push -f origin main"),
+    ("push --delete", "git" " push origin --delete fix/x"),
+    ("push -d", "git" " push -d origin fix/x"),
+    ("push :branch", "git" " push origin :fix/x"),
     # The vector that actually burned a token on 2026-09-07: a value inline on
     # an SSH command line, into the remote host's process table.
     ("inline token on an ssh command line", f"TOK={_GHO} ssh deploy@build-host 'echo $TOK'"),

@@ -78,8 +78,13 @@ BUILTIN_PATTERNS: list[tuple[str, str]] = [
     ("rm-recursive-force-long", r"\brm\b[^\n]*--recursive[^\n]*--force|\brm\b[^\n]*--force[^\n]*--recursive"),
     # History is never deleted. Force push, remote-branch delete, hard reset,
     # rebase, filter-branch, amend.
-    ("git-force-push", r"git\s+push\b[^\n]*(-f\b|--force)"),
-    ("git-push-delete", r"git\s+push\b[^\n]*(--delete|\s:)"),
+    # Both push rules stop at a command separator (`[^\n;&|]*`) and match their
+    # flags case-sensitively (`(?-i:...)`). Found 2026-10-02: the old `[^\n]*`
+    # ran past `&&` into a `gh pr create` whose TITLE said "-F ... -f", and
+    # refused a plain push. Force also covers a `-uf` cluster and a `+` refspec
+    # (`origin +main`); delete also covers `-d`. All four were let through.
+    ("git-force-push", r"git\s+push\b[^\n;&|]*\s(?-i:-[a-zA-Z]*f[a-zA-Z]*\b|--force|\+[^\s;&|]+)"),
+    ("git-push-delete", r"git\s+push\b[^\n;&|]*(?-i:\s--delete\b|\s-[a-zA-Z]*d[a-zA-Z]*\b|\s:)"),
     ("git-reset-hard", r"git\s+reset\s+--hard"),
     ("git-rebase", r"git\s+rebase\b"),
     ("git-filter-branch", r"git\s+filter-branch\b"),
