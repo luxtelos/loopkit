@@ -55,6 +55,13 @@ The guard rail that was only a sentence.
 
 ### Fixed
 
+- **Prose in a heredoc is not a commit.** `require_commit_lock.py` refused a
+  `gh issue create` whose body, written with `cat > f <<'EOF'`, said
+  "`git add x && git commit -F m` passes there": the `&&` inside the prose read
+  as a command position. Heredoc bodies that are data are now blanked before
+  matching. A body a shell will run (`bash <<EOF`, `ssh host <<EOF`,
+  `cat <<EOF | sh`) is still checked, and so is everything outside the body.
+  Cases pinned in `test_require_commit_lock.py`.
 - **The refusal message printed the command back.** `block_dangerous.py` ended
   every block with `dangerous command pattern detected: <the whole command>`. The
   commerce profile's `no-live-keys` pattern fires on `sk_live_` literals, so

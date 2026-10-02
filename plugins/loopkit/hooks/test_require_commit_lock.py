@@ -31,6 +31,17 @@ MUST_BLOCK = [
     ("with -c config", f"{GIT} -c user.name=t{COMMIT} -m 'x'"),
     ("newline separated", f"echo hi\n{GIT}{COMMIT} -F m.txt"),
     ("inside a subshell", f"({GIT}{COMMIT} -m 'x')"),
+    # Heredoc controls: only a heredoc body that is DATA is skipped.
+    ("a commit after the heredoc ends",
+     f"cat > m.txt <<'EOF'\nsubject line\nEOF\n{GIT}{COMMIT} -F m.txt"),
+    ("a commit on the operator's own line",
+     f"cat > m.txt <<'EOF' && {GIT}{COMMIT} -F m.txt\nsubject line\nEOF"),
+    ("a heredoc fed to bash is code",
+     f"bash <<'EOF'\n{GIT} add a.md && {GIT}{COMMIT} -m 'x'\nEOF"),
+    ("a heredoc piped into sh is code",
+     f"cat <<'EOF' | sh\n{GIT}{COMMIT} -m 'x'\nEOF"),
+    ("a here-string (<<<) opens no heredoc",
+     f"grep x <<< 'EOF'\n{GIT}{COMMIT} -m 'x'"),
 ]
 
 MUST_ALLOW = [
@@ -45,6 +56,18 @@ MUST_ALLOW = [
     ("prose mentioning it", f'echo "never run a bare {GIT}{COMMIT} here"'),
     ("a path that merely contains the word",
      f"{GIT} add docs/commit-policy.md"),
+    # Found 2026-10-02: an issue body written through a heredoc said
+    # "`git add x && git commit -F m` passes there". The `&&` inside the PROSE
+    # read as a command position, and `gh issue create` was refused.
+    ("heredoc prose (the 2026-10-02 case)",
+     f"cat > /tmp/issue.md <<'EOF'\nSo `{GIT} add x && {GIT}{COMMIT} -F m` passes there.\nEOF\n"
+     "gh issue create --title t --body-file /tmp/issue.md"),
+    ("heredoc prose, unquoted delimiter",
+     f"cat > b.md <<EOF\nstep two:\n{GIT}{COMMIT} -m 'x'\nEOF"),
+    ("heredoc prose, <<- with a tab-indented terminator",
+     f"cat > b.md <<-END\n\t{GIT}{COMMIT} -m 'x'\n\tEND"),
+    ("heredoc prose as a PR body",
+     f"gh pr create --title t --body-file - <<'MSG'\n1. {GIT} add a.md\n2. {GIT}{COMMIT} -m x\nMSG"),
     ("inline door", f"LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),
     ("inline door after another assignment",
      f"FOO=1 LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),

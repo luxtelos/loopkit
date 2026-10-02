@@ -59,6 +59,50 @@ INLINE_DOOR = rf"{CMD}(?:\w+=[^\s;&|]*\s+)*{DOOR}=[^\s;&|]+"
 # Anything routed through the wrapper (or through the lock itself) is fine.
 VIA_LOCK = r"loop-commit\.sh|driver_lock\.py"
 
+# A heredoc operator: `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`. Not `<<<`, which
+# is a here-string and opens no body.
+HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
+# A heredoc whose body a shell will RUN: `bash <<EOF`, `ssh host <<EOF`, or
+# `cat <<EOF | sh`. Its body is code, so it stays visible to the gate.
+SHELL_WORD = r"(?:ba|z|da|k)?sh|ssh|eval|source|xargs"
+FEEDS_SHELL_BEFORE = re.compile(
+    rf"(?:\A|[;&|(]\s*)(?:\w+=[^\s;&|]*\s+)*(?:\S*/)?(?:{SHELL_WORD})\b[^;&|]*\Z"
+)
+FEEDS_SHELL_AFTER = re.compile(rf"\|\s*(?:\S*/)?(?:{SHELL_WORD})\b")
+
+
+def strip_heredoc_prose(command: str) -> str:
+    """Blank out heredoc bodies that are DATA, so prose in them is not read as
+    a command.
+
+    Found 2026-10-02: an issue body written with `cat > f <<'EOF' … EOF` said
+    "`git add x && git commit -F m` passes there". The `&&` inside the prose
+    read as a command position and `gh issue create` was refused. Text you are
+    writing to a file is not a command you are running.
+
+    A body fed to a shell stays: there it IS the command. The operator's own
+    line, and everything after the terminator, are always kept.
+    """
+    lines = command.split("\n")
+    out: list[str] = []
+    pending: list[tuple[str, bool, bool]] = []  # (delimiter, dash, keep body)
+    for line in lines:
+        if pending:
+            delim, dash, keep = pending[0]
+            ended = (line.lstrip("\t") if dash else line) == delim
+            if ended:
+                pending.pop(0)
+            out.append(line if (keep or ended) else "")
+            continue
+        out.append(line)
+        for m in HEREDOC_OP.finditer(line):
+            feeds_shell = bool(
+                FEEDS_SHELL_BEFORE.search(line[: m.start()])
+                or FEEDS_SHELL_AFTER.search(line[m.end():])
+            )
+            pending.append((m.group(3), m.group(1) == "-", feeds_shell))
+    return "\n".join(out)
+
 
 def project_root() -> Path:
     env = os.environ.get("CLAUDE_PROJECT_DIR")
@@ -116,7 +160,7 @@ def needs_lock(command: str, root: Path | None = None) -> bool:
         return False
     if re.search(INLINE_DOOR, command):
         return False
-    return bool(re.search(GIT_COMMIT, command, re.IGNORECASE))
+    return bool(re.search(GIT_COMMIT, strip_heredoc_prose(command), re.IGNORECASE))
 
 
 def read_command_from_stdin() -> str:
