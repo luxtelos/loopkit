@@ -42,6 +42,8 @@ MUST_BLOCK = [
      f"cat <<'EOF' | sh\n{GIT}{COMMIT} -m 'x'\nEOF"),
     ("a here-string (<<<) opens no heredoc",
      f"grep x <<< 'EOF'\n{GIT}{COMMIT} -m 'x'"),
+    ("a commit after two heredocs on one line",
+     f"paste <<A <<'B'\none\nA\ntwo\nB\n{GIT}{COMMIT} -m 'x'"),
 ]
 
 MUST_ALLOW = [
@@ -66,6 +68,8 @@ MUST_ALLOW = [
      f"cat > b.md <<EOF\nstep two:\n{GIT}{COMMIT} -m 'x'\nEOF"),
     ("heredoc prose, <<- with a tab-indented terminator",
      f"cat > b.md <<-END\n\t{GIT}{COMMIT} -m 'x'\n\tEND"),
+    ("prose in two heredocs on one line",
+     f"paste <<A <<'B'\none; {GIT}{COMMIT} -m x\nA\ntwo && {GIT}{COMMIT} -m y\nB\necho done"),
     ("heredoc prose as a PR body",
      f"gh pr create --title t --body-file - <<'MSG'\n1. {GIT} add a.md\n2. {GIT}{COMMIT} -m x\nMSG"),
     ("inline door", f"LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),
