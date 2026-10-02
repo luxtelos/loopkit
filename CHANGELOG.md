@@ -72,6 +72,12 @@ The guard rail that was only a sentence.
   run). Reversed text is deliberately NOT decoded, and the module says so: it is
   not a shape anybody produces by accident, and it would widen the
   false-positive surface for no real case.
+- **`-F` no longer reads as `-f`.** Every pattern is matched case-insensitively,
+  so `git-add-force` also caught an uppercase `-F` in a `git add` segment, and
+  commit-message-from-file commands were refused. Agents dodged it with
+  `--file=`. The flag part of the rule is now a case-sensitive `(?-i:...)`
+  group: lowercase `-f` (also inside `-vf`, `-Af`) or `--force` only.
+  `git-add-all` is unchanged. Control cases pinned in `test_block_dangerous.py`.
 
 ### Changed
 

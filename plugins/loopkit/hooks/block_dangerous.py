@@ -91,7 +91,12 @@ BUILTIN_PATTERNS: list[tuple[str, str]] = [
     # Tool cache and agent state never enter git. They are regenerable, they
     # churn on every run, and a force-add bypasses .gitignore.
     ("git-add-tool-cache", r"git\s+add\b[^\n]*(\.codebase-memory|\.mempalace|\.hive-mind|\.claude-flow|\.swarm)"),
-    ("git-add-force", r"git\s+add\b[^\n;&|]*\s(-[a-z]*f[a-z]*|--force)\b"),
+    # The flag part is CASE-SENSITIVE (`(?-i:...)` switches off IGNORECASE for
+    # just that group): force-add is lowercase `-f` or `--force` only. Before
+    # this, `-F` still read as `-f`, and agents dodged the guard by rewriting
+    # `git commit -F msg` as `--file=msg`. A rule people route around is a bug.
+    # `[a-zA-Z]` keeps short-flag clusters like `-vf` and `-Af` blocked.
+    ("git-add-force", r"git\s+add\b[^\n;&|]*\s(?-i:-[a-zA-Z]*f[a-zA-Z]*|--force)\b"),
     # Never stage everything: name the files, so the diff you commit is the
     # diff you reviewed. `./` and a directly-appended separator (`.;`, `.&&`)
     # must block too, while `.gitignore` and `./src/a.ts` must still pass.
