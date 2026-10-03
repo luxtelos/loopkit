@@ -48,6 +48,14 @@ Per-project extension, both optional, both under <project>/.loopkit/:
 The secret check answers to `block-disabled.txt` under the name
 `secret-on-command-line`, like any other pattern — switching it off is a
 reviewed change to a tracked file, not a rephrasing of the command.
+
+A FOURTH lesson, 2026-10-03: force push and remote delete are not regexes.
+A regex cannot read shell quoting — the separator-stopping version let a
+quoted "-f", `2>&1 -f` and `$(a; b) -f` through. `loopkit_core.push_guard`
+splits the command the way the shell does and reads each `git push` argv.
+Unlike the rest of this file it FAILS CLOSED: a command that mentions git and
+push and cannot be read, or that crashes the hook, is blocked. The rule names
+`git-force-push` and `git-push-delete` are unchanged.
 """
 
 from __future__ import annotations
@@ -64,7 +72,25 @@ _PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PKG_PARENT not in sys.path:
     sys.path.insert(0, _PKG_PARENT)
 
+from loopkit_core import push_guard as _push  # noqa: E402
 from loopkit_core import secrets as _secrets  # noqa: E402
+
+# Same name and meaning as the downstream project copy's function, so its tests (and the
+# reviewer's adversarial scripts) load this hook and call it unchanged.
+push_danger_reason = _push.push_danger_reason
+
+# Force push and remote delete, checked by reading the command the way the
+# shell does (loopkit_core.push_guard), not by a regex. History: the regexes
+# ran past `&&` into a `gh pr create` whose title said "-F ... -f" and refused
+# a plain push (2026-10-02); the separator-stopping regexes that replaced them
+# then let nine real force pushes through — a quoted "-f", a `;` inside a
+# quoted ref, `2>&1 -f`, `$(a; b) -f` — because a regex cannot read shell
+# quoting (independent review FAIL, 2026-10-03). The names stay, so
+# `.loopkit/block-disabled.txt` switches each one off as before.
+PUSH_RULES: tuple[tuple[str, str], ...] = (
+    ("git-force-push", _push.FORCE),
+    ("git-push-delete", _push.DELETE),
+)
 
 SECRET_RULE = "secret-on-command-line"
 
@@ -76,10 +102,8 @@ BUILTIN_PATTERNS: list[tuple[str, str]] = [
     # Recursive force delete, in any flag order: -rf, -fr, -r -f, --recursive --force
     ("rm-recursive-force", r"\brm\b[^\n]*\s-[a-z]*r[a-z]*f|\brm\b[^\n]*\s-[a-z]*f[a-z]*r"),
     ("rm-recursive-force-long", r"\brm\b[^\n]*--recursive[^\n]*--force|\brm\b[^\n]*--force[^\n]*--recursive"),
-    # History is never deleted. Force push, remote-branch delete, hard reset,
-    # rebase, filter-branch, amend.
-    ("git-force-push", r"git\s+push\b[^\n]*(-f\b|--force)"),
-    ("git-push-delete", r"git\s+push\b[^\n]*(--delete|\s:)"),
+    # History is never deleted. Hard reset, rebase, filter-branch, amend.
+    # Force push and remote-branch delete are NOT regexes: see PUSH_RULES.
     ("git-reset-hard", r"git\s+reset\s+--hard"),
     ("git-rebase", r"git\s+rebase\b"),
     ("git-filter-branch", r"git\s+filter-branch\b"),
@@ -186,6 +210,30 @@ def is_dangerous(command: str, patterns: list[tuple[str, str]] | None = None) ->
     return None
 
 
+def enabled_push_rules(root: Path | None = None) -> list[tuple[str, str]]:
+    """PUSH_RULES minus the names listed in .loopkit/block-disabled.txt."""
+    root = root or project_root()
+    disabled = set(_read_list(root / ".loopkit" / "block-disabled.txt"))
+    return [(n, k) for n, k in PUSH_RULES if n not in disabled]
+
+
+def push_hit(command: str, root: Path | None = None) -> tuple[str, str] | None:
+    """(rule name, reason) if the command force-pushes or deletes a remote ref.
+
+    A finding the guard cannot attribute to one kind (unreadable quoting, a
+    `$F` before the remote) is reported under the first rule still on.
+    """
+    rules = enabled_push_rules(root)
+    found = _push.push_danger(command, {k for _, k in rules})
+    if not found:
+        return None
+    kind, reason = found
+    for name, k in rules:
+        if kind == _push.EITHER or kind == k:
+            return name, reason
+    return None
+
+
 def secret_shapes(command: str, root: Path | None = None) -> list[str]:
     """Shape names of any secret-looking literal in `command` — never values.
 
@@ -224,6 +272,7 @@ if __name__ == "__main__":
     cmd = ""
     shapes: list[str] = []
     hit = None
+    why = None  # the reason, when a PUSH_RULES rule matched rather than a regex
     try:
         cmd = read_command_from_stdin()
         if cmd:
@@ -231,11 +280,35 @@ if __name__ == "__main__":
             # pattern branch below, which quotes the command back.
             shapes = secret_shapes(cmd)
             hit = is_dangerous(cmd)
-    except Exception:
-        shapes, hit = [], None  # a crash is an allow; say nothing rather than lie
+            if not hit:
+                found = push_hit(cmd)
+                if found:
+                    hit, why = found
+    except Exception as exc:
+        shapes, hit, why = [], None, None  # a crash is an allow...
+        # ...EXCEPT on a push. Exit 1 lets the command run, so a hook that
+        # crashes on a force push would wave it through (independent review
+        # round 2 of the downstream copy, 2026-10-03). Plain substring tests: the regex engine may be what
+        # failed. The command is NOT printed: it may carry a secret, and the
+        # redactor may be what failed.
+        if "git" in cmd and "push" in cmd:
+            try:
+                on = [n for n, _ in enabled_push_rules()]
+            except Exception:
+                on = [n for n, _ in PUSH_RULES]  # cannot read the config: fail closed
+            if on:
+                print(
+                    f"BLOCKED [{on[0]}]: the safety hook failed "
+                    f"({type(exc).__name__}) while reading a command that "
+                    "mentions git push; refusing rather than letting it run "
+                    "unchecked.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
 
     def _ruling(name: str) -> str:
-        return "" if name.startswith("project-") or name in {n for n, _ in BUILTIN_PATTERNS} else f" ruling: {name}"
+        builtin = {n for n, _ in BUILTIN_PATTERNS} | {n for n, _ in PUSH_RULES}
+        return "" if name.startswith("project-") or name in builtin else f" ruling: {name}"
 
     if shapes:
         # Exit 2 is the ONLY code Claude Code treats as "block this tool call".
@@ -253,6 +326,17 @@ if __name__ == "__main__":
             "If this is genuinely not a secret, name "
             f"`{SECRET_RULE}` in .loopkit/block-disabled.txt (a reviewed "
             "change to a tracked file).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if hit and why:
+        print(
+            f"BLOCKED [{hit}]: force push or remote delete: {_secrets.redact(why)}: "
+            f"{_secrets.redact(cmd)}\n"
+            "If this is a false positive, name the rule in "
+            ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
+            "the command around the guard.",
             file=sys.stderr,
         )
         sys.exit(2)
