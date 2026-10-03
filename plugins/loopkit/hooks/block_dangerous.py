@@ -75,7 +75,7 @@ if _PKG_PARENT not in sys.path:
 from loopkit_core import push_guard as _push  # noqa: E402
 from loopkit_core import secrets as _secrets  # noqa: E402
 
-# Same name and meaning as the Balancia copy's function, so its tests (and the
+# Same name and meaning as the downstream project copy's function, so its tests (and the
 # reviewer's adversarial scripts) load this hook and call it unchanged.
 push_danger_reason = _push.push_danger_reason
 
@@ -282,8 +282,8 @@ if __name__ == "__main__":
     except Exception as exc:
         shapes, hit, why = [], None, None  # a crash is an allow...
         # ...EXCEPT on a push. Exit 1 lets the command run, so a hook that
-        # crashes on a force push would wave it through (Balancia review round
-        # 2, 2026-10-03). Plain substring tests: the regex engine may be what
+        # crashes on a force push would wave it through (independent review
+        # round 2 of the downstream copy, 2026-10-03). Plain substring tests: the regex engine may be what
         # failed. The command is NOT printed: it may carry a secret, and the
         # redactor may be what failed.
         if "git" in cmd and "push" in cmd:

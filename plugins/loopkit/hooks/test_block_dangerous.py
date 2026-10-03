@@ -90,9 +90,9 @@ MUST_BLOCK = [
     ("a percent-encoded token in a url", "curl 'https://h/?t=gho%5F" + "V" * 36 + "'"),
 ]
 
-# Push cases ported verbatim from the Balancia copy's test file
-# (luxtelos/adaptive-unified-accountingos @ 160862d77, PR #2965, independent
-# review PASS round 3). Keep them in step with that file.
+# Push cases ported verbatim from the downstream project copy's test file
+# (independent review PASS in round 3, 2026-10-03). Keep them in step with
+# that file.
 PUSH_ALLOW = [
     # Shell-aware push check (review FAIL on #2965, 2026-10-03). The push rule
     # now splits the command the way the shell does, so these stay allowed.
@@ -283,9 +283,9 @@ with tempfile.TemporaryDirectory() as off_root:
     fails += 0 if ok else 1
     print(f"  {'ok ' if ok else 'FAIL'}  rc={got}  other guards still block")
 
-# A crash must never fail open on a push (Balancia review round 2,
+# A crash must never fail open on a push (downstream review round 2,
 # 2026-10-03): exit 1 lets the command RUN. Faults are forced by patching a
-# library the hook calls before it is loaded. Unlike the Balancia copy, a crash
+# library the hook calls before it is loaded. Unlike the downstream copy, a crash
 # on a command with no push stays an ALLOW here (exit 0), as this file's
 # docstring has always promised.
 _BREAK_SHLEX = (
@@ -323,7 +323,7 @@ with tempfile.TemporaryDirectory() as fault_root:
         print(f"  {'ok ' if ok else 'FAIL'}  rc={got} want={want}  {name}")
 
 # The push guard must be linear: `\bgit\b[\s\S]*\bpush\b` once took 11.7 s on
-# 48 KB of "git" words. Timed in-process, push guard only, as in Balancia.
+# 48 KB of "git" words. Timed in-process, push guard only, as downstream.
 print("PERF (push guard, in-process, limit 1.0s each):")
 try:
     import importlib.util

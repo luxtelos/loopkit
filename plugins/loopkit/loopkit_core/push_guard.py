@@ -1,9 +1,8 @@
 """push_guard — force push and remote delete, read the way the shell reads it.
 
-Ported from the Balancia project copy of block_dangerous.py (luxtelos/
-adaptive-unified-accountingos @ 160862d77, PR #2965, independent review PASS
-in round 3, 2026-10-03). Keep the two copies in step: a fix to one is a fix
-owed to the other.
+Ported from a downstream project's copy of block_dangerous.py, which passed
+independent review in round 3 on 2026-10-03. Keep the two copies in step: a
+fix to one is a fix owed to the other.
 
 The one loopkit-specific change: every finding carries a KIND — "force",
 "delete" or "either" — so `.loopkit/block-disabled.txt` can switch off
@@ -434,14 +433,15 @@ def _on(reason, ctx):
 def _opaque(tok):
     """A word whose value only exists at run time: $F, ${F}, $( ), backticks.
 
-    Known gap (the Balancia copy has it too): a `$F` AFTER the remote is
+    Known gap (the downstream copy has it too): a `$F` AFTER the remote is
     allowed, because there it is almost always a branch name
     (`origin "$BRANCH"`), and blocking it would refuse everyday pushes. If
     that `$F` expands to `-f` at run time, git still reads it as a flag and
-    the push is forced. The backstop is server-side: in the luxtelos repos,
-    GitHub branch rules refuse a force push to dev, main and pre_prod. A
-    project using this plugin should protect its own long-lived branches the
-    same way; this hook is the floor, not the only guard.
+    the push is forced. The backstop is server-side: branch protection rules that refuse a force
+    push to the long-lived branches (the project this was ported from has
+    them on its dev, main and pre_prod). A project using this plugin should
+    protect its own long-lived branches the same way; this hook is the floor,
+    not the only guard.
     """
     if tok.startswith("$") or _PH_RE.match(tok):
         return True
@@ -601,7 +601,7 @@ def push_danger(command: str, enabled=ALL_KINDS):
 def push_danger_reason(command: str):
     """Why this command force-pushes or deletes a remote ref, or None.
 
-    Same name and meaning as the Balancia copy, so its tests run unchanged.
+    Same name and meaning as the downstream copy, so its tests run unchanged.
     """
     found = push_danger(command)
     return found[1] if found else None

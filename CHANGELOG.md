@@ -73,7 +73,7 @@ The guard rail that was only a sentence.
   review: it let nine real force pushes and deletes through (a quoted `"-f"`,
   a `;` inside a quoted ref, `2>&1 -f`, `$(a; b) -f`, …), because a regex
   cannot read shell quoting. New `loopkit_core/push_guard.py`, ported from the
-  reviewed Balancia copy (adaptive-unified-accountingos @ 160862d77): it splits
+  copy a downstream project landed after three rounds of independent review: it splits
   the command at REAL separators only (quotes, `$( )`, backticks, heredocs,
   redirects honoured), tokenises each piece with `shlex`, and reads every
   `git … push` argv. It also catches what the regexes never did: `-uf`, `+main`,
