@@ -12,7 +12,7 @@ this version:
 - #50 — `git-add-force` is case-sensitive, so `-F` no longer reads as `-f`.
 - #51 — prose in a heredoc body is not a commit for `require_commit_lock`.
 - #52 — push rules read the shell, not a regex (`loopkit_core/push_guard.py`).
-- #PR_NUMBER — `require_recall` ignores comments, by the file's own comment syntax
+- #56 — `require_recall` ignores comments, by the file's own comment syntax
   (below), and the version bump itself.
 
 Everything else in this section had also merged after the 0.2.2 tag and was
