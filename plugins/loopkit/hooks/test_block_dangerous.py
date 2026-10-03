@@ -27,6 +27,11 @@ _RND = "rnd_" + "r" * 28          # Render: likewise
 MUST_ALLOW = [
     ("named add then commit -F", "git" " add foo.txt && git commit -F msg.txt"),
     ("chained, -F flag", "git" " add a.md b.md && git commit -q -F /tmp/m.txt"),
+    # Control case: commit message from a file, both spellings. `-F` is not
+    # `-f` — the force-add rule is case-sensitive and only reads `git add`.
+    ("commit -F alone", "git" " commit -F msg.txt"),
+    ("commit --file= alone", "git" " commit --file=msg.txt"),
+    ("uppercase -F inside an add is not force-add", "git" " add notes.md -F"),
     ("dotted path", "git" " add .claude/hooks/x.py"),
     ("./ prefix", "git" " add ./scripts/x.sh"),
     (".gitignore by name", "git" " add .gitignore"),
@@ -46,6 +51,8 @@ MUST_ALLOW = [
 MUST_BLOCK = [
     ("real force-add", "git" " add -f secret.env"),
     ("--force", "git" " add --force x"),
+    ("-f inside a flag cluster", "git" " add -vf x"),
+    ("-f after an uppercase flag", "git" " add -Af x"),
     ("add-all -A", "git" " add -A"),
     ("add-all --all", "git" " add --all"),
     ("add-all dot", "git" " add ."),
