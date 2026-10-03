@@ -410,13 +410,26 @@ def _push_token(tok):
                 return (_LONG_KIND[full], f"`{tok}` (git reads it as --{full})"), False
         return None, (name in _LONG_WITH_VALUE and "=" not in tok)
     if tok.startswith("-") and len(tok) > 1:
+        # Read the WHOLE cluster up to -o: `-fd` both forces and deletes.
+        # Stopping at the first letter hid the -d when git-force-push was off,
+        # so `-fd`, `-ufd` and `-df` deleted a remote branch with
+        # git-push-delete still on (independent review FAIL, 2026-10-03).
+        kinds = set()
         for k, ch in enumerate(tok[1:]):
-            if ch == "f":
-                return (FORCE, f"`{tok}` (-f forces the push)"), False
-            if ch == "d":
-                return (DELETE, f"`{tok}` (-d deletes the remote ref)"), False
             if ch == "o":  # -o takes a value: the rest, or the next token
-                return None, k == len(tok) - 2
+                if not kinds:
+                    return None, k == len(tok) - 2
+                break
+            if ch in "fd":
+                kinds.add(FORCE if ch == "f" else DELETE)
+        if kinds:
+            kind = kinds.pop() if len(kinds) == 1 else EITHER
+            what = {
+                FORCE: "-f forces the push",
+                DELETE: "-d deletes the remote ref",
+                EITHER: "-f forces the push and -d deletes the remote ref",
+            }[kind]
+            return (kind, f"`{tok}` ({what})"), False
         return None, False
     if tok.startswith("+"):
         return (FORCE, f"refspec `{tok}` (a leading + forces the push)"), False

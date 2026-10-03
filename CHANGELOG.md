@@ -81,7 +81,10 @@ The guard rail that was only a sentence.
   `bash -c`/`eval`/heredocs that run a push. It FAILS CLOSED — unreadable
   quoting, a `$F` before the remote, or a crash on a command that mentions git
   and push is blocked. Rule names unchanged; each is still switchable off in
-  `.loopkit/block-disabled.txt` on its own. Pinned in `test_block_dangerous.py`.
+  `.loopkit/block-disabled.txt` on its own, and a short-flag cluster is read
+  whole, so with `git-force-push` off, `-fd` / `-ufd` / `-df` still trip
+  `git-push-delete` (review found them deleting a branch when the cluster was
+  read only to its first letter). Pinned in `test_block_dangerous.py`.
 - **Encodings that occur in ordinary config are now decoded before scanning**:
   base64, percent-encoding, `\uXXXX` inside a JSON string, and a shell line
   continuation (which is not an evasion — it is what the shell will actually

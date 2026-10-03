@@ -365,12 +365,22 @@ for disabled, cases in [
         ("force then delete in one push: delete still seen", "git" " push -f origin main --delete x", 2),
         ("unreadable quoting still blocks (either rule)", "git" ' push origin "main -f', 2),
         ("$F before the remote still blocks (either rule)", "git" " push $F origin main", 2),
+        # Independent review FAIL on f093809: a cluster was read only up to
+        # its first f or d, so these deleted a branch with the delete rule on.
+        ("-fd cluster: the -d is still seen", "git" " push -fd origin y", 2),
+        ("-ufd cluster: the -d is still seen", "git" " push -ufd origin y", 2),
+        ("-df cluster still blocks", "git" " push -df origin y", 2),
+        ("$(echo -fd) still blocks", "git" " push $(echo -fd) origin y", 2),
     ]),
     ("git-push-delete\n", [
         ("delete allowed once git-push-delete is off", "git" " push origin --delete fix/x", 0),
         ("force still blocks", "git" " push -f origin main", 2),
         ("--prune is a delete", "git" " push --prune origin x", 0),
         ("--mirror is both: still blocks", "git" " push --mirror origin", 2),
+        ("-df cluster: the -f is still seen", "git" " push -df origin y", 2),
+        ("-fd cluster still blocks", "git" " push -fd origin y", 2),
+        ("-uf still blocks (force only)", "git" " push -uf origin y", 2),
+        ("-ud is a delete: allowed once git-push-delete is off", "git" " push -ud origin y", 0),
     ]),
     ("git-force-push\ngit-push-delete\n", [
         ("both off: force allowed", "git" " push -f origin main", 0),
