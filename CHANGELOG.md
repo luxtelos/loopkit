@@ -66,12 +66,22 @@ The guard rail that was only a sentence.
 - **The leading `\b` made a glued token invisible.** `\b` between two word
   characters does not exist, so `my_gho_<body>` matched nothing. A token glued to
   a preceding word character is a leak, not a false positive; the anchor is gone.
-- **The push rules read past `&&`.** `git-force-push` and `git-push-delete` used
-  `[^\n]*`, so a plain push chained into `gh pr create` whose title said
-  "-F ... -f" was refused as a force push. Both now stop at `;`, `&` and `|`,
-  and match their flags case-sensitively. They also catch four real cases they
-  let through: a `-uf` cluster, a `+` refspec (`origin +main`, `+HEAD:main`),
-  and `-d`. Pinned in `test_block_dangerous.py`.
+- **Force push and remote delete are read the way the shell reads them.**
+  `git-force-push` and `git-push-delete` were regexes with `[^\n]*`, so a plain
+  push chained into `gh pr create` whose title said "-F ... -f" was refused.
+  Stopping the regex at `;`, `&`, `|` was tried first and failed independent
+  review: it let nine real force pushes and deletes through (a quoted `"-f"`,
+  a `;` inside a quoted ref, `2>&1 -f`, `$(a; b) -f`, …), because a regex
+  cannot read shell quoting. New `loopkit_core/push_guard.py`, ported from the
+  reviewed Balancia copy (adaptive-unified-accountingos @ 160862d77): it splits
+  the command at REAL separators only (quotes, `$( )`, backticks, heredocs,
+  redirects honoured), tokenises each piece with `shlex`, and reads every
+  `git … push` argv. It also catches what the regexes never did: `-uf`, `+main`,
+  `-d`, `git -C dir push -f`, `--mirror`, `--prune`, abbreviated `--forc`/`--del`,
+  `bash -c`/`eval`/heredocs that run a push. It FAILS CLOSED — unreadable
+  quoting, a `$F` before the remote, or a crash on a command that mentions git
+  and push is blocked. Rule names unchanged; each is still switchable off in
+  `.loopkit/block-disabled.txt` on its own. Pinned in `test_block_dangerous.py`.
 - **Encodings that occur in ordinary config are now decoded before scanning**:
   base64, percent-encoding, `\uXXXX` inside a JSON string, and a shell line
   continuation (which is not an evasion — it is what the shell will actually
