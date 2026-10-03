@@ -44,6 +44,24 @@ MUST_BLOCK = [
      f"grep x <<< 'EOF'\n{GIT}{COMMIT} -m 'x'"),
     ("a commit after two heredocs on one line",
      f"paste <<A <<'B'\none\nA\ntwo\nB\n{GIT}{COMMIT} -m 'x'"),
+    # Independent review FAIL on e1924ff (2026-10-03): twelve commit shapes
+    # main blocked and the first heredoc version let through. A `<<` that is
+    # not a heredoc must open nothing...
+    ('a quoted "<<EOF", then a commit on the next line',
+     f'echo "<<EOF"\n{GIT}{COMMIT} -m x'),
+    ("a single-quoted '<<EOF', then a commit", f"echo '<<EOF'\n{GIT}{COMMIT} -m x"),
+    ("grep for '<<EOF', then a commit", f"grep -n '<<EOF' notes.md\n{GIT}{COMMIT} -m x"),
+    ("a # comment naming <<EOF, then a commit", f"# write it with <<EOF\n{GIT}{COMMIT} -m x"),
+    ("an arithmetic shift $((1<<X)), then a commit", f"echo $((1<<X))\n{GIT}{COMMIT} -m x"),
+    ("an escaped \\<<EOF, then a commit", f"echo \\<<EOF\n{GIT}{COMMIT} -m x"),
+    ("<<E\\OF (bash reads delimiter EOF), commit after it",
+     f"cat > f <<E\\OF\nhi\nEOF\n{GIT}{COMMIT} -m x"),
+    # ...and a body that a shell runs must stay visible, whatever word comes first.
+    ("sudo bash <<EOF", f"sudo bash <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("env bash <<EOF", f"env bash <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("exec sh <<EOF", f"exec sh <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("cat <<EOF | sudo sh", f"cat <<'EOF' | sudo sh\n{GIT}{COMMIT} -m x\nEOF"),
+    ("docker exec -i c sh <<EOF", f"docker exec -i c sh <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
 ]
 
 MUST_ALLOW = [
@@ -70,6 +88,8 @@ MUST_ALLOW = [
      f"cat > b.md <<-END\n\t{GIT}{COMMIT} -m 'x'\n\tEND"),
     ("prose in two heredocs on one line",
      f"paste <<A <<'B'\none; {GIT}{COMMIT} -m x\nA\ntwo && {GIT}{COMMIT} -m y\nB\necho done"),
+    ('prose that only quotes "<<EOF"',
+     f'echo "use <<EOF for {GIT}{COMMIT} messages"'),
     ("heredoc prose as a PR body",
      f"gh pr create --title t --body-file - <<'MSG'\n1. {GIT} add a.md\n2. {GIT}{COMMIT} -m x\nMSG"),
     ("inline door", f"LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),

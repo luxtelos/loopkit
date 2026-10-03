@@ -60,15 +60,48 @@ INLINE_DOOR = rf"{CMD}(?:\w+=[^\s;&|]*\s+)*{DOOR}=[^\s;&|]+"
 VIA_LOCK = r"loop-commit\.sh|driver_lock\.py"
 
 # A heredoc operator: `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`. Not `<<<`, which
-# is a here-string and opens no body.
-HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
-# A heredoc whose body a shell will RUN: `bash <<EOF`, `ssh host <<EOF`, or
-# `cat <<EOF | sh`. Its body is code, so it stays visible to the gate.
-SHELL_WORD = r"(?:ba|z|da|k)?sh|ssh|eval|source|xargs"
-FEEDS_SHELL_BEFORE = re.compile(
-    rf"(?:\A|[;&|(]\s*)(?:\w+=[^\s;&|]*\s+)*(?:\S*/)?(?:{SHELL_WORD})\b[^;&|]*\Z"
-)
-FEEDS_SHELL_AFTER = re.compile(rf"\|\s*(?:\S*/)?(?:{SHELL_WORD})\b")
+# is a here-string and opens no body. The delimiter must end at whitespace, a
+# shell metacharacter or end of line: `<<E\OF` is then not read at all, so its
+# body stays visible — the safe direction.
+HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2(?=[\s;&|<>()]|$)")
+# ALLOWLIST: only these commands turn a heredoc body into DATA. Anything else —
+# `bash`, `sudo bash`, `env sh`, `exec sh`, `docker exec -i c sh`, `python3 -` —
+# keeps its body visible. The first version used a blocklist ("blank it unless
+# a shell is the first word") and review found five ways a shell ran a body it
+# had blanked (independent review FAIL, 2026-10-03).
+DATA_SINKS = {"cat", "tee", "gh", "paste"}
+
+
+def _mask(line: str) -> str:
+    """A same-length copy of `line` with quoted text and a trailing comment
+    blanked, so `echo "<<EOF"`, `grep '<<EOF' notes.md` or `# … <<EOF` opens
+    no heredoc. Positions line up with `line`, so a match in `line` can be
+    looked up in the mask."""
+    out = []
+    quote = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if quote:
+            out.append(c if c == quote else " ")
+            if c == "\\" and quote == '"' and i + 1 < len(line):
+                out.append(" ")
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c == "\\":  # an escaped character, e.g. `\<<EOF`, is not an operator
+            out.append("  "[: len(line[i : i + 2])])
+            i += 1
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;&|("):
+            out.append(" " * (len(line) - i))
+            break
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)[: len(line)].ljust(len(line))
 
 
 def strip_heredoc_prose(command: str) -> str:
@@ -80,8 +113,15 @@ def strip_heredoc_prose(command: str) -> str:
     read as a command position and `gh issue create` was refused. Text you are
     writing to a file is not a command you are running.
 
-    A body fed to a shell stays: there it IS the command. The operator's own
-    line, and everything after the terminator, are always kept.
+    A body is blanked only when a DATA_SINKS command opens the heredoc and
+    nothing after the operator is piped (`cat <<EOF | sh` runs it). Every
+    other body stays: it may be the command. A `<<` inside quotes, in a
+    comment, escaped, or after `$((` opens nothing. The operator's own line,
+    and everything after the terminator, are always kept.
+
+    Known limit (from review): a quoted string that spans several lines and
+    contains `cat <<EOF` is not seen as quoted, because the mask works per
+    line. Contrived; a whole-command scanner like push_guard's would close it.
     """
     lines = command.split("\n")
     out: list[str] = []
@@ -95,12 +135,16 @@ def strip_heredoc_prose(command: str) -> str:
             out.append(line if (keep or ended) else "")
             continue
         out.append(line)
+        masked = _mask(line)
         for m in HEREDOC_OP.finditer(line):
-            feeds_shell = bool(
-                FEEDS_SHELL_BEFORE.search(line[: m.start()])
-                or FEEDS_SHELL_AFTER.search(line[m.end():])
-            )
-            pending.append((m.group(3), m.group(1) == "-", feeds_shell))
+            if masked[m.start()] != "<" or "$((" in masked[: m.start()]:
+                continue  # quoted, commented, or an arithmetic shift
+            seg = re.split(r"[;&|(]", masked[: m.start()])[-1].split()
+            while seg and re.match(r"\w+=", seg[0]):
+                seg.pop(0)
+            sink = os.path.basename(seg[0]) if seg else ""
+            data = sink in DATA_SINKS and "|" not in masked[m.end():]
+            pending.append((m.group(3), m.group(1) == "-", not data))
     return "\n".join(out)
 
 
