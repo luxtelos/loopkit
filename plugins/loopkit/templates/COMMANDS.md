@@ -84,6 +84,7 @@ file per worktree, shared by every process in it. So the lock is per worktree,
 | What                    | Mechanism                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------- |
 | Committing              | `loop-commit.sh -m "…" -- <paths>` — stages AND commits inside one critical section |
+| Finishing a merge       | the same call, naming every path you resolved — refused if the index holds anything else the merge did not produce |
 | A bare `git commit`     | refused by `require_commit_lock.py` (PreToolUse, Bash)                             |
 | Writing `state/triage.md` | `triage_state.py` upsert/update/ensure-schema take the same lock                  |
 | Who holds it right now  | `driver_lock.py status`                                                            |

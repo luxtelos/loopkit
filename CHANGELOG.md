@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.4 — 2026-10-04
+
+A merge that stopped on a conflict can be finished.
+
+### Fixed
+
+- **`scripts/loop-commit.sh` finishes a merge.** It always ran
+  `git commit -- <paths>`, and git refuses that form while a merge is in
+  progress: `fatal: cannot do a partial commit during a merge.` A bare
+  `git commit` is refused by `require_commit_lock.py`. Between the two, a merge
+  that stopped on a conflict had no allowed way to complete, and a branch with a
+  one-file conflict stayed stuck. Now, when `MERGE_HEAD` exists, the same call —
+  `loop-commit.sh -m "…" -- <every path you resolved>` — stages those paths and
+  commits the merge, still inside the driver lock.
+- **It does so without re-opening the shared-index hole.** A merge commit has to
+  publish the whole index, which is exactly what the pathspec form was written
+  to prevent: a file another process staged would ride along. So
+  `scripts/loop-commit-merge.sh` first asks git what the merge ALONE produces
+  (`git merge-tree --write-tree HEAD MERGE_HEAD`, which touches neither the
+  index nor the working tree) and compares the index against it. Every path that
+  differs must be covered by a path the caller named. One that is not is refused
+  by name with exit 3, nothing is committed, and the merge stays in progress.
+  The same refusal covers an unresolved path, a path that names nothing, an
+  octopus merge, and a git older than 2.38 (no `merge-tree --write-tree`, so no
+  proof, so no commit).
+- **A cherry-pick in progress is refused with a reason** (exit 3) instead of
+  git's `cannot do a partial commit during a cherry-pick`. The wrapper does not
+  finish one: no equivalent proof is defined for it yet.
+
+### Unchanged, and now pinned
+
+- With no merge in progress the wrapper behaves as before: only the named paths
+  are published and a foreign staged file stays staged. The same holds during a
+  revert and at a rebase stop, where git accepts the pathspec form.
+- `tests/pins/loop-commit-finishes-a-merge.sh`, wired into `tests/selftest.sh`,
+  holds one check per risk and proves it can fail: with the check stubbed out,
+  the foreign-file case reports the sweep.
+
 ## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.

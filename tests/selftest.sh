@@ -1154,6 +1154,18 @@ printf '%s\n' "$rgt_out" | grep -E '^  FAIL' || true
 [ "$rgt_rc" = 0 ] && ok "the remote gate sends the working tree, says so, and keeps bare-host mode" \
   || fail "remote gate tree: $(printf '%s' "$rgt_out" | tail -1)"
 
+echo "== loop-commit.sh finishes a merge, and only a merge it can vouch for"
+# `git commit -- <paths>` is refused by git while a merge is in progress, and a
+# bare commit is refused by require_commit_lock.py, so a merge that stopped on a
+# conflict had no allowed way to finish. The fix commits the whole index — the
+# one thing the pathspec form exists to prevent — so the pin holds a check per
+# way that can go wrong: a foreign staged file, an unresolved path, the wrong
+# paths named, the ordinary no-merge path, and the other in-progress states.
+lcm_out="$(bash "$REPO/tests/pins/loop-commit-finishes-a-merge.sh" "$REPO" 2>&1)"; lcm_rc=$?
+printf '%s\n' "$lcm_out" | grep -E '^  FAIL' || true
+[ "$lcm_rc" = 0 ] && ok "a stopped merge completes through the wrapper; a foreign staged file is refused, not swept in" \
+  || fail "loop-commit mid-merge: $(printf '%s' "$lcm_out" | tail -1)"
+
 # The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
 # all four unreviewed" and handed the owner all four in the same breath. The
 # rule that fixes it is only worth having if it is present where an agent reads

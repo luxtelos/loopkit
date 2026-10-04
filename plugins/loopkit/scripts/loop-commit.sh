@@ -27,7 +27,12 @@
 # Every path is required to be named. There is deliberately no "commit
 # everything" mode: that is the `git add -A` habit the constitution refuses.
 #
-# EXIT: git's own code; 2 on a usage error; 75 if the lock stayed busy.
+# A MERGE IN PROGRESS is finished by the same call: name every path you
+# resolved. See loop-commit-merge.sh for what is checked before the whole index
+# is committed, and why.
+#
+# EXIT: git's own code; 2 on a usage error; 3 if an operation in progress was
+# refused; 75 if the lock stayed busy.
 
 set -uo pipefail
 
@@ -40,7 +45,7 @@ PATHS=()
 seen_sep=0
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,35p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -78,15 +83,37 @@ fi
 
 # --- inside the critical section -------------------------------------------
 
-# Stage only what this caller named. Never -A, never '.'.
-git add -- "${PATHS[@]}" || exit $?
+# An operation in progress changes what a commit is, so it is decided first.
+#   merge        git refuses the pathspec form ("cannot do a partial commit
+#                during a merge"), so the WHOLE index is committed — but only
+#                after loop-commit-merge.sh has staged the named paths and
+#                proved the index holds nothing else that the merge itself did
+#                not produce. A foreign staged file is refused, exit 3.
+#   cherry-pick  git refuses the pathspec form here too, and no such proof is
+#                defined for it yet. Refused, exit 3, with the way out.
+#   anything else (a revert, a rebase stop, nothing at all) is the ordinary
+#                path below, unchanged: only the named paths are published.
+SPEC=(-- "${PATHS[@]}")
+if [ -f "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ]; then
+  echo "loop-commit.sh: a cherry-pick is in progress and this wrapper does not finish one." >&2
+  echo "  git refuses a pathspec commit during a cherry-pick, and committing the whole" >&2
+  echo "  index would publish whatever any other process staged here." >&2
+  echo "  Either \`git cherry-pick --abort\`, or ask a human to finish it. Nothing was committed." >&2
+  exit 3
+elif [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
+  bash "$HERE/loop-commit-merge.sh" -- "${PATHS[@]}" || exit $?
+  SPEC=()
+else
+  # Stage only what this caller named. Never -A, never '.'.
+  git add -- "${PATHS[@]}" || exit $?
+fi
 
 # The pathspec is what excludes every other process's staged work.
 # `${a[@]+"${a[@]}"}`, not `"${a[@]}"`: bash 3.2 (still the system bash on
 # macOS) treats an EMPTY array as unset under `set -u` and aborts. Found by
 # test_driver_lock.py, which is the only reason this file was ever run with no
 # optional flags.
-git commit ${GIT_FLAGS[@]+"${GIT_FLAGS[@]}"} "${MSG_ARGS[@]}" -- "${PATHS[@]}"
+git commit ${GIT_FLAGS[@]+"${GIT_FLAGS[@]}"} "${MSG_ARGS[@]}" ${SPEC[@]+"${SPEC[@]}"}
 rc=$?
 
 if [ "$rc" = 0 ]; then
