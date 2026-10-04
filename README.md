@@ -127,6 +127,7 @@ plugins/loopkit/
   scripts/loop-watch.sh            cheap per-PR poll with a per-PR baseline
   scripts/triage_state.py          the queue, escaped pipes and all; never hand-edit the table (shim → loopkit_core)
   scripts/inbox_to_triage.py       prose findings → rows, create-only, dry run by default
+  scripts/check-inbox-precedent.py a NEW inbox section must say what was searched before a human was asked; run by loop-commit.sh and the stop gate
   scripts/test-regressions.sh      one run diffed against state/known-test-failures.txt
   scripts/check-citations.py       file:line citations that still point where they claim; EMPTY (never PASS) when it finds none
   scripts/morning-triage.sh        headless discovery run, audit-logged
@@ -231,7 +232,9 @@ is **files with a fixed shape**, not code you have to call:
   cron, an MCP tool, a script that reads your alerting system) is in the loop.
   `morning-triage` is one discovery source; add others the same way.
 - **The door** — `inbox/needs-human.md`, `## heading (date)` sections; the
-  bridge script files open headings as rows and skips `RESOLVED` ones.
+  bridge script files open headings as rows and skips `RESOLVED` ones. A new
+  section carries `Precedent searched: <queries run> → <result>`, or it does
+  not commit.
 - **The truth** — `specs/*.md` with EARS lines; the reviewer and the Stop hook
   grade against whatever is there.
 - **The gate** — any shell commands in `.loopkit/config.env`, any secrets

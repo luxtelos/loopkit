@@ -12,6 +12,13 @@ A section is answerable only if it carries all of:
    with the WHOLE context in the section: the facts, the figures, the files.
    The reader must not need a lookup.
 4. The cost of EACH option, not one recommendation.
+5. What was searched before asking, on one line:
+   `Precedent searched: <queries run> → <result>` — the memory adapter, a grep
+   over the code, a grep over `docs/adr/` and `specs/`. If the search finds the
+   ruling, do not write the section at all. `→ no ruling found` is a real
+   result; an empty line is not. `loop-commit.sh` and the stop gate refuse a
+   NEW section without a usable line (`scripts/check-inbox-precedent.py`);
+   sections that were already here are never judged.
 
 When the human rules, do not delete the section: prefix the heading with
 `RESOLVED <date> —` (uppercase, so `inbox_to_triage.py` stops filing it) and

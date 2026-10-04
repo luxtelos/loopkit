@@ -285,6 +285,22 @@ echo ">> stop_gate: running checks before 'done' is allowed"
 GATE_BASE="$(gate_base)"
 gate_scope_note "$GATE_BASE"
 
+# --- A new inbox section says what was searched before a human was asked -----
+# BEFORE the short-circuit, on purpose: an inbox edit is Markdown, so a turn
+# that only escalated something has "no changed code files" and would leave
+# through the SKIP below without this ever running.
+#
+# It reads the FILE against the same base the rest of the gate uses, so it does
+# not matter how the section got there. loop-commit.sh refuses the commit, but
+# a bare `git commit` from a shell never passes through it; the branch still
+# differs from its merge base, and that difference is what is judged here.
+# Sections the base already holds are never judged (check-inbox-precedent.py).
+if [[ -f "$ROOT/inbox/needs-human.md" ]]; then
+    if ! python3 "$PLUGIN_ROOT/scripts/check-inbox-precedent.py" --root "$ROOT" --base "${GATE_BASE:-HEAD}"; then
+        fail "a new inbox/needs-human.md section has no usable 'Precedent searched: <queries run> → <result>' line"
+    fi
+fi
+
 # --- Short-circuit on no-op turns -------------------------------------------
 # The gate verifies CODE changes. A turn that only touched state/, docs, specs
 # or the harness has nothing to test, lint, typecheck or build; running the

@@ -254,7 +254,10 @@ case "$rows" in *"retry budget"*) has_bridge=1 ;; *) has_bridge=0 ;; esac
 find "$C" -delete
 
 # inbox bridge
-printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
+# The open section carries its `Precedent searched:` line because this scratch
+# repo is stop-gated below, and the gate refuses a NEW section without one
+# (tests/pins/inbox-precedent-gate.py pins the refusal itself).
+printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\nPrecedent searched: grep -rn "refund window" specs docs/adr → no ruling found\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
 out="$(python3 "$P/scripts/inbox_to_triage.py" --inbox "$T/inbox/needs-human.md" --state "$T/state/triage.md")"
 grep -q 'VERDICT: 1 finding' <<<"$out" && ok "bridge files the open heading, skips the RESOLVED one" || fail "inbox bridge"
 
@@ -633,7 +636,7 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe subscriptions
 
 echo "== rulings-extract (dry run, then apply)"
 printf '\n## RESOLVED 2026-09-01 — Grace-lane reactivation goes through a fresh checkout\n\nOwner ruled: reactivation from grace is a new checkout, never an un-cancel.\n' >> "$T/inbox/needs-human.md"
-printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n' >> "$T/inbox/needs-human.md"
+printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n\nPrecedent searched: grep -rn "pricing anchor" specs docs/adr → no ruling found\n' >> "$T/inbox/needs-human.md"
 mkdir -p "$T/docs/adr"; printf '# ADR-001: Postgres-direct for new domains\n\n## Decision\n\nNew domains write to Postgres directly; the BI layer is read-only.\n' > "$T/docs/adr/ADR-001-postgres-direct.md"
 out="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
 grep -q 'Grace-lane reactivation' <<<"$out" && grep -q 'ADR-001' <<<"$out" && grep -q 'dry run' <<<"$out" && ok "extract finds the inbox ruling and the ADR, writes nothing" || fail "extract: $out"
@@ -1241,6 +1244,40 @@ for c in "ssh host \"echo \$CODEX_GITHUB_PAT\"" \
   run_hook "$c"
   [ "$HOOK_RC" = 0 ] && ok "allowed: ${c:0:44}" || fail "FALSE POSITIVE (rc=$HOOK_RC): $c"
 done
+
+echo "== a new inbox section says what was searched before a human was asked"
+# The failure: an agent escalated a question the repository had already
+# answered, because the `decision` route never asked for a search and nothing
+# read the section. The pin checks the rule over file CONTENT and at both
+# places every write path converges (loop-commit.sh, stop_gate.sh), including
+# the bare-commit path the wrapper never sees.
+ip="$(python3 "$REPO/tests/pins/inbox-precedent-gate.py" 2>&1)"; ip_rc=$?
+printf '%s\n' "$ip" | grep '^  FAIL' || true
+ip_ok="$(printf '%s\n' "$ip" | grep -c '^  ok ' || true)"
+[ "$ip_rc" = 0 ] && [ "$ip_ok" -ge 33 ] \
+  && ok "a new section without a usable 'Precedent searched:' line is refused at commit and at stop; old sections and other commits are untouched ($ip_ok cases)" \
+  || fail "inbox precedent gate: rc=$ip_rc, $ip_ok/33 cases ok — $(printf '%s' "$ip" | tail -1)"
+# And each half must be able to FAIL on its own. Eight mutations, one per
+# pre-mortem risk; each has to turn its own tag red and leave another green.
+ipr="$(bash "$REPO/tests/pins/inbox-precedent-prove-red.sh" "$REPO" 2>&1)"
+ipr_red="$(printf '%s' "$ipr" | grep -c 'RED, as required' || true)"
+ipr_not="$(printf '%s' "$ipr" | grep -c 'NOT RED' || true)"
+[ "$ipr_red" = 8 ] && [ "$ipr_not" = 0 ] && ok "all eight halves of the inbox precedent gate are provably catchable" \
+  || fail "inbox precedent mutations: $ipr_red/8 red, $ipr_not not red"
+grep -q 'Precedent searched: <queries run> → <result>' "$P/templates/needs-human.md" \
+  && grep -q 'Precedent searched: <queries run> → <result>' "$REPO/inbox/needs-human.md" \
+  && ok "the inbox template, and this repo's own inbox, tell a new user the line exists" \
+  || fail "the inbox template or this repo's inbox no longer documents the 'Precedent searched:' line"
+python3 - "$P/skills/loop-assess/SKILL.md" <<'PY' && ok "loop-assess searches for precedent BEFORE it routes a decision to the inbox" || fail "loop-assess's decision route does not put the precedent search before the inbox"
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^- `decision` → (.*?)(?=^- |\Z)", s, re.S | re.M)
+route = m.group(1) if m else ""
+# Order, not presence: the search has to come before the inbox in the route.
+a, b = route.find("search for precedent first"), route.find("inbox/needs-human.md")
+ok = 0 <= a < b and all(w in route for w in ("memory.py recall", "docs/adr/", "Precedent searched:", "knowledge"))
+sys.exit(0 if ok else 1)
+PY
 
 # The verdict of the watcher started at the top of this file. Deliberately the
 # LAST check, so it covers every harness above it. It fails on two distinct

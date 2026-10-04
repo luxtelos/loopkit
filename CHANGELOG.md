@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased — after 0.2.3
+
+Not in any installed copy yet: Claude Code caches a plugin per version string,
+so this reaches consumers only when the manifest version is bumped.
+
+### Added
+
+- **A new inbox section says what was searched before a human was asked.**
+  Every NEW open `## ` section of `inbox/needs-human.md` carries
+  `Precedent searched: <queries run> → <result>`. The `decision` route used to
+  ask for the whole context and the cost of both options and never asked
+  whether anybody had looked, so a question whose answer was already a ruling
+  encoded in code went to the human anyway.
+  `scripts/check-inbox-precedent.py` reads the FILE, not the command that wrote
+  it, and runs where every write path converges: `loop-commit.sh` refuses the
+  commit before staging (exit 65; not a git hook, so `--no-verify` does not
+  skip it), and `stop_gate.sh` refuses the stop — before its no-code
+  short-circuit, and against its own merge base, so a section that arrived by
+  a bare `git commit` is still judged.
+  `→ no ruling found` is a real result. An empty line, a missing arrow, the
+  template's placeholders, or `none → none` is refused.
+  Sections the base already holds are never judged, and neither is a closed
+  heading (`RESOLVED <date> — …`), so no existing inbox needs rewriting.
+  **On upgrade:** a branch in flight that already added a section without the
+  line will be stopped by the gate until the line is added.
+- `skills/loop-assess` — the `decision` route now searches first (memory
+  adapter, code, `docs/adr/` and `specs/`) and records the line; a hit reroutes
+  the finding to `knowledge` and nobody is asked.
+- `templates/needs-human.md` lists the line as the fifth thing a section
+  carries; `templates/brief.md` gains an "Owner questions" section. The brief
+  half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
+- `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
+  33 cases, and eight mutations that each have to turn their own tag red.
+
 ## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.
