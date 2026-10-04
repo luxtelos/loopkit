@@ -441,13 +441,17 @@ escalation half. The row for it on `state/triage.md` is keyed by
 
 ## Round-3 wording for specs/findings-are-concepts.md is written and waits on a hand allowed to apply it (2026-09-18)
 
-**RESOLVED 2026-09-22 — applied in `d18901f` on PR #47.** The owner enabled Autofix on
-the PR (standing authorization to fix a failing check and push), and the patch was
-applied under it with `GOVERNANCE_EDIT_OK=1` disclosed in the commit message and the
-PR comment. `inbox/findings-are-concepts-round3.patch` no longer exists; the citation
-gate is green on `d18901f`. The commands below are history, not instructions. The
-general ruling — whether an implementing agent may grant itself that override —
-is the 2026-09-08 entry above and is still open; this resolution does not answer it.
+**REOPENED 2026-10-04 — the wording is NOT applied; it waits on the owner's read.**
+It was applied once (`d18901f`, 2026-09-22) by an agent that set `GOVERNANCE_EDIT_OK=1`
+for itself. That was a self-approval and is reverted on this branch. The draft now lives
+at `state/2026-10-04-spec-draft-findings-are-concepts-round3.md`, with the steps to ratify
+it; `inbox/findings-are-concepts-round3.patch` no longer exists, so the commands further
+down this entry are history. Until the owner ratifies the wording the citation gate on
+this branch is RED with one problem, by design.
+
+Precedent searched: owner rulings on the governance override, spec drafts → owner rule
+2026-10-03: an agent never grants itself the override; draft wording goes to `state/`.
+That rule answers "revert or keep", so only the ratification itself is asked here.
 
 **What is blocked.** PR #47 round 3 changed `plugins/loopkit/loopkit_memory/okf.py`
 — the source refusal list became a closed set, and an immutable artifact is now
