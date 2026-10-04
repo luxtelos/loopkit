@@ -445,8 +445,8 @@ escalation half. The row for it on `state/triage.md` is keyed by
 It was applied once (`d18901f`, 2026-09-22) by an agent that set `GOVERNANCE_EDIT_OK=1`
 for itself. That was a self-approval and is reverted on this branch. The draft now lives
 at `state/2026-10-04-spec-draft-findings-are-concepts-round3.md`, with the steps to ratify
-it; `inbox/findings-are-concepts-round3.patch` no longer exists, so the commands further
-down this entry are history. Until the owner ratifies the wording the citation gate on
+it; `inbox/findings-are-concepts-round3.patch` no longer exists, and this entry no longer
+points at it. Until the owner ratifies the wording the citation gate on
 this branch is RED with one problem, by design.
 
 Precedent searched: owner rulings on the governance override, spec drafts → owner rule
@@ -476,17 +476,15 @@ that no longer exists, and the gate says "the claim is now false and must be
 rewritten, not re-pointed". `tests/selftest.sh` carries that one FAIL line and
 no other. The code, the pin and the #48 merge are on the branch and reviewable.
 
-**The wording, ready to apply.** `inbox/findings-are-concepts-round3.patch`
-touches two files and nothing else: `specs/findings-are-concepts.md` and
+**The wording, ready to ratify.** The draft at
+`state/2026-10-04-spec-draft-findings-are-concepts-round3.md` touches two files and nothing else: `specs/findings-are-concepts.md` and
 `.loopkit/citations.json` (the pin on the old refusal line is re-pointed at
 `resolve_source`, and one pin is added for `artifact_drift`). They travel
 together because either alone leaves the gate red.
 
-```
-git apply --check inbox/findings-are-concepts-round3.patch
-git apply inbox/findings-are-concepts-round3.patch
-env -u CLAUDE_PROJECT_DIR python3 plugins/loopkit/scripts/check-citations.py   # from the repo root
-```
+The steps to apply it are in that draft (save its fenced diff to a file, then
+`git apply --check` and `git apply` it from the repo root, then run
+`check-citations.py`). They are for the owner, or a step the owner approves.
 
 Measured in a throwaway clone at `c3da4a3`, from the repo root with
 `CLAUDE_PROJECT_DIR` unset. Before the patch: 52 citations, 28 pinned, FAIL, 1
