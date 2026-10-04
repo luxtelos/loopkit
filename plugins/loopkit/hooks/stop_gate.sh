@@ -205,6 +205,17 @@ gate_base() {
     printf '%s' "$base"
 }
 
+# `stop_gate.sh --print-base` prints the base and exits, running nothing else.
+# loop-commit.sh asks this, so the inbox precedent check judges a commit
+# against exactly the base the gate will judge the stop against. One
+# definition of "the base", asked of its owner, instead of a second copy that
+# would drift: two copies once disagreed, and an old branch could commit what
+# the gate then refused.
+if [[ "${1:-}" == "--print-base" ]]; then
+    gate_base
+    exit 0
+fi
+
 # Whenever the gate is NOT looking at a merge base it is reading the working
 # tree only, and any committed work is invisible to it. Say so — every time,
 # and say which situation actually obtains. The previous message asserted "on

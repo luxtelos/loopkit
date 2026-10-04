@@ -25,17 +25,26 @@ converging write path); whether the recorded search was the right one.
    HEAD does not account for AND that section has no usable
    `Precedent searched: <queries run> → <result>` line, the wrapper SHALL exit
    65, SHALL stage nothing, SHALL create no commit, and SHALL name the section.
-2. WHEN the stop gate runs AND `inbox/needs-human.md` holds such a section
+2. `loop-commit.sh` SHALL judge against the base the stop gate prints with
+   `stop_gate.sh --print-base` (HEAD when it prints none), so the two give the
+   same answer for the same inbox.
+2a. WHEN the stop gate runs AND `inbox/needs-human.md` holds such a section
    relative to the gate's merge base (HEAD when there is none), the gate SHALL
    reject the stop, whether or not any code file changed and however the
    section reached the branch.
-3. A line SHALL be usable only if it names at least one query before the arrow
-   (`→` or `->`) and a result after it, neither side is a placeholder
-   (`<…>`, `TODO`, `TBD`, `…`), and the query side is not a bare "none".
-   A result of "none" / "no ruling found" SHALL be accepted.
-4. WHERE a section under the same heading and without a usable line already
-   exists in the base, the check SHALL NOT judge it (the count of line-less
-   sections per open heading may not GROW; it need not shrink).
+3. A line SHALL be usable only if it is ONE line of the section body that the
+   rendered file shows (not inside a fenced code block, an indented code block
+   or an HTML comment), starts with exactly `Precedent searched:` (optionally
+   after a blockquote or list marker; case-sensitive), names at least one query
+   before the arrow `→` (U+2192) and a result after it on the same line, and
+   neither side is a placeholder (`<…>`, `TODO`, `TBD`, `…`) and the query side
+   is not a bare "none". A result of "none" / "no ruling found" SHALL be
+   accepted. Any other arrow (`->`, `-->`, `=>`, …) SHALL be refused with a
+   message naming the expected shape.
+4. WHERE the base holds a section with the same heading AND the same body
+   (whitespace and line endings aside), the check SHALL NOT judge it. Any open
+   section without such a twin — new, edited, or a new question under an old
+   heading — SHALL be judged.
 5. WHERE a heading is closed by the inbox bridge's own rule (`is_closed`), the
    check SHALL NOT judge the section.
 6. WHEN the named paths of a `loop-commit.sh` call would not publish

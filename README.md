@@ -233,8 +233,8 @@ is **files with a fixed shape**, not code you have to call:
   `morning-triage` is one discovery source; add others the same way.
 - **The door** — `inbox/needs-human.md`, `## heading (date)` sections; the
   bridge script files open headings as rows and skips `RESOLVED` ones. A new
-  section carries `Precedent searched: <queries run> → <result>`, or it does
-  not commit.
+  or edited section carries `Precedent searched: <queries run> → <result>`,
+  or it does not commit.
 - **The truth** — `specs/*.md` with EARS lines; the reviewer and the Stop hook
   grade against whatever is there.
 - **The gate** — any shell commands in `.loopkit/config.env`, any secrets

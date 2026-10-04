@@ -283,7 +283,7 @@ to its state machine. The fixed twin exits 0.
 | `FAIL: N NEW test failure(s)` | a regression | fix it, or if it is pre-existing and you can prove it, add it to the baseline in the same PR |
 | `VERDICT: ESCALATE` from watch | 24 quiet ticks | chase the human or stop the loop |
 | a row at `blocked` | waiting on a ruling in `inbox/needs-human.md` | answer the section; the agent moves the row |
-| `REFUSED: inbox/needs-human.md — … 'Precedent searched:'` | a new inbox section does not say what was searched before asking you | run the search (memory, code, ADRs/specs), then add `Precedent searched: <queries run> → <result>` to the section; if the search finds the ruling, drop the section |
+| `REFUSED: inbox/needs-human.md — … 'Precedent searched:'` | a new or edited inbox section does not say what was searched before asking you | run the search (memory, code, ADRs/specs), then add `Precedent searched: <queries run> → <result>` to the section on one plain line, arrow `→`; if the search finds the ruling, drop the section |
 
 ## Uninstall
 

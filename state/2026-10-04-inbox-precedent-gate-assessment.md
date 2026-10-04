@@ -108,3 +108,26 @@ merge base for the stop gate). Closed headings (`RESOLVED …`, the bridge's own
   bump is not part of this change. On first run after the bump, a consumer's
   in-flight branch that added a bare section will be stopped by the gate until
   the line is added. That is the rule working, and it costs one search.
+
+## Round 2 — independent review FAIL at ee52e0f (2026-10-04)
+
+The reviewer proved, by command, two holes and one disagreement:
+
+1. **Heading reuse laundered a section.** The allowance was a per-heading
+   count and a RESOLVED stamp did not use it up, so "resolve Old A, then ask a
+   new bare question headed Old A" passed (rc 0), as did "delete Old A, re-add
+   a bare Old A with a new body". Fixed by IDENTITY: a section is old only if
+   heading and body are unchanged. Consequence, stated: an edited old open
+   section is now judged (needs the line, or a RESOLVED stamp).
+2. **Placement.** A line counted inside a fence, a multi-line HTML comment and
+   an indented code block, and an empty label with an arrow on the next line
+   passed. Fixed: one visible line only. Also narrowed, on the coordinator's
+   decision so this plugin and any copy of the rule agree: arrow `→` only,
+   label exact and case-sensitive.
+3. **Disagreement.** On a branch that added a bare section before the rule and
+   then merged trunk, the gate refused the stop but `loop-commit.sh` committed
+   the inbox (it judged against HEAD). Fixed: `loop-commit.sh` asks
+   `stop_gate.sh --print-base` and judges against the same base.
+
+Red / green / red for round 2: the pin (71 cases) gave 45 ok / 26 FAIL on the
+round-1 checker, 71 / 0 with the fix, 10 / 61 against main's plugins.

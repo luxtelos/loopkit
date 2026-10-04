@@ -19,12 +19,24 @@ so this reaches consumers only when the manifest version is bumped.
   skip it), and `stop_gate.sh` refuses the stop — before its no-code
   short-circuit, and against its own merge base, so a section that arrived by
   a bare `git commit` is still judged.
-  `→ no ruling found` is a real result. An empty line, a missing arrow, the
-  template's placeholders, or `none → none` is refused.
-  Sections the base already holds are never judged, and neither is a closed
-  heading (`RESOLVED <date> — …`), so no existing inbox needs rewriting.
-  **On upgrade:** a branch in flight that already added a section without the
-  line will be stopped by the gate until the line is added.
+  The shape is exact: the label `Precedent searched:` at the start of one
+  plain line, the arrow `→` (U+2192; `->`, `-->`, `=>` are refused by name),
+  text on both sides. A line inside a fenced or indented code block or an HTML
+  comment does not count, and neither does a label with its result on the next
+  line. `→ no ruling found` is a real result; an empty side, the template's
+  placeholders, or `none → none` is refused.
+  A section is old by IDENTITY: heading and body unchanged from the base. An
+  old section left as it was is never judged, and neither is a closed heading
+  (`RESOLVED <date> — …`), so no existing inbox needs rewriting. An edited old
+  section, or a new question under an old heading, is judged.
+  `loop-commit.sh` asks the stop gate for its base (`stop_gate.sh
+  --print-base`), so the two always give the same answer for the inbox.
+  **Upgrade note:** an open branch that added a section without the line,
+  before this rule existed, is new against the trunk. Once you upgrade, the
+  stop gate blocks that branch, and `loop-commit.sh` refuses any commit that
+  names the inbox, until the line is added. Commits that do not name the
+  inbox still go through. Editing an old open section also needs the line,
+  or a RESOLVED stamp.
 - `skills/loop-assess` — the `decision` route now searches first (memory
   adapter, code, `docs/adr/` and `specs/`) and records the line; a hit reroutes
   the finding to `knowledge` and nobody is asked.
@@ -32,7 +44,7 @@ so this reaches consumers only when the manifest version is bumped.
   carries; `templates/brief.md` gains an "Owner questions" section. The brief
   half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
 - `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
-  33 cases, and eight mutations that each have to turn their own tag red.
+  71 cases, and fifteen mutations that each have to turn their own tag red.
 
 ## 0.2.3 — 2026-10-03
 

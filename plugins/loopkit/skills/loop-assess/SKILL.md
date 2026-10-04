@@ -159,12 +159,15 @@ run from re-adding the guard clause this one removed.
   Precedent searched: <queries run> → <result>
   ```
 
+  The shape is exact: the label `Precedent searched:` at the start of a plain
+  line (not bold, not in a code block or an HTML comment), the arrow `→`
+  (U+2192, not `->`), and something on both sides, all on that one line.
   `→ no ruling found` is a real result. An empty line, or `none → none`, is a
   search that did not happen written down as one that did, and it is refused:
-  `loop-commit.sh` will not commit a new inbox section without a usable line,
-  and the stop gate will not let the turn end on one
-  (`scripts/check-inbox-precedent.py`; sections that were already there are
-  never judged). Then state the cost of **both** options, and give the whole
+  `loop-commit.sh` will not commit a new or edited inbox section without a
+  usable line, and the stop gate will not let the turn end on one
+  (`scripts/check-inbox-precedent.py`; a section left exactly as it was is
+  never judged, an edited one is). Then state the cost of **both** options, and give the whole
   context in the escalation itself — the facts, the figures, the files — so the
   owner can decide from the escalation alone without a lookup. A bare question
   with one recommended answer reads as a rubber stamp.

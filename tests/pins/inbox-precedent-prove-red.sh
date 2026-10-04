@@ -17,6 +17,16 @@
 #   MUT-EMPTY        any line counts, whatever it says      -> [empty] red
 #   MUT-SCOPE-LEAK   the named-paths filter never matches   -> [commit] red
 #   MUT-SCOPE-WIDE   every commit is judged, named or not   -> [commit][control] red
+#   MUT-IDENTITY     a section is old by heading alone      -> [identity] red
+#   MUT-FENCE        a line in a fenced block counts        -> [fence] red
+#   MUT-COMMENT      a line in an HTML comment counts       -> [comment] red
+#   MUT-INDENT       a line in indented code counts         -> [indent] red
+#   MUT-ARROW        '->' is taken as the arrow             -> [arrow] red
+#   MUT-LABEL        the label is matched in any case       -> [label] red
+#   MUT-AGREE        loop-commit judges against HEAD again  -> [agree] red
+#
+# [nextline] has no mutation here: its red is the round-1 checker, which
+# joined the next line, and on which every [nextline] case fails.
 #
 # MUTATE A COPY, NEVER THE TRACKED FILE. Same rule, same reason, as
 # governance-prove-red.sh and stop-gate-prove-red.sh: a restore-afterwards is a
@@ -73,7 +83,7 @@ prove() {
 C=scripts/check-inbox-precedent.py
 
 prove "MUT-COMMIT: loop-commit.sh stops asking" scripts/loop-commit.sh \
-  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base HEAD -- "${PATHS[@]}" || {' \
+  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" -- "${PATHS[@]}" || {' \
   'true || {' \
   '[commit]' '[gate]'
 
@@ -88,7 +98,7 @@ prove "MUT-NEW: nothing is ever new" "$C" \
   '[new]' '[grandfather]'
 
 prove "MUT-GRANDFATHER: everything is new, history included" "$C" \
-  'if allowance[heading] > 0:' \
+  'if allowance[key] > 0:' \
   'if False:' \
   '[grandfather]' '[new]'
 
@@ -98,7 +108,7 @@ prove "MUT-CLOSED: a RESOLVED stamp makes an old section new" "$C" \
   '[grandfather]' '[new]'
 
 prove "MUT-EMPTY: any line counts, whatever it says" "$C" \
-  'why = judge_line(" ".join(parts))' \
+  'why = judge_line(m.group(1))' \
   'why = ""' \
   '[empty]' '[grandfather]'
 
@@ -111,6 +121,41 @@ prove "MUT-SCOPE-WIDE: every commit is judged, named or not" "$C" \
   'if args.pathspecs and not touched(args.inbox, args.pathspecs):' \
   'if False:' \
   '[commit][control]' '[gate]'
+
+prove "MUT-IDENTITY: a section is old by its heading alone" "$C" \
+  'return (heading, body)' \
+  'return (heading, "")' \
+  '[identity]' '[grandfather]'
+
+prove "MUT-FENCE: a line inside a fenced block counts" "$C" \
+  "$(printf '            m = FENCE.match(raw)\n            if m:\n                fence')" \
+  "$(printf '            m = None\n            if m:\n                fence')" \
+  '[fence]' '[comment]'
+
+prove "MUT-COMMENT: a line inside an HTML comment counts" "$C" \
+  'start = rest.find("<!--")' \
+  'start = -1' \
+  '[comment]' '[fence]'
+
+prove "MUT-INDENT: a line in an indented code block counts" "$C" \
+  'if raw.startswith("\t") or raw.startswith("    "):' \
+  'if False:' \
+  '[indent]' '[fence]'
+
+prove "MUT-ARROW: '->' is taken as the arrow" "$C" \
+  '    if ARROW not in text:' \
+  "$(printf '    text = text.replace("->", ARROW)\n    if ARROW not in text:')" \
+  '[arrow]' '[label]'
+
+prove "MUT-LABEL: the label is matched in any case" "$C" \
+  'LABEL = re.compile(r"^' \
+  'LABEL = re.compile(r"(?i)^' \
+  '[label]' '[arrow]'
+
+prove "MUT-AGREE: loop-commit judges against HEAD, not the gate's base" scripts/loop-commit.sh \
+  '--base "${INBOX_BASE:-HEAD}"' \
+  '--base HEAD' \
+  '[agree]' '[gate]'
 
 echo "RESTORED: $(python3 "$PIN" "$PLUGIN" 2>&1 | tail -1)"
 
