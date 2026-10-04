@@ -14,17 +14,28 @@ A merge that stopped on a conflict can be finished.
   one-file conflict stayed stuck. Now, when `MERGE_HEAD` exists, the same call —
   `loop-commit.sh -m "…" -- <every path you resolved>` — stages those paths and
   commits the merge, still inside the driver lock.
-- **It does so without re-opening the shared-index hole.** A merge commit has to
-  publish the whole index, which is exactly what the pathspec form was written
-  to prevent: a file another process staged would ride along. So
-  `scripts/loop-commit-merge.sh` first asks git what the merge ALONE produces
-  (`git merge-tree --write-tree HEAD MERGE_HEAD`, which touches neither the
-  index nor the working tree) and compares the index against it. Every path that
-  differs must be covered by a path the caller named. One that is not is refused
-  by name with exit 3, nothing is committed, and the merge stays in progress.
-  The same refusal covers an unresolved path, a path that names nothing, an
-  octopus merge, and a git older than 2.38 (no `merge-tree --write-tree`, so no
-  proof, so no commit).
+- **It does so without committing the shared index.** A merge commit publishes
+  a whole tree, which is what the pathspec form was written to prevent: a file
+  another process staged would ride along. Checking the shared index and then
+  committing it is not enough — for a whole-index commit git drops
+  `index.lock` before the pre-commit hook and reads the index again after it,
+  so a lockless `git add` during the hook lands in the commit (found in review
+  of the first version of this fix). So `scripts/loop-commit-merge.sh` builds
+  the commit in a PRIVATE index: what the merge alone produces
+  (`git merge-tree --write-tree HEAD MERGE_HEAD`, computed from the two commits)
+  plus the named paths from the working tree, then runs a real
+  `GIT_INDEX_FILE=<private> git commit` — so the parents, the project's commit
+  hooks and signing are all git's own. Afterwards only the named paths are
+  brought up to date in the shared index; a foreign staged change stays staged.
+- **Refused, exit 3, nothing committed, merge still in progress:** a conflicted
+  path that was not named; a named conflicted file still holding conflict
+  markers; a directory or `.` named on a merge (files only — a directory would
+  exempt everything under it); a path that names nothing; a shared-index change
+  outside the named paths (foreign, or from a merge option merge-tree did not
+  replay); an octopus merge; and a git older than 2.38 (no
+  `merge-tree --write-tree`, so no proof, so no commit). A merge run with
+  `-X ours`/`-X theirs` completes once the files the option resolved are named;
+  the refusal lists them.
 - **A cherry-pick in progress is refused with a reason** (exit 3) instead of
   git's `cannot do a partial commit during a cherry-pick`. The wrapper does not
   finish one: no equivalent proof is defined for it yet.
@@ -35,8 +46,9 @@ A merge that stopped on a conflict can be finished.
   are published and a foreign staged file stays staged. The same holds during a
   revert and at a rebase stop, where git accepts the pathspec form.
 - `tests/pins/loop-commit-finishes-a-merge.sh`, wired into `tests/selftest.sh`,
-  holds one check per risk and proves it can fail: with the check stubbed out,
-  the foreign-file case reports the sweep.
+  holds one check per risk, including a foreign `git add` fired from inside a
+  slow pre-commit hook, and proves it can fail: a helper that commits the shared
+  index is caught by both the foreign-file and the mid-commit checks.
 
 ## 0.2.3 — 2026-10-03
 

@@ -89,3 +89,29 @@ histories, or a git older than 2.38 are refused rather than committed unchecked.
   same kind of proof exists (`merge-tree --merge-base`, git 2.40+) but nobody
   has asked for it; until then it is refused with a reason instead of git's
   one-line error.
+
+## Review round 1 (FAIL at 6154190) and what changed
+
+The first fix checked the shared index against `merge-tree` and then committed
+the shared index. Review showed the gap: for a whole-index commit git drops
+`index.lock` before the pre-commit hook and reads the index again after it, so
+a lockless `git add` during the hook rode into the merge commit with exit 0. A
+pathspec commit keeps the lock through the hook, which is why the ordinary path
+never had this. `require_commit_lock.py` lets a bare `git add` through on
+purpose, so the driver lock cannot be the defence.
+
+Now the shared index is never committed. The commit is built in a private index
+(merge-tree result + named files from the working tree) and made with a real
+`GIT_INDEX_FILE=<private> git commit`, so hooks and signing still run (no
+`commit-tree`). Afterwards only the named paths are refreshed in the shared
+index; a foreign staged change stays staged. Pinned by `RC` in the pin: a
+foreign add fired from inside a slow pre-commit hook — red on 6154190, green
+now.
+
+Also closed from the same review: conflict markers in a named conflicted file,
+a directory or `.` named on a merge, `-X theirs` merges (complete once named),
+a path with a space split in the refusal text.
+
+Still out of scope, its own finding: `require_commit_lock.py` refuses
+`git commit` but lets `git merge --continue` through, which is an unguarded
+whole-index finish. Present before this change.
