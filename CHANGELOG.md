@@ -1,8 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.
+
+This version exists because #50, #51 and #52 merged while both manifests still
+said 0.2.2. Claude Code caches an installed plugin per version string, so an
+unbumped manifest reaches nobody: every consumer kept the 0.2.2 copy. Merged in
+this version:
+
+- #50 — `git-add-force` is case-sensitive, so `-F` no longer reads as `-f`.
+- #51 — prose in a heredoc body is not a commit for `require_commit_lock`.
+- #52 — push rules read the shell, not a regex (`loopkit_core/push_guard.py`).
+- #56 — `require_recall` ignores comments, by the file's own comment syntax
+  (below), and the version bump itself.
+
+Everything else in this section had also merged after the 0.2.2 tag and was
+never released until now.
 
 ### Added
 
@@ -55,6 +69,27 @@ The guard rail that was only a sentence.
 
 ### Fixed
 
+- **A comment that names an invariant no longer blocks.** `require_recall.py`
+  matched its content rule against the whole body, so `# rows are keyed by the
+  primary key of users` in a `.py` file, or a `//` line in a `.ts` file, was
+  refused while changing no schema. The body is now read with the comment
+  syntax of the file's language, picked from its extension (`comment_style`),
+  and comment text is dropped before matching. Strings are always kept (real
+  DDL lives in strings), `/*` opens a block only where it starts a word (in
+  shell and YAML it is a glob), an unclosed block gives its text back, and a
+  file type not in the table is not stripped at all. Each `edits[]` fragment is
+  read on its own. Ported from a downstream fix that passed two rounds of
+  independent review, with that review's three follow-ups:
+  `dockerfile` matches only `dockerfile`, `dockerfile.<x>` with no code
+  extension, or `<x>.dockerfile` (a prefix match read `dockerfile-render.ts`
+  with `#` comments); `.fizz` uses Python comments; and YAML and JSX are each
+  read twice — once as before, once opening a quote only where a YAML scalar
+  or shell word can start (so `it's` is not a quote) or a backtick only where
+  a JS expression can start (so a backtick in JSX text is not a template) —
+  and the gate blocks if either reading shows an invariant. The second reading
+  can only add blocks. Pinned in `hooks/test_require_recall.py` (126 cases,
+  including the reviewer's round-2 attack corpus); the four accepted holes —
+  an Edit fragment that starts inside a string — are reported, not asserted.
 - **Prose in a heredoc is not a commit.** `require_commit_lock.py` refused a
   `gh issue create` whose body, written with `cat > f <<'EOF'`, said
   "`git add x && git commit -F m` passes there": the `&&` inside the prose read
