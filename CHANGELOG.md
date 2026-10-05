@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.2.4 — 2026-10-04
+
+A merge that stopped on a conflict can be finished.
+
+### Fixed
+
+- **`scripts/loop-commit.sh` finishes a merge.** It always ran
+  `git commit -- <paths>`, and git refuses that form while a merge is in
+  progress: `fatal: cannot do a partial commit during a merge.` A bare
+  `git commit` is refused by `require_commit_lock.py`. Between the two, a merge
+  that stopped on a conflict had no allowed way to complete, and a branch with a
+  one-file conflict stayed stuck. Now, when `MERGE_HEAD` exists, the same call —
+  `loop-commit.sh -m "…" -- <every path you resolved>` — stages those paths and
+  commits the merge, still inside the driver lock.
+- **It does so without committing the shared index.** A merge commit publishes
+  a whole tree, which is what the pathspec form was written to prevent: a file
+  another process staged would ride along. Checking the shared index and then
+  committing it is not enough — for a whole-index commit git drops
+  `index.lock` before the pre-commit hook and reads the index again after it,
+  so a lockless `git add` during the hook lands in the commit (found in review
+  of the first version of this fix). So `scripts/loop-commit-merge.sh` builds
+  the commit in a PRIVATE index: what the merge alone produces
+  (`git merge-tree --write-tree HEAD MERGE_HEAD`, computed from the two commits)
+  plus the named paths from the working tree, then runs a real
+  `GIT_INDEX_FILE=<private> git commit` — so the parents, the project's commit
+  hooks and signing are all git's own. Afterwards only the named paths are
+  brought up to date in the shared index; a foreign staged change stays staged.
+- **A signal cannot make it commit the wrong tree.** git reads the private
+  index again after the pre-commit hook, and the second version of this fix
+  deleted it from an EXIT trap: a SIGTERM to the helper alone (an operator's
+  `pkill -f loop-commit` is enough) produced a merge commit with an EMPTY tree
+  (found in review). Now `git commit` runs as a child the helper waits on; INT,
+  HUP or TERM is passed on to it, and the private index is removed only after
+  it has exited. The outcome is read from the repository: either the merge
+  commit landed — its tree is then checked against the tree that was built
+  (exit 5 if a path appeared or vanished) and the named paths are brought up to
+  date before the helper stops — or nothing was committed and the merge and the
+  shared index are as they were. The signal is honoured, never ignored.
+- Paths are read from git NUL-separated, so a conflicted file with a non-ASCII
+  name (which git C-quotes otherwise) can be finished.
+- **Refused, exit 3, nothing committed, merge still in progress:** a conflicted
+  path that was not named; a named conflicted file still holding conflict
+  markers; a directory or `.` named on a merge (files only — a directory would
+  exempt everything under it); a path that names nothing; a shared-index change
+  outside the named paths (foreign, or from a merge option merge-tree did not
+  replay); an octopus merge; and a git older than 2.38 (no
+  `merge-tree --write-tree`, so no proof, so no commit). A merge run with
+  `-X ours`/`-X theirs` completes once the files the option resolved are named;
+  the refusal lists them.
+- **A cherry-pick in progress is refused with a reason** (exit 3) instead of
+  git's `cannot do a partial commit during a cherry-pick`. The wrapper does not
+  finish one: no equivalent proof is defined for it yet.
+
+### Unchanged, and now pinned
+
+- With no merge in progress the wrapper behaves as before: only the named paths
+  are published and a foreign staged file stays staged. The same holds during a
+  revert and at a rebase stop, where git accepts the pathspec form.
+- `tests/pins/loop-commit-finishes-a-merge.sh`, wired into `tests/selftest.sh`,
+  holds one check per risk, including a foreign `git add` fired from inside a
+  slow pre-commit hook, and proves it can fail: a helper that commits the shared
+  index is caught by both the foreign-file and the mid-commit checks.
+
 ## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.
