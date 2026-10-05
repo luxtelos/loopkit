@@ -1160,8 +1160,9 @@ echo "== loop-commit.sh finishes a merge, and only a merge it can vouch for"
 # conflict had no allowed way to finish. A merge commit publishes a whole tree —
 # the one thing the pathspec form exists to prevent — so the pin holds a check
 # per way that can go wrong: a foreign staged file, a foreign `git add` DURING
-# the commit (from a slow pre-commit hook), an unresolved path, conflict
-# markers, a directory named, the ordinary no-merge path, and the other
+# the commit (from a slow pre-commit hook), a signal to the helper mid-commit
+# (once produced an empty-tree merge), an unresolved path, conflict markers, a
+# directory named, non-ASCII names, the ordinary no-merge path, and the other
 # in-progress states.
 lcm_out="$(bash "$REPO/tests/pins/loop-commit-finishes-a-merge.sh" "$REPO" 2>&1)"; lcm_rc=$?
 printf '%s\n' "$lcm_out" | grep -E '^  FAIL' || true

@@ -26,6 +26,14 @@
 #       under it)
 #   XT  a merge run with -X theirs is refused until its files are named, then
 #       completes with their working-tree content
+#   NA  conflicted paths with non-ASCII characters and spaces can be finished
+#       (git C-quotes such names unless its lists are read with -z)
+#   SG  a signal to the helper ALONE — TERM, INT, HUP, an operator's
+#       `pkill -f loop-commit`, mid pre-commit hook, mid post-commit hook, or
+#       during the shared-index refresh — leaves either the right merge commit
+#       or nothing committed with the merge and the shared index as they were.
+#       The second fix deleted its private index from an EXIT trap, so a TERM
+#       mid-hook made git commit a merge with an EMPTY tree.
 #   D   a conflict resolved with `git rm` completes
 #   L   the helper refuses to run outside the driver lock
 #   X   the pin can fail: a helper that commits the shared index is caught
@@ -277,6 +285,101 @@ if [ -f "$W/.git/MERGE_HEAD" ]; then
 else
   bad "fixture: git merge --no-commit -X theirs left no merge in progress"
 fi
+
+echo "NA conflicted paths with non-ASCII characters and spaces can be finished"
+n=$((n+1)); W="$WORK/fx$n"; mkdir -p "$W"
+git -c init.defaultBranch=main init -q "$W" >/dev/null 2>&1
+g config user.email t@t; g config user.name t; g config commit.gpgsign false
+for f in "café.txt" "a b.txt" plain.txt; do printf 'base\n' > "$W/$f"; done
+g add -- "café.txt" "a b.txt" plain.txt; g commit -qm base
+g checkout -qb side; for f in "café.txt" "a b.txt"; do printf 'side\n' > "$W/$f"; done; g commit -qam side
+g checkout -q main; for f in "café.txt" "a b.txt"; do printf 'main\n' > "$W/$f"; done; g commit -qam main
+g merge side >/dev/null 2>&1
+for f in "café.txt" "a b.txt"; do printf 'both\n' > "$W/$f"; done
+before="$(g rev-parse HEAD)"
+run "$LC" -m "merge side" -- "a b.txt"
+{ [ "$RC" = 3 ] && [ "$(g rev-parse HEAD)" = "$before" ]; } && ok "leaving café.txt unnamed is refused" || bad "exit $RC with café.txt unnamed"
+printf '%s\n' "$OUT" | grep -qx '  café.txt' && ok "the refusal names café.txt as typed, not C-quoted" || bad "café.txt not listed verbatim: $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+run "$LC" -m "merge side" -- "café.txt" "a b.txt"
+{ [ "$RC" = 0 ] && [ "$(parents)" = 3 ] && [ "$(g show 'HEAD:café.txt')" = both ] && [ "$(g show 'HEAD:a b.txt')" = both ]; } \
+  && ok "named, both complete" || bad "exit $RC: $(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+
+# --- signals ------------------------------------------------------------------
+# A kill delivered to the helper ALONE, at any point, must leave one of two
+# states: the right merge commit, or nothing committed with the merge and the
+# shared index exactly as they were. The second version of the helper deleted
+# its private index from an EXIT trap, so SIGTERM to it alone while the
+# pre-commit hook ran made `git commit` re-read a missing index and commit a
+# merge with an EMPTY tree — every file deleted. `pkill -f loop-commit` is
+# enough to do that.
+#
+# sig_case <label> <hook: pre|post|shim> <how: helper-TERM|helper-INT|helper-HUP|pkill|group-TERM>
+# The wrapper runs in its own process group, with SIGINT restored to its
+# default: a background job of a non-interactive shell starts with SIGINT
+# ignored, and an ignored-on-entry signal cannot even be trapped, which would
+# make the INT case test nothing. The helper's pid is recorded by
+# the hook (its grandparent: hook → git commit → helper) or by a `git` shim on
+# PATH that sleeps on `git reset` (its parent: shim → helper).
+REALGIT="$(command -v git)"
+sig_case() {
+  local label="$1" hook="$2" how="$3"
+  stopped_merge || return 1
+  local pidf="$W/.git/helper.pid" snap_before snap_after rc wp i path_pre="$PATH"
+  case "$hook" in
+    pre|post)
+      printf '#!/bin/sh\nps -o ppid= -p $PPID | tr -d " " > "%s"\nsleep 3\nexit 0\n' "$pidf" > "$W/.git/hooks/$hook-commit"
+      chmod +x "$W/.git/hooks/$hook-commit" ;;
+    shim)
+      mkdir -p "$W/.shim"
+      printf '#!/bin/sh\nif [ "$1" = reset ]; then echo $PPID > "%s"; sleep 2; fi\nexec "%s" "$@"\n' "$pidf" "$REALGIT" > "$W/.shim/git"
+      chmod +x "$W/.shim/git"; path_pre="$W/.shim:$PATH" ;;
+  esac
+  snap_before="$(g ls-files -s | shasum)"
+  local before; before="$(g rev-parse HEAD)"
+  ( cd "$W" && PATH="$path_pre" exec python3 -c 'import os,signal,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.setpgid(0,0); os.execvp(sys.argv[1], sys.argv[1:])' \
+      bash "$LC" -m "merge side" -- CHANGELOG.md sub/deep.txt >"$W/.git/wrapper.out" 2>&1 ) &
+  wp=$!
+  for i in $(seq 1 200); do [ -s "$pidf" ] && break; sleep 0.05; done
+  if [ ! -s "$pidf" ]; then bad "$label: the helper pid was never recorded"; kill -TERM -- "-$wp" 2>/dev/null; wait "$wp" 2>/dev/null; return 1; fi
+  local hp; hp="$(cat "$pidf")"
+  case "$how" in
+    helper-TERM) kill -TERM "$hp" ;;
+    helper-INT)  kill -INT  "$hp" ;;
+    helper-HUP)  kill -HUP  "$hp" ;;
+    pkill)       for p in $(pgrep -g "$wp" -f loop-commit); do kill -TERM "$p" 2>/dev/null; done ;;
+    group-TERM)  kill -TERM -- "-$wp" ;;
+  esac
+  { wait "$wp"; } 2>/dev/null; rc=$?
+  for i in $(seq 1 150); do pgrep -g "$wp" >/dev/null 2>&1 || break; sleep 0.1; done
+  snap_after="$(g ls-files -s | shasum)"
+  local files; files="$(g ls-tree -r --name-only HEAD | wc -l | tr -d ' ')"
+  if [ "$(g rev-parse HEAD)" = "$before" ]; then
+    if still_merging && [ "$snap_after" = "$snap_before" ] && [ -z "$(ls "$W/.git" | grep loopkit-merge)" ]; then
+      SIG_OUTCOME=none; ok "$label: nothing committed; merge, shared index and .git as they were (rc $rc)"
+    else
+      SIG_OUTCOME=bad; bad "$label: nothing committed but the state changed (merging=$(still_merging && echo yes || echo no), index same=$([ "$snap_after" = "$snap_before" ] && echo yes || echo no), leftovers=$(ls "$W/.git" | grep loopkit-merge | tr '\n' ' '))"
+    fi
+  elif [ "$(parents)" = 3 ] && [ "$files" = 5 ] && [ "$(g show HEAD:CHANGELOG.md)" = "$(printf 'main\nside')" ] \
+       && [ "$(g show HEAD:clean.txt)" = c2 ] && ! still_merging && [ -z "$(g ls-files -u)" ] \
+       && [ -z "$(g diff --cached --name-only HEAD -- CHANGELOG.md sub/deep.txt)" ]; then
+    SIG_OUTCOME=landed; ok "$label: the right merge commit landed and the named paths agree with it (rc $rc)"
+  elif [ "$(parents)" = 3 ] && [ "$files" = 5 ] && [ "$(g show HEAD:CHANGELOG.md)" = "$(printf 'main\nside')" ]; then
+    SIG_OUTCOME=bad; bad "$label: the right commit landed but was left half-done (merging=$(still_merging && echo yes || echo no), unmerged=$(g ls-files -u | wc -l | tr -d ' '), named paths staged vs HEAD=$(g diff --cached --name-only HEAD -- CHANGELOG.md sub/deep.txt | tr '\n' ' ')), rc $rc"
+  else
+    SIG_OUTCOME=bad; bad "$label: a WRONG commit landed: parents $(parents), $files file(s) in HEAD (want 5), tree $(g rev-parse --short 'HEAD^{tree}'), rc $rc"
+  fi
+}
+
+echo "SG a signal to the helper alone never commits the wrong tree"
+sig_case "TERM to the helper mid pre-commit hook" pre helper-TERM
+[ "${SIG_OUTCOME:-}" = none ] && ok "... and it stopped the commit, as asked" || [ "${SIG_OUTCOME:-}" = bad ] || bad "TERM to the helper did not stop the commit (outcome ${SIG_OUTCOME:-})"
+sig_case "INT to the helper mid pre-commit hook" pre helper-INT
+sig_case "HUP to the helper mid pre-commit hook" pre helper-HUP
+sig_case "pkill -f loop-commit (an operator) mid pre-commit hook" pre pkill
+sig_case "TERM to the whole group mid pre-commit hook (control)" pre group-TERM
+sig_case "TERM to the helper mid post-commit hook (commit already made)" post helper-TERM
+sig_case "TERM to the helper during the shared-index refresh" shim helper-TERM
+[ "${SIG_OUTCOME:-}" = landed ] && ok "... the refresh finished before it stopped" || [ "${SIG_OUTCOME:-}" = bad ] || bad "refresh case: outcome ${SIG_OUTCOME:-}"
 
 echo "D  a conflict resolved by deleting the file completes"
 mk

@@ -27,6 +27,19 @@ A merge that stopped on a conflict can be finished.
   `GIT_INDEX_FILE=<private> git commit` — so the parents, the project's commit
   hooks and signing are all git's own. Afterwards only the named paths are
   brought up to date in the shared index; a foreign staged change stays staged.
+- **A signal cannot make it commit the wrong tree.** git reads the private
+  index again after the pre-commit hook, and the second version of this fix
+  deleted it from an EXIT trap: a SIGTERM to the helper alone (an operator's
+  `pkill -f loop-commit` is enough) produced a merge commit with an EMPTY tree
+  (found in review). Now `git commit` runs as a child the helper waits on; INT,
+  HUP or TERM is passed on to it, and the private index is removed only after
+  it has exited. The outcome is read from the repository: either the merge
+  commit landed — its tree is then checked against the tree that was built
+  (exit 5 if a path appeared or vanished) and the named paths are brought up to
+  date before the helper stops — or nothing was committed and the merge and the
+  shared index are as they were. The signal is honoured, never ignored.
+- Paths are read from git NUL-separated, so a conflicted file with a non-ASCII
+  name (which git C-quotes otherwise) can be finished.
 - **Refused, exit 3, nothing committed, merge still in progress:** a conflicted
   path that was not named; a named conflicted file still holding conflict
   markers; a directory or `.` named on a merge (files only — a directory would

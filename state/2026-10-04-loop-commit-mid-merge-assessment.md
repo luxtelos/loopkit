@@ -115,3 +115,27 @@ a path with a space split in the refusal text.
 Still out of scope, its own finding: `require_commit_lock.py` refuses
 `git commit` but lets `git merge --continue` through, which is an unguarded
 whole-index finish. Present before this change.
+
+## Review round 2 (FAIL at a5a1be1) and what changed
+
+The private index removed the sweep, but its EXIT trap deleted the index while
+`git commit` could still read it. git re-reads the index after the pre-commit
+hook, so a SIGTERM to the helper alone (`pkill -f loop-commit` matches it, not
+`git commit`) produced a two-parent merge with git's empty tree, exit 143.
+
+Property now pinned (SG cases in the pin): a signal to the helper alone, at any
+point, leaves either the right merge commit or nothing committed with the merge
+and the shared index as they were. Mechanism: `git commit` is a waited-on
+child; INT/HUP/TERM are passed on as TERM; the private index is removed only
+after the child exits; the outcome is read from HEAD, not from exit codes; a
+landed commit's tree is checked for added/removed paths against the built tree
+(content changes by hooks are allowed); the refresh finishes before the helper
+stops. Red on a5a1be1 (empty tree, 0 files), green now.
+
+Also: path lists read with -z, so non-ASCII conflicted names finish.
+
+Residual, noted not fixed: if loop-commit.sh and driver_lock.py are killed too,
+the lock is released while the helper is still waiting for its dying
+`git commit`; a second caller could start in that short window. It cannot
+commit (git commit is being terminated, and MERGE_HEAD stays until a commit
+lands), but it would see the merge still in progress.
