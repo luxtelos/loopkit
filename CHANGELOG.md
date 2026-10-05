@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased — after 0.2.3
+
+Not in any installed copy yet: Claude Code caches a plugin per version string,
+so this reaches consumers only when the manifest version is bumped.
+
+### Added
+
+- **A new inbox section says what was searched before a human was asked.**
+  Every NEW open `## ` section of `inbox/needs-human.md` carries
+  `Precedent searched: <queries run> → <result>`. The `decision` route used to
+  ask for the whole context and the cost of both options and never asked
+  whether anybody had looked, so a question whose answer was already a ruling
+  encoded in code went to the human anyway.
+  `scripts/check-inbox-precedent.py` reads the FILE, not the command that wrote
+  it, and runs where every write path converges: `loop-commit.sh` refuses the
+  commit before staging (exit 65; not a git hook, so `--no-verify` does not
+  skip it), and `stop_gate.sh` refuses the stop — before its no-code
+  short-circuit, and against its own merge base, so a section that arrived by
+  a bare `git commit` is still judged.
+  The shape is exact: the label `Precedent searched:` at the start of one
+  plain line, the arrow `→` (U+2192; `->`, `-->`, `=>` are refused by name),
+  and at least one letter or digit, in any script, on each side (a no-break
+  or zero-width space, or `!!!`, is not text). A line inside a fenced or indented code block or an HTML
+  comment does not count, and neither does a label with its result on the next
+  line. `→ no ruling found` is a real result; an empty side, the template's
+  placeholders, or `none → none` is refused.
+  A section is old by IDENTITY: heading and body unchanged from the base. An
+  old section left as it was is never judged, and neither is a closed heading
+  (`RESOLVED <date> — …`), so no existing inbox needs rewriting. An edited old
+  section, or a new question under an old heading, is judged.
+  `loop-commit.sh` asks the stop gate for its base (`stop_gate.sh
+  --print-base`), so the two always give the same answer for the inbox.
+  **Upgrade note:** an open branch that added a section without the line,
+  before this rule existed, is new against the trunk. Once you upgrade, the
+  stop gate blocks that branch, and `loop-commit.sh` refuses any commit that
+  names the inbox, until the line is added. Commits that do not name the
+  inbox still go through. Editing an old open section also needs the line,
+  or a RESOLVED stamp.
+  **Known limit:** a question appended under a section already stamped
+  RESOLVED is not judged; a check cannot tell a ruling from a new question.
+  Put a new question in a new section.
+- `skills/loop-assess` — the `decision` route now searches first (memory
+  adapter, code, `docs/adr/` and `specs/`) and records the line; a hit reroutes
+  the finding to `knowledge` and nobody is asked.
+- `templates/needs-human.md` lists the line as the fifth thing a section
+  carries; `templates/brief.md` gains an "Owner questions" section. The brief
+  half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
+- `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
+  82 cases, and sixteen mutations that each have to turn their own tag red.
+
 ## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.

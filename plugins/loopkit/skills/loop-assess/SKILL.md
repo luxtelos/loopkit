@@ -142,10 +142,45 @@ run from re-adding the guard clause this one removed.
   criteria so the regression alarm is part of acceptance, not an afterthought.
 - `knowledge` → `memory.py knowledge enqueue --type Decision|Trap|Invariant …`
   then `drain`; the row goes to `done` with the concept path as its spec.
-- `decision` → `inbox/needs-human.md`. State the cost of **both** options, and
-  give the whole context in the escalation itself — the facts, the figures, the
-  files — so the owner can decide from the escalation alone without a lookup. A
-  bare question with one recommended answer reads as a rubber stamp.
+- `decision` → **search for precedent first, then** `inbox/needs-human.md`.
+  "Nobody has ruled" is a claim, and a claim needs a search behind it. Before
+  writing the section, run all three and keep the queries:
+  1. the memory adapter — `memory.py recall "<the question's nouns>"`;
+  2. the code — grep for the behaviour in question; a ruling that was already
+     implemented lives in a guard clause or a test pin, not in a document;
+  3. the paper trail — grep `docs/adr/`, `specs/`, and the `RESOLVED` sections
+     of the inbox itself.
+
+  If any of them returns the ruling, the finding is `knowledge`, not
+  `decision`: take that route and ask nobody. If none does, write the section
+  and record the search in it, on one line:
+
+  ```
+  Precedent searched: <queries run> → <result>
+  ```
+
+  The shape is exact: the label `Precedent searched:` at the start of a plain
+  line (not bold, not in a code block or an HTML comment), the arrow `→`
+  (U+2192, not `->`), and on each side at least one letter or digit (any
+  language; spaces, invisible characters and `!!!` do not count), all on that
+  one line.
+  `→ no ruling found` is a real result. An empty line, or `none → none`, is a
+  search that did not happen written down as one that did, and it is refused:
+  `loop-commit.sh` will not commit a new or edited inbox section without a
+  usable line, and the stop gate will not let the turn end on one
+  (`scripts/check-inbox-precedent.py`; a section left exactly as it was is
+  never judged, an edited one is). One known limit, by design: a question
+  appended under a section already stamped RESOLVED is not judged, because no
+  check can tell a ruling's text from a new question. So a new question always
+  goes in a NEW section, never appended to a resolved one. Then state the cost of **both** options, and give the whole
+  context in the escalation itself — the facts, the figures, the files — so the
+  owner can decide from the escalation alone without a lookup. A bare question
+  with one recommended answer reads as a rubber stamp.
+
+  The same goes for a question put to the owner anywhere else — a brief, a
+  status, a PR body. Flag it as an owner question and carry its `Precedent
+  searched:` line with it; no script reads those places, so there the line is
+  a rule you keep rather than a gate that stops you.
 - Everything else → the artifact named in Route. An owner ruling that does not
   become a rule, hook, script or runbook in the same session will be re-asked;
   that is the "signs, not chats" rule and it exists because it kept happening.
@@ -207,7 +242,9 @@ agent implements and a third judges.
 ## Gotchas
 
 - The first thing to check is whether the owner already ruled. Re-escalating a
-  settled question is the most expensive noise there is.
+  settled question is the most expensive noise there is. For a `decision` that
+  check is written down — `Precedent searched: <queries run> → <result>` in the
+  inbox section — and a new section without it does not commit.
 - A passing check that could not have failed is not evidence: env-gated suites,
   quoted globs, `| tail`. Ask what the signal would look like if the code were
   broken.

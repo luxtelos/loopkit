@@ -17,6 +17,7 @@
 | Committing anything                        | `loop-commit.sh -m "…" -- <paths>` — holds the driver lock         |
 | Who holds the driver lock right now        | `driver_lock.py status`                                              |
 | Findings in prose → rows                   | `inbox_to_triage.py` (dry run by default)                            |
+| Did a new inbox section search first       | `check-inbox-precedent.py` (run by `loop-commit.sh` and the stop gate) |
 | GitHub reads and PR comments               | `gh` CLI; never `gh pr merge`, never `--approve`                     |
 | Secrets a command genuinely needs          | `LOOP_ENV_WRAPPER` (e.g. a secrets-manager `run --`), value-blind    |
 

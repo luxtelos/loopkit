@@ -205,6 +205,17 @@ gate_base() {
     printf '%s' "$base"
 }
 
+# `stop_gate.sh --print-base` prints the base and exits, running nothing else.
+# loop-commit.sh asks this, so the inbox precedent check judges a commit
+# against exactly the base the gate will judge the stop against. One
+# definition of "the base", asked of its owner, instead of a second copy that
+# would drift: two copies once disagreed, and an old branch could commit what
+# the gate then refused.
+if [[ "${1:-}" == "--print-base" ]]; then
+    gate_base
+    exit 0
+fi
+
 # Whenever the gate is NOT looking at a merge base it is reading the working
 # tree only, and any committed work is invisible to it. Say so — every time,
 # and say which situation actually obtains. The previous message asserted "on
@@ -284,6 +295,22 @@ echo ">> stop_gate: running checks before 'done' is allowed"
 # the enclosing block and the note with it.
 GATE_BASE="$(gate_base)"
 gate_scope_note "$GATE_BASE"
+
+# --- A new inbox section says what was searched before a human was asked -----
+# BEFORE the short-circuit, on purpose: an inbox edit is Markdown, so a turn
+# that only escalated something has "no changed code files" and would leave
+# through the SKIP below without this ever running.
+#
+# It reads the FILE against the same base the rest of the gate uses, so it does
+# not matter how the section got there. loop-commit.sh refuses the commit, but
+# a bare `git commit` from a shell never passes through it; the branch still
+# differs from its merge base, and that difference is what is judged here.
+# Sections the base already holds are never judged (check-inbox-precedent.py).
+if [[ -f "$ROOT/inbox/needs-human.md" ]]; then
+    if ! python3 "$PLUGIN_ROOT/scripts/check-inbox-precedent.py" --root "$ROOT" --base "${GATE_BASE:-HEAD}"; then
+        fail "a new inbox/needs-human.md section has no usable 'Precedent searched: <queries run> → <result>' line"
+    fi
+fi
 
 # --- Short-circuit on no-op turns -------------------------------------------
 # The gate verifies CODE changes. A turn that only touched state/, docs, specs

@@ -27,7 +27,15 @@
 # Every path is required to be named. There is deliberately no "commit
 # everything" mode: that is the `git add -A` habit the constitution refuses.
 #
-# EXIT: git's own code; 2 on a usage error; 75 if the lock stayed busy.
+# ONE CONTENT RULE RIDES ALONG. If the named paths would publish
+# inbox/needs-human.md, every NEW or CHANGED section in it must carry a usable
+# `Precedent searched: <queries run> → <result>` line, judged against the same
+# base as the stop gate, or the commit is refused before anything is staged (see check-inbox-precedent.py for the rule
+# and for why it reads the file rather than the command that wrote it). This is
+# not a git hook, so --no-verify does not skip it.
+#
+# EXIT: git's own code; 2 on a usage error; 65 if a new inbox section has no
+# usable precedent line; 75 if the lock stayed busy.
 
 set -uo pipefail
 
@@ -77,6 +85,23 @@ if [ -z "${LOOPKIT_DRIVER_LOCK:-}" ]; then
 fi
 
 # --- inside the critical section -------------------------------------------
+
+# The inbox rule, BEFORE staging, so a refusal leaves the index as it found it.
+# The working file is what `git commit -- <paths>` is about to publish. The
+# base is the stop gate's own (its merge base against the trunk), asked of the
+# gate, so the two never disagree: judging against HEAD instead let a branch
+# that had added a bare section before this rule existed commit the inbox
+# again, while the gate refused the stop. HEAD only when the gate has no base.
+# Any non-zero answer refuses, including "the check could not run": a check
+# that fails open is a check that is not there.
+INBOX_BASE=""
+if [ -f "$ROOT/inbox/needs-human.md" ]; then
+  INBOX_BASE="$(CLAUDE_PROJECT_DIR="$ROOT" bash "$HERE/../hooks/stop_gate.sh" --print-base </dev/null 2>/dev/null || true)"
+fi
+python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" -- "${PATHS[@]}" || {
+  echo "loop-commit.sh: nothing was staged or committed — fix inbox/needs-human.md and run this again" >&2
+  exit 65
+}
 
 # Stage only what this caller named. Never -A, never '.'.
 git add -- "${PATHS[@]}" || exit $?
