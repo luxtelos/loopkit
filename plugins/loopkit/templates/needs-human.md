@@ -21,7 +21,8 @@ A section is answerable only if it carries all of:
    `loop-commit.sh` and the stop gate refuse a NEW or EDITED section without a
    usable line (`scripts/check-inbox-precedent.py`); a section left exactly as
    it was is never judged. To annotate an old open question, add the line or
-   stamp it RESOLVED.
+   stamp it RESOLVED. A new question always goes in a new section, never
+   appended under a RESOLVED one (no check can tell it from the ruling).
 
 When the human rules, do not delete the section: prefix the heading with
 `RESOLVED <date> —` (uppercase, so `inbox_to_triage.py` stops filing it) and

@@ -161,13 +161,18 @@ run from re-adding the guard clause this one removed.
 
   The shape is exact: the label `Precedent searched:` at the start of a plain
   line (not bold, not in a code block or an HTML comment), the arrow `→`
-  (U+2192, not `->`), and something on both sides, all on that one line.
+  (U+2192, not `->`), and on each side at least one letter or digit (any
+  language; spaces, invisible characters and `!!!` do not count), all on that
+  one line.
   `→ no ruling found` is a real result. An empty line, or `none → none`, is a
   search that did not happen written down as one that did, and it is refused:
   `loop-commit.sh` will not commit a new or edited inbox section without a
   usable line, and the stop gate will not let the turn end on one
   (`scripts/check-inbox-precedent.py`; a section left exactly as it was is
-  never judged, an edited one is). Then state the cost of **both** options, and give the whole
+  never judged, an edited one is). One known limit, by design: a question
+  appended under a section already stamped RESOLVED is not judged, because no
+  check can tell a ruling's text from a new question. So a new question always
+  goes in a NEW section, never appended to a resolved one. Then state the cost of **both** options, and give the whole
   context in the escalation itself — the facts, the figures, the files — so the
   owner can decide from the escalation alone without a lookup. A bare question
   with one recommended answer reads as a rubber stamp.

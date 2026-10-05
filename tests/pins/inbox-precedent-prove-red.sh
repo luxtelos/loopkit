@@ -24,6 +24,8 @@
 #   MUT-ARROW        '->' is taken as the arrow             -> [arrow] red
 #   MUT-LABEL        the label is matched in any case       -> [label] red
 #   MUT-AGREE        loop-commit judges against HEAD again  -> [agree] red
+#   MUT-GLYPH        any non-empty side counts, even '!' or a
+#                    zero-width space                       -> [glyph] red
 #
 # [nextline] has no mutation here: its red is the round-1 checker, which
 # joined the next line, and on which every [nextline] case fails.
@@ -156,6 +158,11 @@ prove "MUT-AGREE: loop-commit judges against HEAD, not the gate's base" scripts/
   '--base "${INBOX_BASE:-HEAD}"' \
   '--base HEAD' \
   '[agree]' '[gate]'
+
+prove "MUT-GLYPH: a side counts if it is non-empty, letter or not" "$C" \
+  'return any(c.isalnum() for c in side)' \
+  'return bool(side)' \
+  '[glyph]' '[grandfather]'
 
 echo "RESTORED: $(python3 "$PIN" "$PLUGIN" 2>&1 | tail -1)"
 

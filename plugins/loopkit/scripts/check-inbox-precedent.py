@@ -23,8 +23,10 @@ The shape is exact, so the plugin and every copy of the rule agree on it:
     sentence, or a `###` heading in front of it is not);
   * the arrow is `→` (U+2192). `->`, `-->`, `=>` and lookalikes are refused by
     name, with the expected shape in the message;
-  * both sides of the arrow say something. "→ none" is a real result: the
-    search ran and found nothing. An empty side, the template's own
+  * both sides of the arrow say something: each holds at least one letter or
+    digit, in any script. A side that renders as nothing (a no-break or
+    zero-width space) or as punctuation only (`!!!`) says nothing. "→ none"
+    and "→ 0" are real results: the search ran and found nothing. An empty side, the template's own
     `<placeholders>`, TODO, or "none" where the queries go is a search that did
     not happen, written down as one that did. Real zero is not fabricated zero;
   * it is one line. A label on one line and an arrow on the next is an empty
@@ -61,6 +63,14 @@ ruling, not a question waiting on a human, and is not judged. That is what
 lets an old section be stamped RESOLVED, with the ruling under it. It also
 means a heading that shouts an uppercase marker (`DONE`) mid-title is skipped;
 the bridge files no row for it either.
+
+KNOWN LIMIT. An old section stamped RESOLVED with a new question appended
+under it is not judged. The stamp is meant to carry the ruling beneath it, and
+no check can tell a ruling's text from a question written after it; a
+heuristic that tried would refuse real rulings. So the rule is a convention
+here, not a gate: a new question goes in a new section, never appended to a
+resolved one. The pin holds this case as passing, so the documents and the
+behaviour change together or not at all.
 
 This is a guard against FORGETTING to search, not against lying about it. An
 agent that writes a plausible false line passes. The reviewer reads the line.
@@ -110,6 +120,16 @@ EXAMPLE = ('Precedent searched: memory recall "refund window"; '
            'grep -rn "refund" specs/ docs/adr/ → no ruling found')
 
 
+def says_something(side: str) -> bool:
+    """A side counts only if it holds a letter or a digit, in any script.
+
+    `str.isalnum` is Unicode-aware, so a query or result in any language
+    counts, and a side made only of spaces (including no-break and zero-width
+    ones, which `strip()` leaves in place) or of punctuation does not.
+    """
+    return any(c.isalnum() for c in side)
+
+
 def judge_line(text: str) -> str:
     """'' if `text` (everything after the label) is a usable record, else why not."""
     if ARROW not in text:
@@ -120,10 +140,10 @@ def judge_line(text: str) -> str:
             return f"the line has no '→ <result>' on it (the arrow is → (U+2192)): {SHAPE}"
         return "the line is empty"
     queries, result = (part.strip(DRESSING) for part in text.split(ARROW, 1))
-    if not queries:
-        return "no query is named before the arrow"
-    if not result:
-        return "the arrow is followed by no result"
+    if not says_something(queries):
+        return "no query is named before the arrow (it needs a letter or digit, not only spaces or punctuation)"
+    if not says_something(result):
+        return "the arrow is followed by no result (it needs a letter or digit, not only spaces or punctuation)"
     if PLACEHOLDER.match(queries) or PLACEHOLDER.match(result):
         return "the line still holds a placeholder"
     if queries.lower() in NO_SEARCH:

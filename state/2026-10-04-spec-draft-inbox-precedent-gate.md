@@ -36,7 +36,8 @@ converging write path); whether the recorded search was the right one.
    rendered file shows (not inside a fenced code block, an indented code block
    or an HTML comment), starts with exactly `Precedent searched:` (optionally
    after a blockquote or list marker; case-sensitive), names at least one query
-   before the arrow `→` (U+2192) and a result after it on the same line, and
+   before the arrow `→` (U+2192) and a result after it on the same line, each
+   side holding at least one Unicode letter or digit, and
    neither side is a placeholder (`<…>`, `TODO`, `TBD`, `…`) and the query side
    is not a bare "none". A result of "none" / "no ruling found" SHALL be
    accepted. Any other arrow (`->`, `-->`, `=>`, …) SHALL be refused with a

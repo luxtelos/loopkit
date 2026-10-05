@@ -21,7 +21,8 @@ so this reaches consumers only when the manifest version is bumped.
   a bare `git commit` is still judged.
   The shape is exact: the label `Precedent searched:` at the start of one
   plain line, the arrow `→` (U+2192; `->`, `-->`, `=>` are refused by name),
-  text on both sides. A line inside a fenced or indented code block or an HTML
+  and at least one letter or digit, in any script, on each side (a no-break
+  or zero-width space, or `!!!`, is not text). A line inside a fenced or indented code block or an HTML
   comment does not count, and neither does a label with its result on the next
   line. `→ no ruling found` is a real result; an empty side, the template's
   placeholders, or `none → none` is refused.
@@ -37,6 +38,9 @@ so this reaches consumers only when the manifest version is bumped.
   names the inbox, until the line is added. Commits that do not name the
   inbox still go through. Editing an old open section also needs the line,
   or a RESOLVED stamp.
+  **Known limit:** a question appended under a section already stamped
+  RESOLVED is not judged; a check cannot tell a ruling from a new question.
+  Put a new question in a new section.
 - `skills/loop-assess` — the `decision` route now searches first (memory
   adapter, code, `docs/adr/` and `specs/`) and records the line; a hit reroutes
   the finding to `knowledge` and nobody is asked.
@@ -44,7 +48,7 @@ so this reaches consumers only when the manifest version is bumped.
   carries; `templates/brief.md` gains an "Owner questions" section. The brief
   half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
 - `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
-  71 cases, and fifteen mutations that each have to turn their own tag red.
+  82 cases, and sixteen mutations that each have to turn their own tag red.
 
 ## 0.2.3 — 2026-10-03
 

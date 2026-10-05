@@ -32,6 +32,10 @@ to go red.
     [identity]     a section is old only if heading AND body are unchanged —
                    reusing an old heading for a new question is new
     [empty]        a line that is present but says nothing is refused
+    [glyph]        a side that RENDERS as nothing, or as punctuation only,
+                   says nothing: it needs a letter or digit, in any script
+    [limit]        a documented known limit, pinned so the docs and the
+                   behaviour cannot drift apart silently
     [fence] [comment] [indent]
                    a line the rendered file does not show does not count
     [nextline]     the line is ONE line; a result on the next line is not it
@@ -212,6 +216,13 @@ with tempfile.TemporaryDirectory(prefix="inbox-precedent.") as t:
          "[check][new][identity] a note appended under an old open section changes it: refused")
     case(PREAMBLE + OLD + "\nA later note.\n\n" + LINE + OLD_B, 0,
          "[check][control] the same change WITH the line passes")
+    # KNOWN LIMIT, documented in the checker, the skill and the PR: a RESOLVED
+    # stamp is meant to carry the ruling under it, and no check can tell a
+    # ruling's text from a new question appended after it. A new question goes
+    # in a new section. If this ever starts refusing, update the docs with it.
+    case(PREAMBLE + OLD.replace("## Old A", "## RESOLVED 2026-03-03 — Old A")
+         + "\nRuling: keep it.\n\nAnd a new question: should it apply to refunds too?\n" + OLD_B, 0,
+         "[check][limit] a new question appended under a RESOLVED heading is not judged (documented limit)")
     case(PREAMBLE + OLD_B + section("Old C, a new question"), 1,
          "[check][new] delete an old bare section and add a new bare one: refused")
     case(PREAMBLE + OLD + OLD + OLD_B, 1,
@@ -232,6 +243,27 @@ with tempfile.TemporaryDirectory(prefix="inbox-precedent.") as t:
     case(PREAMBLE + section("Decide the refund window",
                             "Precedent searched: grep -rn refund specs docs/adr → none\n") + OLD + OLD_B, 0,
          "[check][control] a search that found nothing is a real result and passes")
+    # Built from code points, not typed: an invisible character in the source
+    # is one nobody reviewing this file can see either.
+    NBSP, ZWSP = "\u00a0", "\u200b"
+    for label, line in (
+        ("only a no-break space before the arrow", f"Precedent searched: {NBSP} → none\n"),
+        ("only a zero-width space before the arrow", f"Precedent searched: {ZWSP} → none\n"),
+        ("only a zero-width space after the arrow", f"Precedent searched: grep -rn refund specs → {ZWSP}\n"),
+        ("only a no-break space after the arrow", f"Precedent searched: grep -rn refund specs → {NBSP}{NBSP}\n"),
+        ("only '!!!' before the arrow", "Precedent searched: !!! → no ruling found\n"),
+        ("only '!' after the arrow", "Precedent searched: grep -rn refund specs → !\n"),
+        ("only punctuation and invisibles on both sides", f"Precedent searched: ?!{ZWSP} → -{NBSP}~\n"),
+    ):
+        case(PREAMBLE + section("Decide the refund window", line) + OLD + OLD_B, 1,
+             f"[check][empty][glyph] refused: {label}")
+    for label, line in (
+        ("a non-English query and result", "Precedent searched: खोज \"रिफ़ंड\" specs/ → कोई निर्णय नहीं\n"),
+        ("a result that is only a number", "Precedent searched: grep -c refund specs/*.md → 0\n"),
+        ("real words padded with no-break spaces", f"Precedent searched:{NBSP}grep -rn refund specs{NBSP}→{NBSP}none\n"),
+    ):
+        case(PREAMBLE + section("Decide the refund window", line) + OLD + OLD_B, 0,
+             f"[check][control] counted: {label}")
 
     print("== the line counts only where the rendered file shows it, on one line")
     for tag, label, line, says in (

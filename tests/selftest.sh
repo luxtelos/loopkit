@@ -1254,16 +1254,16 @@ echo "== a new inbox section says what was searched before a human was asked"
 ip="$(python3 "$REPO/tests/pins/inbox-precedent-gate.py" 2>&1)"; ip_rc=$?
 printf '%s\n' "$ip" | grep '^  FAIL' || true
 ip_ok="$(printf '%s\n' "$ip" | grep -c '^  ok ' || true)"
-[ "$ip_rc" = 0 ] && [ "$ip_ok" -ge 71 ] \
+[ "$ip_rc" = 0 ] && [ "$ip_ok" -ge 82 ] \
   && ok "a new or edited section without a usable, visible, one-line 'Precedent searched: … → …' is refused at commit and at stop, against one base; unchanged old sections and other commits are untouched ($ip_ok cases)" \
-  || fail "inbox precedent gate: rc=$ip_rc, $ip_ok/71 cases ok — $(printf '%s' "$ip" | tail -1)"
-# And each half must be able to FAIL on its own. Fifteen mutations, one per
+  || fail "inbox precedent gate: rc=$ip_rc, $ip_ok/82 cases ok — $(printf '%s' "$ip" | tail -1)"
+# And each half must be able to FAIL on its own. Sixteen mutations, one per
 # pre-mortem risk; each has to turn its own tag red and leave another green.
 ipr="$(bash "$REPO/tests/pins/inbox-precedent-prove-red.sh" "$REPO" 2>&1)"
 ipr_red="$(printf '%s' "$ipr" | grep -c 'RED, as required' || true)"
 ipr_not="$(printf '%s' "$ipr" | grep -c 'NOT RED' || true)"
-[ "$ipr_red" = 15 ] && [ "$ipr_not" = 0 ] && ok "all fifteen halves of the inbox precedent gate are provably catchable" \
-  || fail "inbox precedent mutations: $ipr_red/15 red, $ipr_not not red"
+[ "$ipr_red" = 16 ] && [ "$ipr_not" = 0 ] && ok "all sixteen halves of the inbox precedent gate are provably catchable" \
+  || fail "inbox precedent mutations: $ipr_red/16 red, $ipr_not not red"
 grep -q 'Precedent searched: <queries run> → <result>' "$P/templates/needs-human.md" \
   && grep -q 'Precedent searched: <queries run> → <result>' "$REPO/inbox/needs-human.md" \
   && ok "the inbox template, and this repo's own inbox, tell a new user the line exists" \

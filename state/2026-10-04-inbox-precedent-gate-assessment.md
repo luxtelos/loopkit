@@ -131,3 +131,17 @@ The reviewer proved, by command, two holes and one disagreement:
 
 Red / green / red for round 2: the pin (71 cases) gave 45 ok / 26 FAIL on the
 round-1 checker, 71 / 0 with the fix, 10 / 61 against main's plugins.
+
+## Round 3 — re-review FAIL at b1bd383 (2026-10-04)
+
+One hole: a side of `→` holding only a no-break space, a zero-width space,
+or punctuation (`!!!`, `!`) passed, because the side was cleaned with
+`strip(DRESSING)`, which leaves those in place. Fixed: each side needs at
+least one Unicode letter or digit (`str.isalnum`), so non-English text counts.
+Pin: 82 cases; 75 ok / 7 FAIL on b1bd383 (exactly the seven glyph cases),
+82 / 0 with the fix. New mutation MUT-GLYPH.
+
+Documented, not closed (owner's coordinator decision): a new question
+appended under a RESOLVED heading is not judged; a check cannot tell a
+ruling from a question. Pinned as a passing `[limit]` case so the docs and the
+behaviour move together.
