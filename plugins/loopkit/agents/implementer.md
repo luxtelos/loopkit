@@ -29,7 +29,9 @@ Never decide done yourself. Never merge.
 - Never approve your own code, and never merge. This is the standing rule
   whatever the tooling does — a human decides — and it is also enforced: the
   `gh-pr-merge`, `gh-pr-approve` and `gh-api-merge` patterns in the plugin's
-  `hooks/block_dangerous.py` refuse those commands. Read the rule as binding
+  `hooks/block_dangerous.py` refuse those commands, and
+  `hooks/block_mcp_merge_approve.py` refuses the MCP tools that do the same
+  (merge, auto-merge on, review APPROVE). Read the rule as binding
   first and the hook as a backstop second; a hook only catches the spellings it
   knows, and the rule covers the ones it does not. If you find yourself reaching
   for a way around it, the answer is a human on the PR.

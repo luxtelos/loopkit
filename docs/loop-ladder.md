@@ -39,7 +39,8 @@ aspired to.
 
 - **A second agent with fresh context reviews.** The constitution forbids the
   agent that wrote code from approving it, and `hooks/block_dangerous.py`
-  refuses merge and approve for every agent. On 2026-09-07 that separation paid
+  (gh CLI) with `hooks/block_mcp_merge_approve.py` (MCP tools) refuses merge
+  and approve for every agent. On 2026-09-07 that separation paid
   for itself: a reviewer failed a pull request with three findings the author's
   own pins had passed, including a hook that silently dropped fields from every
   call it rewrote.
