@@ -20,7 +20,14 @@
 #   LOOP_ENV_WRAPPER        prefix for every command, e.g.
 #                           "doppler run --project p --config c --"
 #   LOOP_CODE_GLOBS         which files count as code (default below)
-#   LOOP_FORCE_GATE=1       run the gate even when no code file changed
+#   LOOP_FORCE_GATE=1       run the gate even when no code file changed;
+#                           also overrides the worktree/cwd mismatch skip
+#
+# Worktree root: Claude Code / Cursor often set CLAUDE_PROJECT_DIR to the main
+# checkout while the session's tools run in a linked worktree. Gating the main
+# tree against its baseline then fails every Stop for days. Prefer the session
+# cwd's git toplevel when it is a linked worktree of the same repo; otherwise
+# SKIP (PASS) when the would-be gate root is not the session cwd.
 #
 # Tests prefer the regression diff (scripts/test-regressions.sh) over a raw
 # suite run whenever state/known-test-failures.txt exists: a suite that carries
@@ -44,8 +51,74 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
-ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# --- Resolve gate root (session worktree over CLAUDE_PROJECT_DIR) -----------
+# See header comment. Helpers are local to this block; they must not leak names
+# into the rest of the script's environment assumptions.
+_loopkit_canon() {
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
+_loopkit_toplevel() {
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
+}
+_loopkit_common_dir() {
+    local d
+    d="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [[ -z "$d" ]]; then
+        d="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null || true)"
+        [[ -n "$d" ]] || { printf ''; return; }
+        if [[ "$d" != /* ]]; then
+            d="$(cd "$1" && cd "$d" 2>/dev/null && pwd -P)" || { printf ''; return; }
+        else
+            d="$(cd "$d" 2>/dev/null && pwd -P)" || { printf ''; return; }
+        fi
+    fi
+    printf '%s' "$d"
+}
+
+SESSION_HINT="$(printf '%s' "${LOOPKIT_HOOK_STDIN:-}" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+cwd = d.get("cwd") or d.get("working_directory") or ""
+print(cwd if isinstance(cwd, str) else "")
+' 2>/dev/null || true)"
+SESSION_PWD="$(_loopkit_canon "${SESSION_HINT:-$(pwd)}")"
+SESSION_TOP="$(_loopkit_toplevel "$SESSION_PWD")"
+[[ -n "$SESSION_TOP" ]] || SESSION_TOP="$SESSION_PWD"
+SESSION_TOP="$(_loopkit_canon "$SESSION_TOP")"
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
+PROJECT_TOP=""
+if [[ -n "$PROJECT_DIR" ]]; then
+    PROJECT_TOP="$(_loopkit_toplevel "$PROJECT_DIR")"
+    [[ -n "$PROJECT_TOP" ]] || PROJECT_TOP="$PROJECT_DIR"
+    PROJECT_TOP="$(_loopkit_canon "$PROJECT_TOP")"
+fi
+
+if [[ -n "$PROJECT_TOP" && "$PROJECT_TOP" != "$SESSION_TOP" ]]; then
+    session_common="$(_loopkit_common_dir "$SESSION_TOP")"
+    project_common="$(_loopkit_common_dir "$PROJECT_TOP")"
+    if [[ -n "$session_common" && -n "$project_common" && "$session_common" == "$project_common" ]]; then
+        echo ">> stop_gate: session worktree $SESSION_TOP (CLAUDE_PROJECT_DIR was $PROJECT_TOP)"
+        ROOT="$SESSION_TOP"
+    elif [[ "${LOOP_FORCE_GATE:-0}" == "1" ]]; then
+        echo ">> stop_gate: FORCE — gating CLAUDE_PROJECT_DIR $PROJECT_TOP despite session cwd $SESSION_TOP"
+        ROOT="$PROJECT_TOP"
+    else
+        echo ">> SKIP: gate root ($PROJECT_TOP) != session cwd ($SESSION_TOP) — refuse to gate the wrong tree."
+        echo ">> PASS: gate short-circuited. Set LOOP_FORCE_GATE=1 to override."
+        exit 0
+    fi
+elif [[ -n "$PROJECT_TOP" ]]; then
+    ROOT="$PROJECT_TOP"
+else
+    ROOT="$SESSION_TOP"
+fi
 cd "$ROOT"
+# ---------------------------------------------------------------------------
 
 if [[ -f "$ROOT/.loopkit/config.env" ]]; then
     set -a
