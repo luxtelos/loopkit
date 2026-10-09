@@ -11,6 +11,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/loopkit-init.sh" --dry-run
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/hooks/test_block_dangerous.py" | tail -1
+python3 "${CLAUDE_PLUGIN_ROOT}/hooks/test_block_mcp_merge_approve.py" | tail -1
 python3 "${CLAUDE_PLUGIN_ROOT}/hooks/test_loop_doctrine.py" | tail -1
 python3 "${CLAUDE_PLUGIN_ROOT}/hooks/test_protect_governance.py" | tail -1
 ```

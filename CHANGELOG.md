@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.5 — 2026-10-07
+
+"The loop never merges and never approves" now holds for MCP tools too.
+
+### Fixed
+
+- **New hook `hooks/block_mcp_merge_approve.py` (PreToolUse, matcher
+  `mcp__.*`).** `block_dangerous.py` refuses `gh pr merge`,
+  `gh pr review --approve` and `gh api .../pulls/N/merge`, but it is wired to
+  the Bash tool only, so an MCP server could do the same thing with no hook in
+  front of it (reviewer finding, 2026-10-07). The new hook reads the tool's
+  short name (after the last `__`, camelCase folded) and refuses:
+  `mcp-merge` — `merge_pull_request`, `merge_merge_request`,
+  `accept_merge_request` and PR-context `*_merge`, on any server name;
+  `mcp-auto-merge` — `enable_*auto_merge`, and `set_auto_merge` unless the
+  input says OFF (switching auto-merge on is a merge by proxy);
+  `mcp-approve` — `approve_pull_request` / `approve_merge_request`, and any
+  review tool whose `event`/`state` is APPROVE. COMMENT and REQUEST_CHANGES
+  reviews, `update_pull_request_branch`, disabling auto-merge and every other
+  tool stay allowed. A parse error is an allow; a crash after the call parsed
+  blocks a tool that names merge or approve rather than letting it run. Each
+  rule switches off by name in `.loopkit/block-disabled.txt`, the same file
+  `block_dangerous.py` reads. Pinned in `hooks/test_block_mcp_merge_approve.py`
+  and run by `tests/selftest.sh`.
+- Docs that said "merge and approve are refused" now say the gh CLI and MCP
+  tools are both covered. `constitution.md` and its template still name only
+  `block_dangerous.py`; that file is ratified governance and is left for a
+  human to amend.
+
 ## 0.2.4 — 2026-10-04
 
 A merge that stopped on a conflict can be finished.

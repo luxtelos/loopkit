@@ -140,7 +140,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock test_require_recall; do
+for t in test_block_dangerous test_block_mcp_merge_approve test_loop_doctrine test_protect_governance test_require_commit_lock test_require_recall; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
