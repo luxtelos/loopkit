@@ -28,3 +28,6 @@ MC.*
 
 # loopkit:decided .loopkit/driver.lock — a live lock, never history
 .loopkit/driver.lock
+
+# loopkit:decided .loopkit/turn-evidence.json — one turn's claim about one HEAD, never history
+.loopkit/turn-evidence.json

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.2.5 — 2026-10-15
+
+The Stop review can no longer trap a session that is waiting.
+
+### Fixed
+
+- **The Stop review is decided by code, and blocks at most once in a row.**
+  The agent-type Stop hook asked a model to find the changed code and run
+  acceptance-review. In a real session it blocked a main session that was
+  correctly waiting on background agents more than 30 times, until Claude Code
+  overrode it ("A hook blocked the turn from ending 9 consecutive times"). It
+  never read `stop_hook_active`. Claude Code runs every Stop hook in parallel,
+  so a command hook placed in front of it could not have stopped it; it is
+  replaced by `hooks/stop_review.py`, a command hook. When `stop_hook_active`
+  is true it allows the stop and says it did not re-judge.
+- **Waiting on background work is an explicit pass.** Allowed when Claude
+  Code's `background_tasks` lists a task that is still running AND the
+  session's last message contains `LOOPKIT:WAITING`. Neither alone is enough:
+  a perpetual log monitor is not a reason to stop, and the word without a
+  running task is just a word. The session is judged again when it is
+  re-invoked with the results. A Claude Code that does not send
+  `background_tasks` gets no waiting pass.
+- **Only this turn's changes are judged.** `stop_review.py turn-start`, a new
+  UserPromptSubmit hook, records HEAD and a content hash of every file already
+  dirty when the turn starts (in `$TMPDIR`, keyed by session and repo root).
+  Untracked files from other work, files dirty before the turn and left
+  alone, and untracked nested worktrees are no longer graded.
+- **The main session can vouch for a no-code turn.** When there is no turn
+  record, the hook accepts `.loopkit/turn-evidence.json`
+  (`stop_review.py write-evidence`) only at the current HEAD, for
+  `LOOPKIT_EVIDENCE_MAX_AGE` seconds (default 900), and never when it lists a
+  code file. With a turn record, git's measurement wins over the file. Init
+  now gitignores it.
+- **A command hook has no tools to be denied.** The old checker could never
+  pass when its own Bash or memory tools were refused.
+
+### Changed
+
+- When this turn changed code and none of the passes apply, the default is to
+  block once with the turn's code files and ask the session to dispatch the
+  `loopkit:reviewer` agent. The model judgement no longer runs inside the
+  hook unless a project sets `LOOP_STOP_REVIEW_CMD` (exit 0 allows; the
+  turn's files arrive in `LOOPKIT_TURN_CODE_FILES`).
+- `hooks/stop_gate.sh` (tests, lint, typecheck, build) is unchanged.
+
+### Pinned
+
+- `tests/pins/stop-review-loop.sh` drives the hook with real Stop payloads:
+  a second stop with `stop_hook_active`, a waiting session, a valid and a stale
+  evidence file, the scope cases, and the control (no background work, real
+  unfinished code: refused). `tests/pins/stop-review-prove-red.sh` breaks each
+  rule in a scratch copy and requires the pin to fail on the case guarding it
+  (13 mutations).
+
 ## 0.2.4 — 2026-10-04
 
 A merge that stopped on a conflict can be finished.

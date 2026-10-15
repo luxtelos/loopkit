@@ -164,6 +164,7 @@ expect_rc 0 "init (second run, idempotent)" bash "$P/scripts/loopkit-init.sh" --
 n="$(grep -c 'loopkit:begin' "$T/CLAUDE.md")"; [ "$n" = 1 ] && ok "CLAUDE.md block appended exactly once" || fail "CLAUDE.md block count=$n"
 grep -qxF '.loopkit/config.env' "$T/.gitignore" && ok ".gitignore ignores config.env" || fail ".gitignore"
 grep -qxF '.loopkit/driver.lock' "$T/.gitignore" && ok ".gitignore ignores the driver lock" || fail "driver.lock not ignored"
+grep -qxF '.loopkit/turn-evidence.json' "$T/.gitignore" && ok ".gitignore ignores the stop review's evidence file" || fail "turn-evidence.json not ignored"
 
 # An ignore line init added once is init's LAST word on it. A project that
 # deletes the line and keeps the marker has decided; the old check ("is the
@@ -1143,6 +1144,22 @@ wt_out="$(bash "$REPO/tests/pins/stop-gate-worktree-root.sh" "$REPO" 2>&1)"; wt_
 printf '%s\n' "$wt_out" | grep -E '^  FAIL' || true
 [ "$wt_rc" = 0 ] && ok "session worktree is gated; unrelated CLAUDE_PROJECT_DIR skips" \
   || fail "worktree root: $(printf '%s' "$wt_out" | tail -1)"
+
+echo "== stop review: blocks once, lets a waiting session pause, judges only this turn"
+# The agent-type Stop hook this replaces blocked a session that was waiting on
+# background agents 30+ times until Claude Code overrode it. Every case drives
+# hooks/stop_review.py with a real Stop payload on stdin, in scratch repos.
+sr_out="$(bash "$REPO/tests/pins/stop-review-loop.sh" "$REPO" 2>&1)"; sr_rc=$?
+printf '%s\n' "$sr_out" | grep -E '^  FAIL' || true
+[ "$sr_rc" = 0 ] && ok "stop_hook_active, waiting, evidence, stale evidence, scope and the control all hold" \
+  || fail "stop review: $(printf '%s' "$sr_out" | tail -1)"
+# And every rule in it must be able to fail.
+srr_out="$(bash "$REPO/tests/pins/stop-review-prove-red.sh" "$REPO" 2>&1)"
+srr_n="$(printf '%s' "$srr_out" | grep -c 'RED, as required' || true)"
+srr_not="$(printf '%s' "$srr_out" | grep -c 'NOT RED\|BASELINE NOT GREEN\|TRACKED FILE CHANGED' || true)"
+printf '%s\n' "$srr_out" | grep -E 'NOT RED|BASELINE|TRACKED' || true
+[ "$srr_n" = 13 ] && [ "$srr_not" = 0 ] && ok "all thirteen stop-review mutations are caught" \
+  || fail "stop-review mutations: $srr_n/13 red, $srr_not not red"
 
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so

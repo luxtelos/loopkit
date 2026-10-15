@@ -133,6 +133,10 @@ ensure_ignore .gitignore '.loopkit/config.env' 'may hold a webhook URL'
 # conflict by deleting a lock another process is holding.
 ensure_ignore .gitignore '.loopkit/driver.lock' 'a live lock, never history'
 
+# The Stop review's evidence file is one turn's claim about one HEAD. It is
+# stale the moment HEAD moves, so as history it would only mislead.
+ensure_ignore .gitignore '.loopkit/turn-evidence.json' 'a claim about one turn and one HEAD, never history'
+
 # A formatter must never rewrite the queue. Prettier strips the spaces around
 # inline code in a table cell, which changes the `source` key, which makes
 # every bridged row a duplicate on the next run.

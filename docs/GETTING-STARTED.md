@@ -57,7 +57,7 @@ not initialise a project with a plugin that cannot pass its own tests.
 
 The suite also runs `check-citations.py` against **this checkout** — not
 against a fixture — so a `file:line` that has rotted in these documents turns
-the run red before you push. The invocation is at `tests/selftest.sh:332`, and
+the run red before you push. The invocation is at `tests/selftest.sh:333`, and
 CI reaches it by running the whole suite at
 `.github/workflows/selftest.yml:20`. Both lines are pinned in
 `.loopkit/citations.json`: move either one and the gate says so, and prints
@@ -226,8 +226,34 @@ That is the whole prompt. A hook injects the discipline the moment it sees
    self-pace) for the next stage.
 
 When the agent tries to say "done" after changing code, the Stop hook runs
-your gate — precheck, regression diff, lint, typecheck, build — and then an
-acceptance review against `specs/`. Red blocks the stop. That is the point.
+your gate — precheck, regression diff, lint, typecheck, build. Red blocks the
+stop. That is the point.
+
+A second Stop hook, `hooks/stop_review.py`, asks for the review. It is code,
+not a model, and it decides in this order:
+
+1. `stop_hook_active` is true (it already blocked once in this chain) → the
+   stop is allowed and the output says it did not re-judge. It never blocks
+   twice in a row.
+2. The session is waiting on background work → allowed. Two things must both
+   hold: Claude Code's `background_tasks` lists a task still running, and the
+   session's last message contains `LOOPKIT:WAITING`. It is judged again when
+   the results wake the session up.
+3. No code file changed **this turn** → allowed. A UserPromptSubmit hook
+   records HEAD and a hash of every already-dirty file when the turn starts, so
+   untracked files from other work and nested worktrees are not counted.
+4. No turn record (for example the plugin was installed mid-session) → the
+   scope is the whole tree, and the session may vouch for itself in
+   `.loopkit/turn-evidence.json`:
+   ```
+   python3 <plugin>/hooks/stop_review.py write-evidence --changed-file notes.md
+   ```
+   It is accepted only at the current HEAD and for 15 minutes
+   (`LOOPKIT_EVIDENCE_MAX_AGE`), and never when it lists a code file.
+5. Otherwise it blocks once and asks the session to dispatch the
+   `loopkit:reviewer` agent on the listed files. Set `LOOP_STOP_REVIEW_CMD` in
+   `.loopkit/config.env` to run a judge inside the hook instead (exit 0
+   allows; it gets the turn's files in `LOOPKIT_TURN_CODE_FILES`).
 
 ## 8. Optional: the knowledge layer
 
