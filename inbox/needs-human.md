@@ -381,7 +381,11 @@ above. And the plausible fixes trade differently and a person should pick:
 
 Until one lands, treat "the spec is hook-protected" as false for Bash.
 
-## Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08)
+## RESOLVED 2026-10-03 — Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08)
+
+**Ruling (owner rule, 2026-10-03):** an agent never grants itself the governance override; draft spec wording goes to `state/<date>-spec-draft-<slug>.md` until the owner ratifies it.
+
+Precedent searched: grep -rn "GOVERNANCE_EDIT_OK" constitution.md docs/adr/ specs/ plugins/loopkit/skills/ plugins/loopkit/hooks/protect_governance.py; grep -rn "spec-draft" state/; memory recall "governance override" → the owner rule of 2026-10-03 above; constitution.md, the spec-writer skill and protect_governance.py already reserve the override for owner-ratified text; no ADR rules on self-granting
 
 Raised 2026-09-07 from the PR #29 round-2 review. **Not urgent, but it recurs
 every time an agent touches `specs/`.**
