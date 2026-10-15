@@ -104,6 +104,24 @@ No version bump: nothing under `plugins/loopkit/**` changes. #62 itself changed
 consumers only with the next bump (0.2.5, already claimed by open PRs). Noted
 under `## Unreleased` in `CHANGELOG.md`.
 
+### Second finding, exposed by the first fix
+
+With the nested cases gating for real, the first Linux run of the fixed suite
+failed "stop gate passes with green commands" (rc=1, want 0), and with it the
+two downstream checks that read its PASS ("gate PASS not recorded", "no gate
+events"). Debug output on the Linux host: the scratch repo has a baseline, so
+the gate runs `LOOP_TEST_JSON_CMD`; unset, that is `npx vitest … --reporter=json`,
+and on that host's node vitest dies at startup (`node:util` has no
+`styleText`), so `FAIL: no JSON report produced`. On macOS npx happened to
+start vitest, so the case passed there. The same output shows "fails on red
+lint" was failing for the wrong reason on Linux: tests run before lint, and
+the broken vitest failed first.
+
+Same layer (`measurement`), same file. The fixture now passes a script that
+writes an empty green report as `LOOP_TEST_JSON_CMD` for the green and the
+red-lint cases, the same fixture the override section already uses. Verified
+on the Linux host: all four cases pass, and the scratch report dir is removed.
+
 ## Not a code problem
 
 The gate's skip is correct and stays. What was wrong is that the suite had not

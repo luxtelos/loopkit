@@ -279,11 +279,22 @@ expect_rc 1 "regressions: a NEW failure fails" bash "$P/scripts/test-regressions
 gate_in_T() { ( cd "$T" && bash "$P/hooks/stop_gate.sh" "$@" ); }
 expect_rc 0 "stop gate short-circuits with no code change" gate_in_T
 echo "x" > "$T/app.ts"
+# $T has a baseline (state/known-test-failures.txt, above), so the gate takes
+# the regression path and runs LOOP_TEST_JSON_CMD, not LOOP_TEST_CMD. Left
+# unset, that is the default `npx vitest … --reporter=json`: the green case
+# then passed or failed on whether this machine's npx/node can start vitest
+# (a Linux host with an older node fails at startup: "no JSON report
+# produced"). It went unseen because the gate SKIPped this case after #62. A
+# script file writes an empty green report, the same fixture the override
+# section below uses; it lives outside $T so it is not a changed file there.
+GR="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-greenreport.XXXXXX")"
+printf '#!/usr/bin/env bash\nprintf "{\\"testResults\\":[]}" > "$1"\n' > "$GR/greenreport"; chmod +x "$GR/greenreport"
 export LOOP_TEST_CMD="true" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="true"
-expect_rc 0 "stop gate passes with green commands" gate_in_T
-LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" expect_rc 1 "stop gate fails on red lint" gate_in_T
+LOOP_TEST_JSON_CMD="$GR/greenreport {report}" expect_rc 0 "stop gate passes with green commands" gate_in_T
+LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" LOOP_TEST_JSON_CMD="$GR/greenreport {report}" expect_rc 1 "stop gate fails on red lint" gate_in_T
 LOOP_TEST_CMD="false" LOOP_TEST_JSON_CMD="false" expect_rc 1 "stop gate fails on red tests (baseline present, regressions script used)" gate_in_T
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD
+find "$GR" -delete
 
 # citations
 printf '# CLAUDE.md\nSee `app.ts:1` and `app.ts:9`.\n' > "$T/CLAUDE.md"
