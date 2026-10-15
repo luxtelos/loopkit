@@ -120,29 +120,42 @@ fi
 #
 # It runs AFTER the cherry-pick refusal (nothing is committed there, so there
 # is nothing to judge) and BEFORE the merge path, so a merge commit is judged
-# too. A merge commit publishes everything the merge brought in, named or not,
-# so on a merge the inbox is judged whether or not it was named. The gate's
-# base folds MERGE_HEAD in while a merge is in progress (see gate_base), so
-# sections the merged-in side already shares with the trunk are not re-judged:
-# merging the trunk into a branch must not refuse the trunk's own inbox.
+# too. On a merge it judges what the merge commit PUBLISHES (--merge-commit):
+# a named inbox is the working file; an unnamed one is the merged blob, since
+# loop-commit-merge.sh commits what the merge produced for every path not
+# named. Judging the working file there let a bare section through (refused,
+# the line added to the working file only, the rerun passed, the merged blob
+# committed bare) and refused merges over working-only edits never committed.
+# The gate's base folds MERGE_HEAD in while a merge is in progress (see
+# gate_base), so sections the merged-in side already shares with the trunk are
+# not re-judged: merging the trunk into a branch must not refuse the trunk's
+# own inbox.
 #
 # Only a line that names a commit is taken as the base. The gate may print a
 # status line (its worktree-root notice) before the base, and a status line
 # read as a ref would judge every section as new.
 #
-# With no inbox file there is nothing to judge (the check itself answers 0
-# then), so it is not started: a copy of this wrapper laid down without its
-# sibling scripts, as the merge pin's mutant is, must still reach the merge path.
+# With no inbox anywhere (not on disk, and on a merge in neither parent) there
+# is nothing to judge, so the check is not started: a copy of this wrapper laid
+# down without its sibling scripts, as the merge pin's mutant is, must still
+# reach the merge path.
+INBOX_MERGING=0
+[ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ] && INBOX_MERGING=1
+HAS_INBOX=0
 if [ -f "$ROOT/inbox/needs-human.md" ]; then
+  HAS_INBOX=1
+elif [ "$INBOX_MERGING" = 1 ] && { git cat-file -e "HEAD:inbox/needs-human.md" 2>/dev/null || git cat-file -e "MERGE_HEAD:inbox/needs-human.md" 2>/dev/null; }; then
+  HAS_INBOX=1
+fi
+if [ "$HAS_INBOX" = 1 ]; then
   INBOX_BASE="$(CLAUDE_PROJECT_DIR="$ROOT" bash "$HERE/../hooks/stop_gate.sh" --print-base </dev/null 2>/dev/null || true)"
   INBOX_BASE="${INBOX_BASE##*$'\n'}"
   git rev-parse --verify --quiet "${INBOX_BASE:-none}^{commit}" >/dev/null 2>&1 || INBOX_BASE=""
-  INBOX_SCOPE=(-- "${PATHS[@]}")
-  if [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
-    INBOX_SCOPE=()
-  fi
-  python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_SCOPE[@]+"${INBOX_SCOPE[@]}"} || {
+  INBOX_MODE=()
+  [ "$INBOX_MERGING" = 1 ] && INBOX_MODE=(--merge-commit)
+  python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_MODE[@]+"${INBOX_MODE[@]}"} -- "${PATHS[@]}" || {
     echo "loop-commit.sh: nothing was staged or committed — fix inbox/needs-human.md and run this again" >&2
+    [ "$INBOX_MERGING" = 1 ] && echo "  On a merge, an inbox you do not name is committed as the merge produced it; to commit your fix, name inbox/needs-human.md." >&2
     exit 65
   }
 fi

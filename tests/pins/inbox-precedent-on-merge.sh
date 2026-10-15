@@ -20,10 +20,25 @@
 #       when the inbox is not named, since the merge commit would publish it
 #   P4  the same new section WITH a usable line completes as a merge commit
 #   P5  an ordinary (no-merge) commit of a new bare section is still refused
+#   P6  the review's sequence: merging a branch that carries a bare section,
+#       inbox NOT named, is refused; adding the line to the WORKING file only
+#       and rerunning the same command is refused again, because the merge
+#       commit would publish the merged blob, which is still bare. Naming the
+#       inbox then commits the line.
+#   P7  the same with the working inbox put back to HEAD's (reverted, unnamed):
+#       still refused, since the merged blob still carries the bare section
+#   P8  the mirror: merging the trunk with a bare section ADDED only to the
+#       working file, inbox not named, completes — the commit does not carry
+#       that section, so it is not a reason to refuse — and the committed inbox
+#       does not contain it
+#
+# The check must judge exactly what is committed: on a merge, the merged blob
+# for an unnamed inbox, the working file for a named one.
 #
 # Then it proves it can fail: two mutants of a copy of the plugin.
 #   MUT-AFTER  the check moved after the merge path   -> P2 and P3 go red
 #   MUT-BASE   gate_base ignores MERGE_HEAD           -> P1 goes red
+#   MUT-WORKFILE  the merge judges the working file   -> P6, P7 and P8 go red
 #
 # Every fixture is a throwaway repo under $TMPDIR. Nothing here reads or writes
 # the tracked tree.
@@ -136,7 +151,56 @@ p5() {
   local b; b="$(g rev-parse HEAD)"
   run "$1" -m "ask" -- inbox/needs-human.md; verdict "$b" 0; P5="$V"
 }
-all_cases() { p1 "$1"; p2 "$1"; p3 "$1"; p4 "$1"; p5 "$1"; }
+# `other`: a non-trunk branch off main with a bare section and a CHANGELOG
+# edit, so merging it into feat stops on the conflict.
+mk_other() {
+  mk
+  g checkout -q -b other main
+  printf '\n## A question from a side branch (2026-10-14)\n\nno line\n' >> "$W/inbox/needs-human.md"
+  printf 'other\n' > "$W/CHANGELOG.md"; g commit -qam other
+  g checkout -q feat
+}
+p6() {  # -> P6A (first try) P6B (line added to the working file only) P6C (inbox named)
+  mk_other; stopped_merge other || { P6A=fixture; P6B=fixture; P6C=fixture; return; }
+  local b; b="$(g rev-parse HEAD)"
+  run "$1" -m "merge other" -- CHANGELOG.md; verdict "$b" 1; P6A="$V"
+  [ "$V" = refused ] || { P6B=skipped; P6C=skipped; return; }
+  python3 - "$W/inbox/needs-human.md" "$LINE" <<'PY'
+import sys
+p, line = sys.argv[1], sys.argv[2]
+s = open(p, encoding="utf-8").read()
+h = "## A question from a side branch (2026-10-14)\n"
+assert h in s
+open(p, "w", encoding="utf-8").write(s.replace(h, h + "\n" + line + "\n", 1))
+PY
+  run "$1" -m "merge other" -- CHANGELOG.md; verdict "$b" 1; P6B="$V"
+  if [ "$V" = done ]; then
+    # It landed: the only acceptable way is with the line IN the commit.
+    g show HEAD:inbox/needs-human.md | grep -qF "$LINE" && P6B=done-with-line || P6B=done-BARE
+    P6C=skipped; return
+  fi
+  run "$1" -m "merge other" -- CHANGELOG.md inbox/needs-human.md; verdict "$b" 1; P6C="$V"
+  if [ "$V" = done ]; then
+    { [ "$(parents)" = 3 ] && g show HEAD:inbox/needs-human.md | grep -qF "$LINE"; } || P6C=done-without-line
+  fi
+}
+p7() {
+  mk_other; stopped_merge other || { P7=fixture; return; }
+  g show HEAD:inbox/needs-human.md > "$W/inbox/needs-human.md"
+  local b; b="$(g rev-parse HEAD)"
+  run "$1" -m "merge other" -- CHANGELOG.md; verdict "$b" 1; P7="$V"
+  [ "$V" = done ] && P7=done-BARE
+}
+p8() {
+  mk; stopped_merge main || { P8=fixture; return; }
+  printf '\n## Working-only question (2026-10-15)\n\nno line\n' >> "$W/inbox/needs-human.md"
+  local b; b="$(g rev-parse HEAD)"
+  run "$1" -m "merge main" -- CHANGELOG.md; verdict "$b" 1; P8="$V"
+  if [ "$V" = done ]; then
+    g show HEAD:inbox/needs-human.md | grep -qF "Working-only question" && P8=done-but-carries-it
+  fi
+}
+all_cases() { p1 "$1"; p2 "$1"; p3 "$1"; p4 "$1"; p5 "$1"; p6 "$1"; p7 "$1"; p8 "$1"; }
 
 LC="$PLUGIN/scripts/loop-commit.sh"
 all_cases "$LC"
@@ -151,6 +215,14 @@ echo "P4 the same new section with a usable line completes"
 [ "$P4" = done ] && ok "two-parent merge commit, with the line in it" || bad "$P4"
 echo "P5 an ordinary commit of a new bare section is still refused"
 [ "$P5" = refused ] && ok "exit 65, HEAD unmoved" || bad "$P5"
+echo "P6 the review's sequence: the line in the working file alone does not let a bare merged section through"
+[ "$P6A" = refused ] && ok "inbox not named: refused (exit 65)" || bad "first try: $P6A"
+[ "$P6B" = refused ] && ok "line added to the working file only, same command: refused again" || bad "rerun after a working-only fix: $P6B"
+[ "$P6C" = done ] && ok "inbox named: the merge commit carries the line" || bad "named: $P6C"
+echo "P7 the working inbox reverted to HEAD's, unnamed: the merged bare section is still refused"
+[ "$P7" = refused ] && ok "exit 65, merge still in progress" || bad "$P7"
+echo "P8 a bare section only in the working file, not committed, is no reason to refuse"
+[ "$P8" = done ] && ok "merge commit made, without that section" || bad "$P8"
 
 # --- prove it can fail -------------------------------------------------------
 mutant() {  # <name>  -> echoes the path of a fresh plugin copy
@@ -161,10 +233,10 @@ mutant() {  # <name>  -> echoes the path of a fresh plugin copy
 
 echo "MUT-AFTER the check moved after the merge path: P2 and P3 must go red"
 M="$(mutant after)"
-python3 - "$M/scripts/loop-commit.sh" <<'PY'
+python3 - "$M/scripts/loop-commit.sh" <<'PY' || bad "MUT-AFTER: the mutation did not apply (stale anchor), so this mutant proves nothing"
 import sys
 p = sys.argv[1]; s = open(p).read()
-start = s.index("if [ -f \"$ROOT/inbox/needs-human.md\" ]; then\n  INBOX_BASE=")
+start = s.index("if [ \"$HAS_INBOX\" = 1 ]; then\n")
 end = s.index("\nfi\n", start) + len("\nfi\n")
 block = s[start:end]
 s = s[:start] + s[end:]
@@ -178,7 +250,7 @@ all_cases "$M/scripts/loop-commit.sh"
 
 echo "MUT-BASE gate_base ignores MERGE_HEAD: P1 must go red"
 M="$(mutant base)"
-python3 - "$M/hooks/stop_gate.sh" <<'PY'
+python3 - "$M/hooks/stop_gate.sh" <<'PY' || bad "MUT-BASE: the mutation did not apply (stale anchor), so this mutant proves nothing"
 import sys
 p = sys.argv[1]; s = open(p).read()
 old = 'base="$(git merge-base "$default_ref" HEAD ${merge_head:+"$merge_head"} 2>/dev/null || true)"'
@@ -189,6 +261,20 @@ PY
 all_cases "$M/scripts/loop-commit.sh"
 [ "$P1B" != done ] && ok "RED, as required — P1 (inbox named) '$P1B'" || bad "NOT RED — P1 (inbox named) '$P1B'"
 { [ "$P5" = refused ] && [ "$P2" = refused ]; } && ok "... and P2 / P5 stay green" || bad "the mutant broke an unrelated case: P2 '$P2', P5 '$P5'"
+
+echo "MUT-WORKFILE the merge judges the working file, named or not: P6, P7 and P8 must go red"
+M="$(mutant workfile)"
+python3 - "$M/scripts/check-inbox-precedent.py" <<'PY' || bad "MUT-WORKFILE: the mutation did not apply (stale anchor), so this mutant proves nothing"
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "return any(os.path.realpath(os.path.join(cwd, p)) == target for p in pathspecs)"
+assert s.count(old) == 1, "mutation anchor not found"
+s = s.replace(old, "return True", 1)
+open(p, "w").write(s)
+PY
+all_cases "$M/scripts/loop-commit.sh"
+{ [ "$P6B" != refused ] && [ "$P7" != refused ] && [ "$P8" != done ]; } && ok "RED, as required — P6 rerun '$P6B', P7 '$P7', P8 '$P8'" || bad "NOT RED — P6 rerun '$P6B', P7 '$P7', P8 '$P8'"
+{ [ "$P1A" = done ] && [ "$P2" = refused ] && [ "$P5" = refused ]; } && ok "... and P1 / P2 / P5 stay green" || bad "the mutant broke an unrelated case: P1 '$P1A', P2 '$P2', P5 '$P5'"
 
 echo
 [ "$fails" = 0 ] && echo "PASS inbox precedent is judged on a merge commit" || echo "FAIL $fails check(s)"

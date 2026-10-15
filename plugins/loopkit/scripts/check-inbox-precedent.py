@@ -4,6 +4,7 @@
     python3 scripts/check-inbox-precedent.py                    # working file vs HEAD
     python3 scripts/check-inbox-precedent.py --base <ref>       # vs a merge base
     python3 scripts/check-inbox-precedent.py -- <pathspec>...   # only if those paths touch the inbox
+    python3 scripts/check-inbox-precedent.py --merge-commit -- <paths>...  # what a merge commit publishes
 
 WHY. An escalation costs a human's attention, and the most expensive one is the
 question somebody already answered. The `decision` route used to say "write the
@@ -43,6 +44,11 @@ through a variable, an editor nobody listed. The file is the one thing every
 write path produces. So this checks content, and it runs where the paths
 converge — `loop-commit.sh` before staging, `stop_gate.sh` before "done" —
 both against the SAME base (loop-commit asks the stop gate for it).
+
+ON A MERGE it judges what the merge commit publishes, which is not always the
+file on disk: an inbox the caller names is the working file, and an unnamed
+one is the merged blob (`git merge-tree --write-tree HEAD MERGE_HEAD`), the
+same two sources loop-commit-merge.sh builds the commit from.
 
 WHAT COUNTS AS NEW: IDENTITY. A section is grandfathered only if the base
 holds a section with the same heading AND the same body (whitespace and line
@@ -282,24 +288,71 @@ def touched(inbox: str, pathspecs: list[str]) -> bool:
     return False
 
 
+def names_file(root: Path, rel: str, pathspecs: list[str]) -> bool:
+    """Does one of `pathspecs` (relative to the cwd) name exactly `rel`?
+
+    loop-commit-merge.sh reads its paths literally (GIT_LITERAL_PATHSPECS=1) and
+    refuses a directory or `.`, so on the merge path a name is a file path and
+    is compared as one, after resolving `..` and symlinked parents.
+    """
+    target = os.path.realpath(root / rel)
+    cwd = os.getcwd()
+    return any(os.path.realpath(os.path.join(cwd, p)) == target for p in pathspecs)
+
+
+def merge_commit_inbox(root: Path, rel: str, pathspecs: list[str]) -> str | None:
+    """The inbox text the merge commit will publish, or None if it carries none.
+
+    It must be the content COMMITTED, not merely the file on disk.
+    loop-commit-merge.sh builds the commit from `git merge-tree --write-tree
+    HEAD MERGE_HEAD` (what the merge alone produced) and then adds each NAMED
+    path from the working tree. So a named inbox is the working file, and an
+    unnamed one is the merged blob, whatever the working file says. Judging the
+    working file for an unnamed inbox let a bare section through: refused, the
+    agent added the line to its working file only, the rerun passed, and the
+    merge committed the merged blob, still bare. It also refused a merge over a
+    working-only edit the commit would never carry.
+    """
+    if names_file(root, rel, pathspecs):
+        f = root / rel
+        return f.read_text(encoding="utf-8", errors="replace") if f.is_file() else None
+    # Exit 1 only means the merge has conflicts; the tree is still written,
+    # and its first line is the tree id. Any other answer is "could not run".
+    mt = git(root, "merge-tree", "--write-tree", "--no-messages", "HEAD", "MERGE_HEAD")
+    tree = mt.stdout.decode("utf-8", "replace").split("\n", 1)[0].strip()
+    if mt.returncode not in (0, 1) or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        raise RuntimeError("cannot compute the merge result (`git merge-tree --write-tree` needs git 2.38+)")
+    shown = git(root, "show", f"{tree}:{rel}")
+    if shown.returncode != 0:
+        return None
+    return shown.stdout.decode("utf-8", "replace")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", help="project root (default: CLAUDE_PROJECT_DIR, else the git toplevel)")
     ap.add_argument("--base", default="HEAD",
                     help="the commit whose inbox sections are already there (default: HEAD)")
     ap.add_argument("--inbox", default=DEFAULT_INBOX, help="inbox path, relative to the root")
+    ap.add_argument("--merge-commit", action="store_true",
+                    help="a merge is in progress: judge the inbox the merge commit will publish "
+                         "(the working file if a pathspec names it, else the merged blob)")
     ap.add_argument("pathspecs", nargs="*",
                     help="after `--`: check only if a commit of these paths would publish the inbox")
     args = ap.parse_args(argv)
 
     root = resolve_root(args.root)
     inbox_file = root / args.inbox
-    if not inbox_file.is_file():
-        return 0  # no inbox, or it is being deleted: nothing is being asked of anyone
-    if args.pathspecs and not touched(args.inbox, args.pathspecs):
-        return 0
-
-    current = inbox_file.read_text(encoding="utf-8", errors="replace")
+    if args.merge_commit:
+        current = merge_commit_inbox(root, args.inbox, args.pathspecs)
+        if current is None:
+            return 0  # the merge commit carries no inbox: nothing is being asked
+    else:
+        if not inbox_file.is_file():
+            return 0  # no inbox, or it is being deleted: nothing is being asked of anyone
+        if args.pathspecs and not touched(args.inbox, args.pathspecs):
+            return 0
+        current = inbox_file.read_text(encoding="utf-8", errors="replace")
     base_ref = args.base or "HEAD"
     shown = git(root, "show", f"{base_ref}:{args.inbox}")
     # No such commit, or the commit has no inbox: there is nothing to

@@ -67,10 +67,18 @@ PY
 }
 
 # <name> <file> <old> <new> <tag that must go red> <tag that must stay green>
+# Every mutation that does not turn red is remembered by name, and the script
+# exits 1 at the end if there is any. It used to print NOT RED and exit 0, so
+# only the selftest's count of sixteen caught a stale anchor; anyone running
+# this alone got a silent pass. Two anchors went stale exactly that way.
+NOT_RED=()
 prove() {
   local name="$1" file="$2" old="$3" new="$4" red="$5" green="$6" out rc n_red n_green
   echo "$name"
-  if ! mutate "$file" "$old" "$new"; then echo "  NOT RED — the mutation did not apply"; restore "$file"; return; fi
+  if ! mutate "$file" "$old" "$new"; then
+    echo "  NOT RED — the mutation did not apply (stale anchor): ${name%%:*}"
+    NOT_RED+=("${name%%:*} (did not apply)"); restore "$file"; return
+  fi
   out="$(python3 "$PIN" "$PLUGIN" 2>&1)"; rc=$?
   restore "$file"
   n_red="$(printf '%s\n' "$out" | grep -E '^  FAIL ' | grep -cF "$red" || true)"
@@ -79,13 +87,14 @@ prove() {
     echo "  RED, as required — $n_red $red case(s) failed, no $green case did"
   else
     echo "  NOT RED (rc=$rc, $red failures=$n_red, $green failures=$n_green) — the pin cannot tell this half apart"
+    NOT_RED+=("${name%%:*} (not caught)")
   fi
 }
 
 C=scripts/check-inbox-precedent.py
 
 prove "MUT-COMMIT: loop-commit.sh stops asking" scripts/loop-commit.sh \
-  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_SCOPE[@]+"${INBOX_SCOPE[@]}"} || {' \
+  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_MODE[@]+"${INBOX_MODE[@]}"} -- "${PATHS[@]}" || {' \
   'true || {' \
   '[commit]' '[gate]'
 
@@ -171,5 +180,9 @@ if [ "$(tracked_sum)" = "$TRACKED_SUM" ]; then
   echo "  ok — no tracked file was written to"
 else
   echo "  NOT RED — THIS SCRIPT MODIFIED A TRACKED FILE. Restore it from git before committing anything."
+  exit 1
+fi
+if [ "${#NOT_RED[@]}" -gt 0 ]; then
+  echo "FAIL — ${#NOT_RED[@]} mutation(s) not red: ${NOT_RED[*]}"
   exit 1
 fi

@@ -33,7 +33,10 @@ so this reaches consumers only when the manifest version is bumped.
   `loop-commit.sh` asks the stop gate for its base (`stop_gate.sh
   --print-base`), so the two always give the same answer for the inbox.
   The check runs on a merge commit too, ahead of the merge path that 0.2.4
-  added, and leaves that path as it was. While a merge is in progress the
+  added, and leaves that path as it was. It judges what the merge commit
+  publishes: a named inbox is the working file, an unnamed one is the merged
+  blob (`git merge-tree --write-tree HEAD MERGE_HEAD`), the same two sources
+  `loop-commit-merge.sh` commits from. While a merge is in progress the
   gate's base folds `MERGE_HEAD` in (`git merge-base <trunk> HEAD MERGE_HEAD`,
   the base the gate will use once the merge commit exists), so merging the
   trunk into a branch does not re-judge the trunk's own inbox sections.
@@ -42,7 +45,9 @@ so this reaches consumers only when the manifest version is bumped.
   stop gate blocks that branch, and `loop-commit.sh` refuses any commit that
   names the inbox, until the line is added. Commits that do not name the
   inbox still go through — except a merge commit, which publishes whatever
-  the merge brought in and so is judged whether or not the inbox was named.
+  the merge brought in and so is judged whether or not the inbox was named
+  (unnamed, it is judged as merged; a fix in the working file alone is not
+  committed, so name the inbox to commit it).
   Editing an old open section also needs the line,
   or a RESOLVED stamp.
   **Known limit:** a question appended under a section already stamped
@@ -58,8 +63,13 @@ so this reaches consumers only when the manifest version is bumped.
   82 cases, and sixteen mutations that each have to turn their own tag red.
 - `tests/pins/inbox-precedent-on-merge.sh` — the check on a merge commit:
   merging the trunk completes, a new bare section written mid-merge or brought
-  in from a non-trunk branch is refused, and two mutants (the check after the
-  merge path; a gate base blind to `MERGE_HEAD`) each have to turn it red.
+  in from a non-trunk branch is refused, a fix made only in the working file
+  of an unnamed inbox does not let the merged bare section through, a
+  working-only bare section the merge does not commit is not refused, and
+  three mutants (the check after the merge path; a gate base blind to
+  `MERGE_HEAD`; the merge judging the working file) each have to turn it red.
+- `tests/pins/inbox-precedent-prove-red.sh` exits 1, naming the mutation,
+  when any mutation does not apply or is not caught.
 
 ## 0.2.4 — 2026-10-04
 
