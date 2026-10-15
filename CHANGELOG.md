@@ -2,32 +2,83 @@
 
 ## 0.2.5 — 2026-10-07
 
-"The loop never merges and never approves" now holds for MCP tools too.
+Merge and approve are refused through MCP tools too — what that covers, and
+what it does not, is stated below rather than rounded up.
 
 ### Fixed
 
+- **`block_dangerous.py` now runs on MCP tools that execute shell commands.**
+  It was wired to the `Bash` matcher only, so `gh pr merge 1` typed through a
+  terminal-style MCP tool (`run_in_terminal {command}`, `start_process
+  {command}`, `interact_with_process {input}`, `execute_command`) met no hook
+  (independent review FAIL of this PR's first head). The matcher is now
+  `Bash|mcp__.*`, and `commands_from_payload` decides what the call would run:
+  a tool whose short name carries a shell word (`SHELL_NAME_TOKENS`: terminal,
+  shell, bash, exec, execute, command, process, ssh, ...) has every string in
+  its input checked; any other MCP tool has the strings under command-like keys
+  checked (`COMMAND_KEY_TOKENS`: command, cmd, script, shell, commandLine,
+  argv, ...) at any depth; an argv list is checked joined, a list of commands
+  one by one. Each line goes through the same secret, pattern and push checks
+  a Bash command does — one code path, no second copy of the rules. Prose in a
+  non-shell tool (`body`, `title`, `query`) is not read as a command. Pinned in
+  `hooks/test_block_dangerous_mcp.py`, which also reads `hooks.json` the way
+  Claude Code does and drives real PreToolUse payloads on stdin through every
+  guard it wires.
 - **New hook `hooks/block_mcp_merge_approve.py` (PreToolUse, matcher
-  `mcp__.*`).** `block_dangerous.py` refuses `gh pr merge`,
-  `gh pr review --approve` and `gh api .../pulls/N/merge`, but it is wired to
-  the Bash tool only, so an MCP server could do the same thing with no hook in
-  front of it (reviewer finding, 2026-10-07). The new hook reads the tool's
-  short name (after the last `__`, camelCase folded) and refuses:
-  `mcp-merge` — `merge_pull_request`, `merge_merge_request`,
-  `accept_merge_request` and PR-context `*_merge`, on any server name;
-  `mcp-auto-merge` — `enable_*auto_merge`, and `set_auto_merge` unless the
-  input says OFF (switching auto-merge on is a merge by proxy);
-  `mcp-approve` — `approve_pull_request` / `approve_merge_request`, and any
-  review tool whose `event`/`state` is APPROVE. COMMENT and REQUEST_CHANGES
-  reviews, `update_pull_request_branch`, disabling auto-merge and every other
-  tool stay allowed. A parse error is an allow; a crash after the call parsed
-  blocks a tool that names merge or approve rather than letting it run. Each
-  rule switches off by name in `.loopkit/block-disabled.txt`, the same file
-  `block_dangerous.py` reads. Pinned in `hooks/test_block_mcp_merge_approve.py`
-  and run by `tests/selftest.sh`.
-- Docs that said "merge and approve are refused" now say the gh CLI and MCP
-  tools are both covered. `constitution.md` and its template still name only
-  `block_dangerous.py`; that file is ratified governance and is left for a
-  human to amend.
+  `mcp__.*`) judges an MCP tool's own name and parameters as a shape rule,
+  not a list of known names.** Its first version enumerated
+  `merge_pull_request`, `approve_merge_request` and friends and allowed
+  everything else, so `merge_pull_request_by_number`, a bare `merge`, an
+  ADO-style `status: completed`, `autoComplete: true`, `vote: 10` and an
+  APPROVE inside a list all ran (same review). Now, with `pull_request` /
+  `merge_request` read as one noun: a read (first word get/list/search/read/…,
+  or a trailing read with no write verb) is allowed whatever its parameters
+  say; otherwise a name carrying a merge word is refused (`mcp-merge`), an
+  approve word (`mcp-approve`), or auto-merge / auto-complete unless every
+  toggle says OFF (`mcp-auto-merge`), each unless a negate verb names it
+  (disable_, cancel_, unapprove_, dismiss_); on the PR/review surface the
+  parameters are read at any depth, lists included — a verdict of APPROVE, a
+  vote above 0, `approved: true`, a status of completed/merged, a `merge*`
+  value, an auto-merge/auto-complete/merge_when_* value that is not OFF; and a
+  PR tool whose name has no verb known to be safe (land_, squash_, rebase_,
+  submit_ without review) is refused as `mcp-pr-unknown-action`. Reading,
+  searching, commenting, creating, updating, closing, reviewer requests,
+  COMMENT / REQUEST_CHANGES reviews, `update_pull_request_branch` and
+  switching auto-merge OFF stay allowed. A parse error is an allow; a crash
+  after the call parsed falls back to a wider substring test that blocks
+  rather than lets a merge or approve run. Each rule switches off by name in
+  `.loopkit/block-disabled.txt`. Pinned in
+  `hooks/test_block_mcp_merge_approve.py`.
+- **Each pin is shown to catch.** `hooks/test_mcp_guard_mutants.py` copies
+  the hooks, takes one piece out at a time (the `Bash|mcp__.*` matcher, the
+  shell-name rule, the command keys, argv joining, the merge word, list
+  walking, vote, status, auto keys, the unknown-action rule, and — for the
+  allow half — the read exemption and the OFF toggle) and requires the pin to
+  fail on every mutant and pass on the control. All three run in
+  `tests/selftest.sh`.
+
+### What is enforced, and what is not
+
+- Enforced by hook, for every agent: `gh pr merge`, `gh pr review --approve`
+  and `gh api .../pulls/N/merge` on Bash **and** on any MCP tool whose input
+  carries them as a command line as described above; MCP tools whose name or
+  parameters are merge-, auto-merge- or approve-shaped as described above.
+- **Not** enforced: an MCP tool whose name and keys carry no merge, approve,
+  auto-merge, shell or PR word at all (a `ship_it {number}`); a command line
+  hidden in a non-command key of a non-shell tool (a `body` that some server
+  happens to execute); keystrokes typed into a terminal window by a
+  screen-driving tool (its `text` is not read as a command); a direct push to
+  a protected branch through a file-writing tool. Branch protection on the forge is the floor for those.
+- Fails closed by design: a merge word outside the PR surface (a
+  `merge_records` tool), and a dangerous pattern in ANY string of a
+  shell-named tool (its `title`, say), are refused; the fix for a false refusal is a named line in
+  `.loopkit/block-disabled.txt`.
+- Not verified here: live firing inside a Claude Code session (the payload
+  shape and the matcher reading come from the documented hook contract, and
+  the pins assume the stricter full-match reading of a matcher), and the real
+  tool names of GitLab, Bitbucket, Gitea, Gerrit or Azure DevOps MCP servers.
+- `constitution.md` and its template still name only `block_dangerous.py`;
+  that file is ratified governance and is left for a human to amend.
 
 ## 0.2.4 — 2026-10-04
 

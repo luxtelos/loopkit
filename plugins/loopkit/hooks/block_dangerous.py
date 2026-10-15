@@ -56,6 +56,30 @@ splits the command the way the shell does and reads each `git push` argv.
 Unlike the rest of this file it FAILS CLOSED: a command that mentions git and
 push and cannot be read, or that crashes the hook, is blocked. The rule names
 `git-force-push` and `git-push-delete` are unchanged.
+
+A FIFTH lesson, 2026-10-08: Bash is not the only tool that runs a shell line.
+An MCP tool can type one too — the desktop terminal's `run_in_terminal
+{command}`, desktop-commander's `start_process {command}` and
+`interact_with_process {input}`, any server's `execute_command`. This hook was
+wired to the `Bash` matcher only, so `gh pr merge 1` sent through such a tool
+met no hook at all (independent review FAIL of PR #61). It is now wired on
+`Bash|mcp__.*`, and `commands_from_payload` decides what an MCP call would run:
+
+  * a SHELL-NAMED tool (a token of its short name is in SHELL_NAME_TOKENS:
+    terminal, shell, bash, exec, execute, command, process, ssh, ...) has
+    EVERY string in its input checked, because the line may arrive under any
+    key (`input`, `keys`, `text`);
+  * ANY OTHER MCP tool has the strings under its command-like keys checked
+    (COMMAND_KEY_TOKENS: command, cmd, script, shell, commandLine, argv, ...),
+    at any depth, so an unknown tool that carries a command is checked rather
+    than skipped;
+  * an argv list is also checked joined (`{command: gh, args: [pr, merge, 1]}`
+    reads as `gh pr merge 1`), and a list of commands one by one.
+
+Every check below — secrets, patterns, push — runs on each extracted line, by
+the same code that reads a Bash command. There is no second copy of the rules.
+A non-shell tool's prose (`body`, `title`, `query`) is NOT a command and is not
+read, so a PR comment that says "gh pr merge is for a human" still posts.
 """
 
 from __future__ import annotations
@@ -63,6 +87,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -247,25 +272,145 @@ def secret_shapes(command: str, root: Path | None = None) -> list[str]:
     return _secrets.scan(command)
 
 
-def read_command_from_stdin() -> str:
-    """Pull the shell command out of the PreToolUse JSON that Claude pipes in.
+# Which MCP tools run shell commands. A token is one `_`-separated word of the
+# tool's short name (after the last `__`, camelCase folded), so
+# `run_in_terminal`, `start_process`, `interact_with_process`,
+# `execute_command` and `runShellCommand` are all shell-named. Wide on purpose:
+# a false match only means more of that tool's strings are read as commands.
+SHELL_NAME_TOKENS = frozenset({
+    "terminal", "shell", "bash", "sh", "zsh", "fish", "pwsh", "powershell",
+    "cmd", "command", "commands", "exec", "execute", "process", "subprocess",
+    "spawn", "repl", "ssh", "console", "tmux", "script",
+})
+# Input keys whose string value is a command line, on ANY MCP tool. A key
+# matches when one of its tokens is in this set: `command`, `shell_command`,
+# `commandLine`, `cmd`, `script`, `bash_script`, `argv`.
+COMMAND_KEY_TOKENS = frozenset({
+    "command", "commands", "cmd", "cmds", "cmdline", "commandline", "script",
+    "scripts", "shell", "argv",
+})
+# Keys that hold the ARGUMENTS of a command held under a command-like key.
+ARGS_KEY_NAMES = frozenset({"args", "argv", "arguments", "params", "parameters"})
+_MAX_DEPTH = 8
+_MAX_STRINGS = 500
 
-    Returns "" when there is nothing to inspect (non-Bash tool, malformed
-    input). We only block on a positive match, so an empty string means
-    "nothing dangerous to see" — the safe default for a denylist. It never
-    blocks the whole session on parse trouble.
+
+def _snake(name: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_")
+
+
+def _tokens(name: str) -> set[str]:
+    return {t for t in _snake(name).split("_") if t}
+
+
+def is_shell_tool(tool_name: str) -> bool:
+    """True for an MCP tool whose short name says it runs shell lines."""
+    return tool_name.startswith("mcp__") and bool(_tokens(tool_name.rsplit("__", 1)[-1]) & SHELL_NAME_TOKENS)
+
+
+def _is_command_key(key: str) -> bool:
+    return bool(_tokens(key) & COMMAND_KEY_TOKENS)
+
+
+def _str_list(v: object) -> list[str] | None:
+    if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+        return v
+    return None
+
+
+def _join(argv: list[str]) -> str:
+    try:
+        return shlex.join(argv)
+    except Exception:
+        return " ".join(argv)
+
+
+def commands_from_payload(tool_name: str, tool_input: object) -> list[str]:
+    """Every command line this tool call would run, for the checks below.
+
+    Bash (and any non-MCP tool): `command` or `script`, exactly as before.
+    An MCP tool: see the module docstring, FIFTH lesson.
     """
+    if not isinstance(tool_input, dict):
+        return []
+    if not tool_name.startswith("mcp__"):
+        c = tool_input.get("command") or tool_input.get("script") or ""
+        return [str(c)] if c else []
+
+    every = is_shell_tool(tool_name)
+    out: list[str] = []
+
+    def add(s: str) -> None:
+        if s.strip() and len(out) < _MAX_STRINGS:
+            out.append(s)
+
+    def walk(node: object, depth: int, under_cmd: bool) -> None:
+        if depth > _MAX_DEPTH or len(out) >= _MAX_STRINGS:
+            return
+        if isinstance(node, str):
+            if every or under_cmd:
+                add(node)
+            return
+        if isinstance(node, list):
+            argv = _str_list(node)
+            if argv and (every or under_cmd) and len(argv) > 1:
+                add(_join(argv))  # an argv list reads as one line
+            for x in node:
+                walk(x, depth + 1, under_cmd)
+            return
+        if isinstance(node, dict):
+            # `{command: "gh", args: ["pr", "merge", "1"]}` is ONE line.
+            for k, v in node.items():
+                if isinstance(v, str) and (every or _is_command_key(str(k))):
+                    for ak, av in node.items():
+                        if str(ak).lower() in ARGS_KEY_NAMES and _str_list(av):
+                            add(v + " " + _join(av))
+            for k, v in node.items():
+                walk(v, depth + 1, under_cmd or _is_command_key(str(k)))
+
+    walk(tool_input, 0, False)
+    return out
+
+
+def read_payload_from_stdin() -> tuple[str, object]:
+    """(tool_name, tool_input) from the PreToolUse JSON Claude pipes in.
+    ("", {}) on anything unreadable: a parse error is an allow."""
     raw = sys.stdin.read()
     if not raw.strip():
-        return ""
+        return "", {}
     try:
         payload = json.loads(raw)
     except (ValueError, TypeError):
-        return ""
-    tool_input = payload.get("tool_input", {}) if isinstance(payload, dict) else {}
-    if not isinstance(tool_input, dict):
-        return ""
-    return str(tool_input.get("command") or tool_input.get("script") or "")
+        return "", {}
+    if not isinstance(payload, dict):
+        return "", {}
+    name = payload.get("tool_name")
+    return (name if isinstance(name, str) else ""), payload.get("tool_input", {})
+
+
+def read_command_from_stdin() -> str:
+    """Pull the shell command out of the PreToolUse JSON that Claude pipes in.
+
+    Kept for callers that load this hook and read one command (the downstream
+    copy's tests). Returns "" when there is nothing to inspect. For an MCP tool
+    that carries several lines, they are joined by newlines, which every
+    pattern here reads as separate command positions.
+    """
+    name, tool_input = read_payload_from_stdin()
+    return "\n".join(commands_from_payload(name, tool_input))
+
+
+def check_command(cmd: str) -> tuple[list[str], str | None, str | None]:
+    """(secret shapes, rule hit, push reason) for ONE command line — the single
+    code path a Bash command and an MCP tool's command both go through."""
+    shapes = secret_shapes(cmd)  # FIRST: a secret must never reach the quoting branch
+    hit = is_dangerous(cmd)
+    why = None
+    if not hit:
+        found = push_hit(cmd)
+        if found:
+            hit, why = found
+    return shapes, hit, why
 
 
 if __name__ == "__main__":
@@ -273,17 +418,19 @@ if __name__ == "__main__":
     shapes: list[str] = []
     hit = None
     why = None  # the reason, when a PUSH_RULES rule matched rather than a regex
+    tool = ""
     try:
-        cmd = read_command_from_stdin()
-        if cmd:
-            # FIRST, always. A command carrying a secret must never reach the
-            # pattern branch below, which quotes the command back.
-            shapes = secret_shapes(cmd)
-            hit = is_dangerous(cmd)
-            if not hit:
-                found = push_hit(cmd)
-                if found:
-                    hit, why = found
+        tool, tool_input = read_payload_from_stdin()
+        cmds = commands_from_payload(tool, tool_input)
+        cmd = "\n".join(cmds)  # what the crash path below reads
+        # Each line separately, through the same check a Bash command gets.
+        # The first line that trips anything decides, and that line is the
+        # one quoted (redacted) in the message.
+        for one in cmds:
+            shapes, hit, why = check_command(one)
+            if shapes or hit:
+                cmd = one
+                break
     except Exception as exc:
         shapes, hit, why = [], None, None  # a crash is an allow...
         # ...EXCEPT on a push. Exit 1 lets the command run, so a hook that
@@ -306,6 +453,10 @@ if __name__ == "__main__":
                 )
                 sys.exit(2)
 
+    def _via(name: str) -> str:
+        # Which MCP tool carried the line, so the refusal reads as one.
+        return f" (via MCP tool {name})" if name.startswith("mcp__") else ""
+
     def _ruling(name: str) -> str:
         builtin = {n for n, _ in BUILTIN_PATTERNS} | {n for n, _ in PUSH_RULES}
         return "" if name.startswith("project-") or name in builtin else f" ruling: {name}"
@@ -322,7 +473,7 @@ if __name__ == "__main__":
         # reader as the thing standing guard. Both reasons, no command text.
         also = f"\nAlso matches [{hit}]:{_ruling(hit)}" if hit else ""
         print(
-            f"BLOCKED [{SECRET_RULE}]: {_secrets.advice(shapes)}{also}\n"
+            f"BLOCKED [{SECRET_RULE}]:{_via(tool)} {_secrets.advice(shapes)}{also}\n"
             "If this is genuinely not a secret, name "
             f"`{SECRET_RULE}` in .loopkit/block-disabled.txt (a reviewed "
             "change to a tracked file).",
@@ -332,7 +483,7 @@ if __name__ == "__main__":
 
     if hit and why:
         print(
-            f"BLOCKED [{hit}]: force push or remote delete: {_secrets.redact(why)}: "
+            f"BLOCKED [{hit}]:{_via(tool)} force push or remote delete: {_secrets.redact(why)}: "
             f"{_secrets.redact(cmd)}\n"
             "If this is a false positive, name the rule in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
@@ -349,7 +500,7 @@ if __name__ == "__main__":
         # secret branch above catches most of it; this is the backstop for a
         # shape the table does not know yet.
         print(
-            f"BLOCKED [{hit}]:{ruling} dangerous command pattern detected: {_secrets.redact(cmd)}\n"
+            f"BLOCKED [{hit}]:{ruling}{_via(tool)} dangerous command pattern detected: {_secrets.redact(cmd)}\n"
             "If this is a false positive, name the pattern in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
             "the command around the guard.",

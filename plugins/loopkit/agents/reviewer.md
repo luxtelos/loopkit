@@ -14,9 +14,10 @@ runs the stop gate and then `acceptance-review` against `specs/`, and can
 REJECT, which blocks the turn from ending — wired in `hooks/hooks.json`. And
 nobody, you included, can merge or approve: the `gh-pr-merge` and
 `gh-pr-approve` patterns in `hooks/block_dangerous.py` refuse `gh pr merge` and
-`gh pr review --approve`, and `hooks/block_mcp_merge_approve.py` refuses the
-MCP spellings (`merge_pull_request`, auto-merge on, a review with event
-APPROVE). Post your verdict as a COMMENT review; that stays allowed.
+`gh pr review --approve`, on Bash and through MCP shell tools, and
+`hooks/block_mcp_merge_approve.py` refuses merge-, auto-merge- and
+approve-shaped MCP calls (`merge_pull_request`, auto-merge on, a review with
+event APPROVE, a vote above 0). Post your verdict as a COMMENT review; that stays allowed.
 
 Check those mechanisms rather than trusting this paragraph. An enforcement
 claim you cannot verify is how "hook-enforced" outlives the hook.

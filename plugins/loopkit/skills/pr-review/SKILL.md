@@ -15,8 +15,9 @@ Output: PASS/REJECT verdict with evidence, findings filed per FILES.md.
 Assume the code is BROKEN until proven otherwise. "Reads fine" is not
 evidence; only execution is. Never merge, never approve — a human does both,
 and the plugin's `block_dangerous.py` refuses `gh pr merge` and
-`gh pr review --approve` in any case, as `block_mcp_merge_approve.py` refuses
-the MCP merge, auto-merge and APPROVE tools.
+`gh pr review --approve` in any case (on Bash and through MCP shell tools), as
+`block_mcp_merge_approve.py` refuses merge-, auto-merge- and approve-shaped
+MCP calls.
 
 ## Algorithm
 
@@ -58,9 +59,9 @@ the MCP merge, auto-merge and APPROVE tools.
 ## Gotchas
 
 - `gh pr merge` and `gh pr review --approve` are refused by the plugin's
-  `block_dangerous.py` for every agent, and the MCP merge, auto-merge and
-  APPROVE tools by `block_mcp_merge_approve.py`; do not look for another
-  spelling. A COMMENT or REQUEST_CHANGES review stays allowed.
+  `block_dangerous.py` for every agent, on Bash and through MCP shell tools,
+  and merge-, auto-merge- and approve-shaped MCP calls by
+  `block_mcp_merge_approve.py`; do not look for another spelling. A COMMENT or REQUEST_CHANGES review stays allowed.
 - A green CI rollup means nothing REPORTED failure. Steps inside a job fail
   fast, so later steps may never have run. Read the job.
 - Reading the PR body first anchors you on the author's framing. Diff and
