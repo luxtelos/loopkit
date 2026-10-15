@@ -599,6 +599,133 @@ def iter_rows(
     return [row for row in table.rows if row["status"] in wanted]
 
 
+# ---------------------------------------------------------------------------
+# THE EVIDENCE GATE (docs/adr/0008-evidence-gate.md)
+#
+# The verdict gate above asks "did a different agent judge the change". This
+# one asks the question before it: "what does the cause rest on". On
+# 2026-10-15 a loop built and reviewed a fix whose cause came from one source
+# — a response field and a URL parameter, both copies of one stale flag — and
+# the rule "check several sources" existed only as context. So the three
+# transitions that commit the loop to a cause (writing acceptance for it,
+# building it, asking a human to merge it) now require the row's assessment to
+# carry a `## Sources` section naming at least two independent systems of
+# record (or `Live state: none — <why>`), and a `## Does not fit` section in
+# which every contradiction is explained. The parsing is pure and lives in
+# `evidence.py`; this half only decides and records.
+#
+# Order matters and is pinned: the evidence check is PURE and runs first, so a
+# refusal leaves no transition event, no row change and no override record.
+# The override is written only AFTER the row write succeeded — to the ledger
+# and, because the ledger is never committed, to `state/triage.md`, which is.
+# ---------------------------------------------------------------------------
+
+EVIDENCE_GATED_STATUSES = frozenset({"spec-draft", "spec-ready", "pr-open"})
+OVERRIDES_HEADING = "## Evidence-gate overrides"
+_OVERRIDES_INTRO = (
+    "Written by `triage_state.py --override-sources`, one line per override, so the "
+    "reason travels with the commit. Never edit by hand."
+)
+
+
+def _evidence_module():
+    """Load `evidence.py` beside this file. Fail CLOSED: a gate that cannot load
+    its checker has not checked anything, so the transition is refused."""
+    try:
+        import importlib.util
+        path = Path(__file__).resolve().parent / "evidence.py"
+        spec = importlib.util.spec_from_file_location("loopkit_evidence", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as exc:  # noqa: BLE001 — any load failure is a refusal
+        raise ValueError(
+            f"the evidence gate could not load its checker ({exc}); refusing — a check "
+            f"that could not run is not a pass"
+        ) from exc
+
+
+def check_evidence(
+    state: Path,
+    source: str,
+    status: str | None,
+    assessment: str | None,
+    override: str | None,
+) -> dict | None:
+    """Pure. None when the transition is not gated, or passes. A pending
+    override record when the evidence fails and a reasoned override was given.
+    Raises ValueError when the transition is refused."""
+    if normalize_cell(status or "") not in EVIDENCE_GATED_STATUSES:
+        return None
+    ev = _evidence_module()
+    if override is not None and not ev.has_substance(override):
+        raise ValueError(
+            "--override-sources needs a reason. An override with no reason is not a "
+            "decision, it is the gate switched off."
+        )
+    try:
+        path, problems = ev.evaluate(project_root_for(state), normalize_cell(source), assessment)
+    except ValueError as exc:
+        path, problems = None, [str(exc)]
+    if not problems:
+        return None
+    if override is not None:
+        return {
+            "source": normalize_cell(source),
+            "status": normalize_cell(status or ""),
+            "reason": normalize_cell(override),
+            "assessment": str(path) if path else None,
+            "problems": problems,
+        }
+    listed = "\n".join(f"  - {p}" for p in problems)
+    where = f" ({path})" if path else ""
+    raise ValueError(
+        f"refusing to set '{source}' to {status}: its assessment{where} does not carry "
+        f"the evidence a cause needs before the loop commits to it.\n{listed}\n"
+        f"Fix the assessment (loop-assess A0 writes the `## Sources` skeleton: "
+        f"`python3 <plugin>/scripts/source-snapshot.py --finding \"<the finding>\"`), or, "
+        f"if a human has decided to go ahead without it, say so where it is committed:\n"
+        f"  triage_state.py update ... --status {status} --override-sources \"<reason>\""
+    )
+
+
+def record_sources_override(state: Path, record: dict) -> str:
+    """Write an allowed override where it will be committed, and to the ledger.
+    Called only after the row write succeeded."""
+    import datetime
+    agent = os.environ.get("LOOPKIT_AGENT") or "unset"
+    _append_event(state, "sources-override", source=record["source"], status=record["status"],
+                  reason=record["reason"], assessment=record.get("assessment"),
+                  problems=record["problems"][:5], by=agent)
+    day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    first = normalize_cell(record["problems"][0]).split(". ")[0][:200] if record["problems"] else ""
+    line = (f"- {day} `{record['source']}` → {record['status']}: {record['reason']} "
+            f"(by {agent}; the gate said: {first})").replace("|", "\\|")
+    table = parse_table(state)
+    lines = table.suffix.split("\n") if table.suffix else [""]
+    heads = [i for i, l in enumerate(lines) if l.strip() == OVERRIDES_HEADING]
+    if heads:
+        end = next((i for i in range(heads[0] + 1, len(lines)) if lines[i].startswith("## ")),
+                   len(lines))
+        while end > heads[0] + 1 and not lines[end - 1].strip():
+            end -= 1
+        lines.insert(end, line)
+    else:
+        while len(lines) > 1 and not lines[-1].strip():
+            lines.pop()
+        lines += ["", OVERRIDES_HEADING, "", _OVERRIDES_INTRO, "", line]
+    table.suffix = "\n".join(lines)
+    if not table.suffix.startswith("\n"):
+        table.suffix = "\n" + table.suffix
+    write_table(state, table)
+    return (
+        f"OVERRIDE: '{record['source']}' moved to {record['status']} WITHOUT the evidence the "
+        f"gate asks for.\n  reason: {record['reason']}\n  the gate said: {first}\n"
+        f"  recorded under '{OVERRIDES_HEADING}' in {state} (commit it with the tick) and in "
+        f"{ledger_path(state)} as a sources-override event."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -614,6 +741,8 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_parser.add_argument("--spec", default="")
     upsert_parser.add_argument("--status", default="new")
     upsert_parser.add_argument("--override-verdict", default=None, metavar="REASON")
+    upsert_parser.add_argument("--assessment", default=None, metavar="PATH")
+    upsert_parser.add_argument("--override-sources", default=None, metavar="REASON")
 
     update_parser = subparsers.add_parser("update")
     update_parser.add_argument("--state", required=True)
@@ -627,6 +756,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="move to pr-open without a recorded PASS. The reason is written to "
              "state/ticks.jsonl as a verdict-override event and printed loudly. "
              "For a human who has decided otherwise — not for an agent in a hurry.",
+    )
+    update_parser.add_argument(
+        "--assessment", default=None, metavar="PATH",
+        help="the row's assessment, when more than one file under state/ declares "
+             "`Row source: <source>`. It must declare this row too.",
+    )
+    update_parser.add_argument(
+        "--override-sources", default=None, metavar="REASON",
+        help="move to spec-draft, spec-ready or pr-open although the assessment lacks "
+             "the evidence the gate asks for. The reason is written to state/triage.md "
+             "under '## Evidence-gate overrides' (committed with the tick) and to the "
+             "ledger. For a human who has decided — not for an agent in a hurry.",
     )
 
     verdict_parser = subparsers.add_parser(
@@ -696,6 +837,10 @@ def main() -> int:
                 # Gated as well as `update`, because a gate on one verb and not
                 # the other is not a gate, it is a speed bump with a signposted
                 # detour.
+                # The evidence gate first: it is pure, so a refusal here leaves
+                # nothing behind — not even the verdict gate's override event.
+                pending = check_evidence(state_path, args.source, args.status,
+                                         args.assessment, args.override_sources)
                 note = check_gate(state_path, args.source, args.status, args.override_verdict)
                 if note:
                     print(note, file=sys.stderr)
@@ -707,13 +852,18 @@ def main() -> int:
                     spec=args.spec,
                     status=args.status,
                 )
+                if pending:
+                    print(record_sources_override(state_path, pending), file=sys.stderr)
                 print("created" if created else "updated")
                 return 0
 
             if args.command == "update":
                 # BEFORE the transition is recorded and before the row is
                 # written. A refusal must leave no trace of the transition it
-                # refused.
+                # refused. The evidence gate is pure and goes first, so its
+                # refusal leaves no trace of the verdict gate either.
+                pending = check_evidence(state_path, args.source, args.status,
+                                         args.assessment, args.override_sources)
                 note = check_gate(state_path, args.source, args.status, args.override_verdict)
                 if note:
                     print(note, file=sys.stderr)
@@ -726,6 +876,10 @@ def main() -> int:
                     spec=args.spec,
                     status=args.status,
                 )
+                # Only now, with the row written: an override for a transition
+                # that failed for some other reason must leave no record.
+                if pending:
+                    print(record_sources_override(state_path, pending), file=sys.stderr)
                 print("updated")
                 return 0
 

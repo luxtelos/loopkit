@@ -38,6 +38,17 @@ def project(rows="| a thing | src/one | high |  | fixing |\n"):
     root = pathlib.Path(tempfile.mkdtemp())
     (root / "state").mkdir()
     (root / "state" / "triage.md").write_text("# triage\n\n" + HEADER + rows)
+    # Since 0.2.5 pr-open (and spec-draft, spec-ready) also passes the
+    # evidence gate (docs/adr/0008). This pin is about the VERDICT gate, so
+    # every scratch row carries an assessment that satisfies the evidence gate
+    # and the cases below exercise exactly what they did before. The evidence
+    # gate has its own pin: tests/pins/evidence-gate.py.
+    (root / "state" / "fixture-assessment.md").write_text(
+        "Row source: src/one\n\n## Sources\n\n"
+        "| class | system of record | evidence |\n|---|---|---|\n"
+        "| data | database | read: the rows, dev |\n"
+        "| runtime | logs | read: the error at the time, dev |\n\n"
+        "## Does not fit\n\n- none — re-read both reads; nothing contradicts\n")
     return root
 
 

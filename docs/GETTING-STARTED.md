@@ -57,7 +57,7 @@ not initialise a project with a plugin that cannot pass its own tests.
 
 The suite also runs `check-citations.py` against **this checkout** — not
 against a fixture — so a `file:line` that has rotted in these documents turns
-the run red before you push. The invocation is at `tests/selftest.sh:332`, and
+the run red before you push. The invocation is at `tests/selftest.sh:342`, and
 CI reaches it by running the whole suite at
 `.github/workflows/selftest.yml:20`. Both lines are pinned in
 `.loopkit/citations.json`: move either one and the gate says so, and prints
@@ -222,6 +222,12 @@ That is the whole prompt. A hook injects the discipline the moment it sees
    ```
    python3 <plugin>/scripts/triage_state.py update --state state/triage.md --source "<row source>" --status spec-draft
    ```
+   That move is refused unless the row's assessment (the file under `state/`
+   carrying `Row source: <row source>`) has a `## Sources` section naming at
+   least two systems of record it read — or `Live state: none — <why>` — and a
+   `## Does not fit` section with every contradiction explained. The same
+   check guards `spec-ready` and `pr-open`. `source-snapshot.py` writes the
+   skeleton; docs/adr/0008-evidence-gate.md says why.
 5. It stops. Run `/loop work the loopkit backlog` again (or let `/loop`
    self-pace) for the next stage.
 

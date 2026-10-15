@@ -1,0 +1,156 @@
+{
+  "_comment": "Systems of record for the evidence gate (docs/adr/0008-evidence-gate.md). An assessment's `## Sources` row names a CLASS; independence is counted over each class's `system` (lower-cased, whitespace collapsed), so two classes with one system are one source. `counts: false` = recorded, worth zero. `nouns` are only suggestions for source-snapshot.py; the gate never reads them. `probes` are argv lists the snapshot runs to see whether a CLI answers; a class with none is reported unknown. Edit freely: add your identity provider's CLI as a probe, split a class, add one. A class not listed here is refused, not ignored.",
+  "classes": {
+    "identity": {
+      "system": "identity provider",
+      "note": "users, roles, tenants, sign-in; read the provider, not the app's copy",
+      "nouns": [
+        "user",
+        "users",
+        "role",
+        "roles",
+        "tenant",
+        "tenants",
+        "login",
+        "sign-in",
+        "signin",
+        "invite",
+        "invites",
+        "invitation",
+        "member",
+        "membership",
+        "permission",
+        "permissions",
+        "account",
+        "session"
+      ],
+      "probes": []
+    },
+    "data": {
+      "system": "database",
+      "note": "rows, flags, counts; read-only, never write while assessing",
+      "nouns": [
+        "row",
+        "rows",
+        "flag",
+        "flags",
+        "count",
+        "counts",
+        "record",
+        "records",
+        "table",
+        "column",
+        "profile",
+        "balance",
+        "total",
+        "totals"
+      ],
+      "probes": [
+        [
+          "psql",
+          "--version"
+        ],
+        [
+          "sqlite3",
+          "--version"
+        ]
+      ]
+    },
+    "runtime": {
+      "system": "logs and analytics",
+      "note": "behaviour, errors, timing; read the logs at the time it happened",
+      "nouns": [
+        "error",
+        "errors",
+        "timeout",
+        "timeouts",
+        "latency",
+        "timing",
+        "crash",
+        "exception",
+        "log",
+        "logs",
+        "slow",
+        "retry",
+        "redirect",
+        "loop",
+        "500"
+      ],
+      "probes": []
+    },
+    "code": {
+      "system": "code graph and git",
+      "note": "code paths; read them at the DEPLOYED commit, not the branch tip",
+      "nouns": [
+        "function",
+        "handler",
+        "route",
+        "endpoint",
+        "code",
+        "branch",
+        "commit",
+        "deploy",
+        "deployed",
+        "guard",
+        "migration"
+      ],
+      "probes": [
+        [
+          "git",
+          "--version"
+        ]
+      ]
+    },
+    "memory": {
+      "system": "memory",
+      "note": "rulings and traps already on record",
+      "nouns": [
+        "ruling",
+        "rulings",
+        "decision",
+        "decided",
+        "trap",
+        "invariant",
+        "precedent",
+        "rule"
+      ],
+      "probes": []
+    },
+    "tracker": {
+      "system": "tracker",
+      "note": "ticket and pull-request history",
+      "nouns": [
+        "ticket",
+        "tickets",
+        "issue",
+        "issues",
+        "pr",
+        "regression",
+        "history",
+        "reopened"
+      ],
+      "probes": [
+        [
+          "gh",
+          "--version"
+        ]
+      ]
+    },
+    "derived": {
+      "system": "the application's own output",
+      "counts": false,
+      "note": "a value the app derived from another system; recorded, worth zero",
+      "nouns": [
+        "response field",
+        "url parameter",
+        "query string",
+        "query parameter",
+        "cached flag",
+        "cache",
+        "header",
+        "payload"
+      ],
+      "probes": []
+    }
+  }
+}

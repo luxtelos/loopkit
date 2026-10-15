@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.2.5 — 2026-10-15
+
+A finding moves forward only on evidence it wrote down. Owner request,
+2026-10-15. ADR 0008; the EARS spec is a draft at
+`state/2026-10-15-spec-draft-evidence-gate.md` awaiting ratification.
+
+### Why
+
+A loop built and reviewed a fix on a one-source cause: a response-field name
+and a URL parameter, both copies of one stale flag, were read as proof that a
+user had a pending invite. Nobody read the identity provider or the database
+rows; three later reads showed there was no invite. Merged alone, the fix would
+have turned a harmless redirect loop into a consent prompt that deletes data.
+"Check several sources" already existed as a rule in context. Nothing enforced
+it, and the loop's own note that a plain sign-in did not loop — the
+contradiction — was never reconciled.
+
+### Added
+
+- **The evidence gate in `triage_state.py`.** `update` and `upsert` refuse
+  `spec-draft`, `spec-ready` and `pr-open` unless the row's assessment carries
+  a `## Sources` section with at least two `read:` rows on **different systems
+  of record** — or an explicit `Live state: none — <why>` — and a
+  `## Does not fit` section that is either `- none — <what was checked>` or one
+  item per contradiction, each with `explained:`. A missing section, an empty
+  one, leftover placeholders, an unknown class or an unexplained item is
+  refused, with the reason listed. The gate is pure and runs before the
+  verdict gate, so a refusal leaves no transition, no row change and no
+  override behind. It fails closed when its checker or `sources.json` cannot
+  be read.
+- **Independence is counted over systems, not rows.** Each sources row names a
+  class; the class maps to a system in `.loopkit/sources.json`. Two rows of one
+  class, or two classes on one system, count once. Class `derived` — a response
+  field, a URL parameter, a cached flag — is recorded and worth zero.
+- **`--override-sources "<reason>"`**, the same shape as `--override-verdict`.
+  The reason is written to the ledger AND under `## Evidence-gate overrides`
+  in `state/triage.md`, so it is committed with the tick — the ledger never
+  is. Recorded only after the row write succeeded; an empty reason is refused.
+- **`scripts/source-snapshot.py`** (loop-assess step A0): writes the
+  `## Sources` skeleton, one row per class, matches the finding's nouns to
+  classes as a suggestion, and probes which CLIs answer. Anything it cannot
+  probe — including every MCP server — is `unknown`, never connected; MCP
+  server names are printed, their configuration never is.
+- **`templates/loopkit/sources.json`**, laid down by init; identical to the
+  built-in defaults (pinned).
+- **`loopkit_core/evidence.py`**, the pure parser.
+- Pins: `tests/pins/evidence-gate.py` (148 cases) and
+  `tests/pins/evidence-gate-prove-red.sh` (24 mutations, one per half of the
+  gate, each in a scratch copy).
+
+### Changed
+
+- `loop-assess`: new step A0; the A3 template gains `Row source:`,
+  `## Sources` and `## Does not fit`. `loop-tick` documents the gate.
+- `tests/pins/pr-open-needs-a-verdict.py`: its scratch rows now carry a
+  passing assessment, so it keeps testing exactly the verdict gate.
+- `tests/pins/loop-next-output-parity.py`: fixture rows at a gated status are
+  built with `--override-sources "fixture construction…"`, the same way they
+  already said `--override-verdict`; offered only to a recorder that knows the
+  flag, so `--regen <older ref>` still works.
+- `tests/selftest.sh`: the end-to-end `spec-draft` move first proves the
+  refusal with no assessment, then writes one; and `docs/GETTING-STARTED.md`'s
+  citation of the suite's citation-gate line moved with it (332 → 342).
+
+### Upgrading
+
+A row already past `new` meets the gate at its next `spec-draft`,
+`spec-ready` or `pr-open` move. Add the two sections to its assessment, or
+override with a reason (for example `pre-0.2.5 row, evidence not recorded`).
+
 ## 0.2.4 — 2026-10-04
 
 A merge that stopped on a conflict can be finished.

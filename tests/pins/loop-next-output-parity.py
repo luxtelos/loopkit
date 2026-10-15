@@ -90,7 +90,7 @@ def build_project(scripts: Path, queue: list[dict]) -> Path:
         # the day it was written.
         override = (["--override-verdict",
                      "fixture construction in loop-next-output-parity.py"]
-                    if row.get("status") == "pr-open" else [])
+                    if row.get("status") == "pr-open" else []) + evidence_override(triage, row)
         subprocess.run(
             [sys.executable, str(triage), "upsert", "--state", str(state),
              "--finding", row.get("finding", ""), "--source", row.get("source", ""),
@@ -119,6 +119,23 @@ def normalize(text: str, scripts: Path, project: Path) -> str:
             .replace(str(scripts), "<SCRIPTS>")
             .replace(str(project.resolve()), "<PROJECT>")
             .replace(str(project), "<PROJECT>"))
+
+
+def evidence_override(triage: Path, row: dict) -> list[str]:
+    """Same reasoning as `--override-verdict` above, for the evidence gate
+    (0.2.5, docs/adr/0008): these rows are fixtures with no assessment behind
+    them, and saying so is the honest way through. Offered only to a recorder
+    that knows the flag, so `--regen <older ref>` still builds its queues.
+    Defined down here, not inline, so that no line above it moves:
+    specs/blocked-waits-on-what.md cites this file by line number."""
+    if row.get("status") not in ("spec-draft", "spec-ready", "pr-open"):
+        return []
+    knows = "--override-sources" in subprocess.run(
+        [sys.executable, str(triage), "upsert", "--help"],
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    return (["--override-sources", "fixture construction in loop-next-output-parity.py"]
+            if knows else [])
 
 
 def capture(scripts: Path, case: str) -> str:

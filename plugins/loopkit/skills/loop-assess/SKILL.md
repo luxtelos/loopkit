@@ -36,6 +36,55 @@ escalations can be ignored.
 
 ## Mode A — assess a finding
 
+### A0. Name where the truth lives, and what you can reach — before any theory
+
+A cause built from one source is a guess with a test suite. The case that made
+this a step (2026-10-15): a response-field name and a URL parameter were read as
+proof that a user had a pending invite. Both were copies of one stale flag.
+Nobody read the identity provider or the database rows, a fix was built and
+reviewed, and merged alone it would have turned a harmless redirect loop into a
+consent prompt that deletes data. The rule "check several sources" existed. It
+was context, so it lost to speed.
+
+So before A1, run the snapshot and paste its output into the assessment:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/source-snapshot.py" --finding "<the finding, verbatim>"
+# or append straight into the file (never overwrites an existing section):
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/source-snapshot.py" --finding "…" --into state/<date>-<slug>-assessment.md
+```
+
+It writes a `## Sources` table with one row per class in
+`.loopkit/sources.json` (identity → identity provider; rows, flags, counts →
+database, read-only; behaviour, errors, timing → logs or analytics; code path →
+code graph plus git at the deployed commit; rulings and traps → memory; ticket
+history → tracker; and `derived` for a value the app computed itself), marks
+which classes the finding's nouns touch, and probes which tools answer. A tool
+it cannot probe — and every MCP server, which a script cannot see — is
+`unknown`, never connected. If your session can see an MCP server, pass
+`--session-reported <name>`; it is labelled as yours, not the script's.
+
+Then **read** the systems the claim lives in, and replace every evidence cell
+with `read: <what you read, which env>` or `n/a: <why>`. Two rules decide
+whether the finding may move on, and `triage_state.py` enforces both at
+`spec-draft`, `spec-ready` and `pr-open`:
+
+- **At least two `read:` rows on different systems of record**, or the explicit
+  line `Live state: none — <why>` when the finding makes no claim about live
+  state (a doc typo, a refactor). Two reads of one system are one source. A
+  `derived` row — response field, URL parameter, cached flag — is recorded and
+  worth zero. A missing or empty section is refused; a stated zero is not.
+- **Every observation that does not fit is explained.** `## Does not fit`
+  holds `- none — <what was checked>`, or one item per contradiction with an
+  `explained:` line. The incident's own note — "a plain sign-in did not loop"
+  — was the contradiction nobody reconciled.
+
+The gate cannot tell whether a `read:` happened or whether you read the right
+systems; it makes you say which, where a reviewer will see it. If a human
+decides to move on without the evidence, the door is
+`--override-sources "<reason>"`, and the reason is written into
+`state/triage.md`, which the tick commits.
+
 ### A1. Establish the baseline before you touch anything
 
 The single most repeated failure in a loop is not a wrong fix. It is a
@@ -108,6 +157,8 @@ Findings that stay in the chat window are lost — the state file is the memory.
 Write to `state/<date>-<slug>-assessment.md`:
 
 ```markdown
+Row source: <the triage row's source, exactly as in state/triage.md>
+
 ## Observed
 
 <one sentence of behaviour>
@@ -115,6 +166,23 @@ Write to `state/<date>-<slug>-assessment.md`:
 ## Evidence
 
 <command run, signal read, and why it could have failed>
+
+## Sources
+
+<!-- from source-snapshot.py (A0). One row per class. -->
+| class | system of record | evidence |
+|---|---|---|
+| identity | identity provider | <read: what, env — or n/a: why> |
+| data | database | <read: what, env — or n/a: why> |
+
+<!-- or, when the finding makes no claim about live state, instead of the table: -->
+<!-- Live state: none — <why no system holds state about this> -->
+
+## Does not fit
+
+- <an observation the conclusion does not explain>
+  explained: <why it does not change the conclusion>
+<!-- or exactly one item: - none — <what was checked> -->
 
 ## Control case
 
@@ -135,6 +203,12 @@ Write to `state/<date>-<slug>-assessment.md`:
 
 The last section is required even when it is empty. It is what stops the next
 run from re-adding the guard clause this one removed.
+
+`Row source:`, `## Sources` and `## Does not fit` are read by a machine, not
+only by people: `triage_state.py` finds the assessment by its `Row source:`
+line (exactly one file under `state/` may declare a row; `--assessment <path>`
+picks one when two do) and refuses `spec-draft`, `spec-ready` and `pr-open`
+until both sections pass A0's two rules.
 
 ### A4. Hand off
 
@@ -217,6 +291,13 @@ agent implements and a third judges.
   regression later.
 - Mode B counts only auto-loaded files against the ceiling; the contracts and
   constitution are pointer-only and do not count.
+- A response field, a URL parameter and a cached flag are the app's copy of
+  some system's truth, not the truth. Record them as `derived` (worth zero) and
+  read the system they were copied from. Two reads of one system are one
+  source; the gate counts systems, not rows.
+- `Live state: none — <why>` is a statement a reviewer can disagree with, not a
+  way past the gate. Use it only when no system holds state the finding is
+  about.
 
 ## Reference files
 

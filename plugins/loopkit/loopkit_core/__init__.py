@@ -19,6 +19,11 @@ M2 part A moved these modules here unchanged except for imports:
   decide         NEW: the Stage precedence and the CONTINUE/WAIT/IDLE split,
                  lifted out of scripts/loop-next.sh
 
+Added since:
+
+  evidence       the evidence gate's pure half: reads an assessment's
+                 `## Sources` and `## Does not fit` (docs/adr/0008)
+
 Every one of them is still importable at its old `plugins/loopkit/scripts/`
 path, which is a thin shim over this package, so hooks, loop-next.sh, the
 suite and other projects keep working unchanged.
@@ -26,6 +31,7 @@ suite and other projects keep working unchanged.
 
 __all__ = [
     "decide",
+    "evidence",
     "inbox_to_triage",
     "loop_metrics",
     "loop_next_pick",

@@ -6,7 +6,7 @@
 #   inbox/needs-human.md
 #   specs/                       (empty; the spec-writer skill fills it)
 #   constitution.md FILES.md TOOLS.md COMMANDS.md docs/MUTATION_POLICY.md
-#   .loopkit/{scopes.json,citations.json,block-patterns.txt,block-disabled.txt,protected.txt,config.env.example}
+#   .loopkit/{scopes.json,citations.json,sources.json,block-patterns.txt,block-disabled.txt,protected.txt,config.env.example}
 #   .gitignore / .prettierignore lines, each written ONCE and then left alone
 #   a "LoopKit standing rules" block appended to CLAUDE.md (marker-guarded)
 #
@@ -68,6 +68,7 @@ put COMMANDS.md                COMMANDS.md
 put MUTATION_POLICY.md         docs/MUTATION_POLICY.md
 put loopkit/scopes.json        .loopkit/scopes.json
 put loopkit/citations.json     .loopkit/citations.json
+put loopkit/sources.json       .loopkit/sources.json
 put loopkit/block-patterns.txt .loopkit/block-patterns.txt
 put loopkit/block-disabled.txt .loopkit/block-disabled.txt
 put loopkit/protected.txt      .loopkit/protected.txt

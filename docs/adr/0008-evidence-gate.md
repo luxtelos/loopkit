@@ -1,0 +1,142 @@
+# 0008 — A finding moves forward only on evidence from two systems of record
+
+Status: **proposed** (owner request, 2026-10-15). The EARS wording is a draft at
+`state/2026-10-15-spec-draft-evidence-gate.md` and awaits ratification.
+
+## Context
+
+A loop built a fix and had it reviewed on a cause that came from one source: a
+response-field name and a URL parameter, read as proof that a user had a
+pending invite. Nobody read the identity provider or the user's database rows.
+Three later reads — the identity provider's user record, the user's role rows,
+the profile row — showed there was no invite, only a stale profile flag that
+both of the first two values had been copied from. Merged alone, the fix would
+have turned a harmless redirect loop into a consent prompt that deletes data.
+
+Two things were already true and did not help:
+
+- Rules saying "check several sources before a claim about live state" existed
+  as context. Nothing read them back at the moment a finding moved.
+- The loop's own notes recorded that a plain sign-in did not loop in its
+  reproduction. That observation contradicted the cause. Nothing asked for it
+  to be reconciled before the conclusion moved on.
+
+At `77203a7` the only gated transition in `triage_state.py` is `pr-open`, and
+the gate reads review verdicts, not evidence. `new → spec-draft → spec-ready`
+is ungated.
+
+The owner asked for three things (2026-10-15): a sources step before every
+assessment that lists the connected tools and maps each noun to where its truth
+is kept; a gate in the state tool that refuses to move a finding to spec or PR
+when a claim about live state has fewer than two independent sources; and a
+contradiction list in which any unexplained observation blocks the conclusion.
+
+## Decisions
+
+### 1. The gate reads a declared value, never a guess about the text
+
+The gate does **not** try to detect "a claim about live state" from free text.
+That is a blocklist of phrasings, and it leaks the first time somebody phrases
+the claim a new way. Instead every assessment states its position explicitly,
+in a `## Sources` section, as one of:
+
+- **at least two `read:` rows on different systems of record**, or
+- **`Live state: none — <why>`**, a declared zero.
+
+A missing section, an empty section, a table with no usable rows, or a `none`
+with no reason is a *fabricated* zero and is refused. A *real* zero is
+allowed, because it is written down where a reviewer can disagree with it.
+
+### 2. "Independent" means a different system of record — and the gate decides which system, not the writer
+
+Each `## Sources` row names a **class** (`identity`, `data`, `runtime`, `code`,
+`memory`, `tracker`, `derived`). The class maps to a system of record in
+`<project>/.loopkit/sources.json` (defaults built in, template laid down by
+init). Independence is counted over the **systems**, not the rows:
+
+- Two rows of the same class are one system.
+- Two classes mapped to the same system are one system.
+- A value the application derived from one system — a response field, a URL
+  parameter, a cached flag — is class `derived`, whose system is marked
+  `counts: false`. It may be recorded (and should be, so the reviewer sees what
+  the claim rested on) but it is worth **zero**. That is the incident's own
+  evidence, and under this rule it scores nothing.
+- A class not in the configuration is refused, not ignored. A silent ignore is
+  how a typo becomes a pass.
+
+The writer cannot raise the count by naming a new system in a cell; the cell is
+display, the class is the key. Systems are an allowlist owned by the project.
+
+What the gate **cannot** do is prove that a `read:` happened. It makes the
+agent name two systems of record and say what it read, in which environment;
+whether that is true stays the reviewer's job. Nor does it check that the
+*right* systems were read — two honest reads of code and memory pass a claim
+about a user's state. Requiring a read from a "live" class (identity, data,
+runtime) unless `Live state: none` is declared would close that, at the cost of
+an extra read or an extra declaration on every code-only finding. That is a
+product choice left to the owner; see the PR.
+
+### 3. Contradictions block until each one is explained
+
+The assessment carries a required `## Does not fit` section. It is either one
+item `- none — <what was checked>`, or one item per observation that does not
+fit the conclusion, each with an `explained:` line. A missing section, an
+empty one, or any item without an `explained:` with content blocks the same
+transitions as the sources rule. `none` must stand alone; `none` beside real
+items is a contradiction in itself and is refused.
+
+### 4. Which transitions, and where the gate sits
+
+`spec-draft`, `spec-ready` and `pr-open`, through both `update` and `upsert`.
+Those are the three moves that commit the loop to a cause: writing acceptance
+for it, building it, and asking a human to merge it. `fixing`, `blocked`,
+`inbox` and `done` are not gated — routing away from the pipeline must stay
+cheap, and `fixing` is reached only from `spec-ready`, which was gated.
+
+The gate is checked **before** the verdict gate and before anything is
+written, and it is pure: a refusal leaves no transition event, no row change
+and no override record.
+
+The row finds its assessment by a declared line, `Row source: <the row's
+source>`, in a markdown file directly under `state/`. Exactly one match is
+used. None is refused; more than one is refused and names them, and
+`--assessment <path>` picks one explicitly (the file must still declare the
+row). The queue keeps its five columns — `specs/blocked-waits-on-what.md`
+forbids a sixth.
+
+### 5. One override, and its reason is committed
+
+`--override-sources "<reason>"`, the same shape as `--override-verdict`. An
+empty reason is refused. An override on a transition the evidence already
+allows records nothing.
+
+An earlier review found that override reasons written only to
+`state/ticks.jsonl` never reach a commit. So this one is written twice: as a
+`sources-override` event in the ledger, and as a line under
+`## Evidence-gate overrides` in `state/triage.md` — the file every tick already
+commits — naming the date, the row, the target status, the reason and the
+agent (or `unset`). It is written only after the row write succeeded, so a
+transition that failed for another reason leaves no override behind.
+
+### 6. Fail closed
+
+An unreadable assessment, an invalid `sources.json`, or a helper module that
+will not load refuses the transition. This is the opposite of the ledger
+*write* (fail-open by design): a missing write is the ledger's problem; a check
+that could not run is not a pass.
+
+## Consequences
+
+- Every finding at `new` that goes to the pipeline now needs an assessment with
+  both sections before `spec-draft`. Rows already past `new` when a project
+  upgrades meet the gate at their next gated move; the honest options are to
+  add the sections or to override with a reason (`pre-0.2.5 row`). Whether to
+  grandfather such rows automatically is left to the owner.
+- `source-snapshot.py` writes the `## Sources` skeleton: one row per class, the
+  finding's nouns matched to classes as a *suggestion*, and a probe of which
+  tools answer. A tool it cannot probe — including every MCP server, which a
+  script cannot see — is reported `unknown`, never `connected`.
+- The gate is a floor, not a judge. It turns "check several sources" from a
+  sentence an agent can skip into a section it cannot omit, and leaves the
+  question "were these the right sources, honestly read?" where it belongs:
+  with a reviewer that is not the author.
