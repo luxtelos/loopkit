@@ -77,5 +77,5 @@ read, and a hand edit breaks that.
 | The queue lags its own work by however long review takes (2026-09-07) | inbox/needs-human.md § The queue lags its own work by however long review takes (2026-09-07) | medium |  | new |
 | Proposed spec wording the loop could not apply itself (2026-09-07) | inbox/needs-human.md § Proposed spec wording the loop could not apply itself (2026-09-07) | medium |  | new |
 | The marketplace submission is ready, and it is yours to send (2026-09-07) | inbox/needs-human.md § The marketplace submission is ready, and it is yours to send (2026-09-07 | medium |  | new |
-| Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08) | inbox/needs-human.md § Ruling needed: may an implementing agent grant itself a governance overr | medium |  | blocked |
+| Ruling needed: may an implementing agent grant itself a governance override? (2026-09-08) | inbox/needs-human.md § Ruling needed: may an implementing agent grant itself a governance overr | medium |  | done |
 | RESOLVED IN THIS PR: inbox_to_triage.py had not been run with --apply since 2026-09-07 and 10 inbox sections sat off the board; running it here filed all of them at new under the bridge's own keys. The gap was the missing run, not the bridge | PR #48 review 2026-09-09 §ten-inbox-sections-unfiled | high |  | done |
