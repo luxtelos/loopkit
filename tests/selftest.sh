@@ -1158,8 +1158,8 @@ srr_out="$(bash "$REPO/tests/pins/stop-review-prove-red.sh" "$REPO" 2>&1)"
 srr_n="$(printf '%s' "$srr_out" | grep -c 'RED, as required' || true)"
 srr_not="$(printf '%s' "$srr_out" | grep -c 'NOT RED\|BASELINE NOT GREEN\|TRACKED FILE CHANGED' || true)"
 printf '%s\n' "$srr_out" | grep -E 'NOT RED|BASELINE|TRACKED' || true
-[ "$srr_n" = 13 ] && [ "$srr_not" = 0 ] && ok "all thirteen stop-review mutations are caught" \
-  || fail "stop-review mutations: $srr_n/13 red, $srr_not not red"
+[ "$srr_n" = 14 ] && [ "$srr_not" = 0 ] && ok "all fourteen stop-review mutations are caught" \
+  || fail "stop-review mutations: $srr_n/14 red, $srr_not not red"
 
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so

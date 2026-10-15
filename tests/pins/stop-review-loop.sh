@@ -234,6 +234,42 @@ LOOP_STOP_REVIEW_CMD='echo "REJECT: criterion 3 has no test"; exit 1' \
   stop "$R" "$(payload "$S" "$R" false "All done!" "$NOTASKS")"
 expect BLOCK "C9 a failing review command blocks with its output" "criterion 3 has no test"
 
+echo "== C11 the checker needs no Bash: the verdict comes from the hook's own git and the evidence file"
+# The old agent hook's checker reported "Bash denied (don't-ask mode)" on every
+# turn, and permission allow rules did not reach it. Here the hook runs with a
+# PATH holding ONLY git and python3 — no bash, no sh — so any step that shells
+# out fails. The evidence verdicts must still come out right.
+NB="$SCR/nobash-bin"; mkdir -p "$NB"
+ln -s "$(command -v git)" "$NB/git"; ln -s "$(command -v python3)" "$NB/python3"
+R="$(mkrepo)"; S="c11-$$"
+printf 'x = 1\n' > "$R/someone_elses.py"
+printf 'edited\n' >> "$R/notes.md"
+(cd "$R" && python3 "$SR" write-evidence --changed-file notes.md) >/dev/null 2>&1
+nobash_stop() {  # like stop(), with no shell on PATH
+  OUT="$(printf '%s' "$2" | (cd "$1" && env -i HOME="$HOME" TMPDIR="$TMPDIR" PATH="$NB" "$NB/python3" "$SR") 2>&1)"; RC=$?
+  VERDICT="$(printf '%s' "$OUT" | python3 -c '
+import json, sys
+s = sys.stdin.read().strip()
+if not s:
+    print("ALLOW"); sys.exit()
+try:
+    d = json.loads(s)
+except Exception:
+    print("JUNK"); sys.exit()
+print("BLOCK" if isinstance(d, dict) and d.get("decision") == "block" else "ALLOW")')"
+  [ "$RC" = 0 ] || VERDICT="JUNK"
+}
+nobash_stop "$R" "$(payload "$S" "$R" false "done" "$NOTASKS")"
+expect ALLOW "C11 with no bash on PATH, a valid evidence file is accepted" "evidence accepted"
+python3 - "$R/.loopkit/turn-evidence.json" <<'PY'
+import json, sys, time
+json.dump({"version": 1, "kind": "no-code-change", "head": "0" * 40,
+           "written_at": time.time(), "command": "git status --porcelain",
+           "changed_files": ["notes.md"]}, open(sys.argv[1], "w"))
+PY
+nobash_stop "$R" "$(payload "$S" "$R" false "done" "$NOTASKS")"
+expect BLOCK "C11 with no bash on PATH, stale evidence is still refused" "someone_elses.py"
+
 echo "== C10 fail-open on junk, and the wiring"
 OUT="$(printf 'not json at all' | (cd "$SCR" && python3 "$SR") 2>&1)"; RC=$?
 if [ "$RC" = 0 ] && ! printf '%s' "$OUT" | grep -q '"decision": *"block"'; then

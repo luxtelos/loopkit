@@ -50,9 +50,11 @@ The Stop review can no longer trap a session that is waiting.
 - `tests/pins/stop-review-loop.sh` drives the hook with real Stop payloads:
   a second stop with `stop_hook_active`, a waiting session, a valid and a stale
   evidence file, the scope cases, and the control (no background work, real
-  unfinished code: refused). `tests/pins/stop-review-prove-red.sh` breaks each
-  rule in a scratch copy and requires the pin to fail on the case guarding it
-  (13 mutations).
+  unfinished code: refused), and a run with no `bash` on PATH at all, where
+  the evidence verdicts still come out right — the old checker failed because
+  its Bash was denied, and permission allow rules did not reach it.
+  `tests/pins/stop-review-prove-red.sh` breaks each rule in a scratch copy and
+  requires the pin to fail on the case guarding it (14 mutations).
 
 ## 0.2.4 — 2026-10-04
 

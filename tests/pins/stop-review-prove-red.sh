@@ -101,6 +101,9 @@ check "MUT-NO-GATE: the default review step lets everything through" "C8 control
 mutate "$HOOK" '            if rc == 0:' '            if True:'
 check "MUT-REVIEW-CMD: a failing review command is ignored" "C9 a failing review command blocks with its output"
 
+mutate "$HOOK" 'p = subprocess.run(["git", "-C", str(root), *args], input=stdin,' 'p = subprocess.run(["bash", "-c", 'git -C "$0" "$@"', str(root), *args], input=stdin,'
+check "MUT-NEEDS-BASH: the hook shells out through bash to run git" "C11 with no bash on PATH, a valid evidence file is accepted"
+
 mutate "$WIRING" 'stop_review.py\" turn-start' 'stop_review.py\" turn-begin'
 check "MUT-WIRING: turn-start not wired" "C10 Stop is decided by a command hook and turn-start is wired"
 
