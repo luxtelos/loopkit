@@ -84,6 +84,7 @@ file per worktree, shared by every process in it. So the lock is per worktree,
 | What                    | Mechanism                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------- |
 | Committing              | `loop-commit.sh -m "…" -- <paths>` — stages AND commits inside one critical section |
+| Finishing a merge       | the same call, naming every FILE you resolved — committed from a private index (merge result + named files), so nothing staged by anyone else rides along |
 | A bare `git commit`     | refused by `require_commit_lock.py` (PreToolUse, Bash)                             |
 | A new inbox section     | `loop-commit.sh` and the stop gate (same base) refuse a new or edited one with no usable `Precedent searched: <queries run> → <result>` line; they read the file, not the command that wrote it (`check-inbox-precedent.py`) |
 | Writing `state/triage.md` | `triage_state.py` upsert/update/ensure-schema take the same lock                  |

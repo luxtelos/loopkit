@@ -27,15 +27,20 @@
 # Every path is required to be named. There is deliberately no "commit
 # everything" mode: that is the `git add -A` habit the constitution refuses.
 #
-# ONE CONTENT RULE RIDES ALONG. If the named paths would publish
+# A MERGE IN PROGRESS is finished by the same call: name every path you
+# resolved (files, not directories). See loop-commit-merge.sh for how the
+# merge commit is built without committing the shared index, and what it checks.
+#
+# ONE CONTENT RULE RIDES ALONG. If the commit would publish
 # inbox/needs-human.md, every NEW or CHANGED section in it must carry a usable
 # `Precedent searched: <queries run> → <result>` line, judged against the same
 # base as the stop gate, or the commit is refused before anything is staged (see check-inbox-precedent.py for the rule
-# and for why it reads the file rather than the command that wrote it). This is
-# not a git hook, so --no-verify does not skip it.
+# and for why it reads the file rather than the command that wrote it). It runs
+# on a merge commit too. This is not a git hook, so --no-verify does not skip it.
 #
-# EXIT: git's own code; 2 on a usage error; 65 if a new inbox section has no
-# usable precedent line; 75 if the lock stayed busy.
+# EXIT: git's own code; 2 on a usage error; 3 if an operation in progress was
+# refused; 4 if a merge commit landed on a HEAD that moved; 65 if a new inbox
+# section has no usable precedent line; 75 if the lock stayed busy.
 
 set -uo pipefail
 
@@ -48,7 +53,7 @@ PATHS=()
 seen_sep=0
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -86,6 +91,24 @@ fi
 
 # --- inside the critical section -------------------------------------------
 
+# An operation in progress changes what a commit is, so it is decided first.
+#   merge        git refuses the pathspec form ("cannot do a partial commit
+#                during a merge"). loop-commit-merge.sh builds the merge commit
+#                from a PRIVATE index — what the merge alone produced, plus the
+#                named paths — so the shared index is never committed and a
+#                file somebody else stages, even mid-commit, cannot ride along.
+#   cherry-pick  git refuses the pathspec form here too, and the helper does
+#                not handle one yet. Refused, exit 3, with the way out.
+#   anything else (a revert, a rebase stop, nothing at all) is the ordinary
+#                path below, unchanged: only the named paths are published.
+if [ -f "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ]; then
+  echo "loop-commit.sh: a cherry-pick is in progress and this wrapper does not finish one." >&2
+  echo "  git refuses a pathspec commit during a cherry-pick, and committing the whole" >&2
+  echo "  index would publish whatever any other process staged here." >&2
+  echo "  Either \`git cherry-pick --abort\`, or ask a human to finish it. Nothing was committed." >&2
+  exit 3
+fi
+
 # The inbox rule, BEFORE staging, so a refusal leaves the index as it found it.
 # The working file is what `git commit -- <paths>` is about to publish. The
 # base is the stop gate's own (its merge base against the trunk), asked of the
@@ -94,14 +117,45 @@ fi
 # again, while the gate refused the stop. HEAD only when the gate has no base.
 # Any non-zero answer refuses, including "the check could not run": a check
 # that fails open is a check that is not there.
-INBOX_BASE=""
+#
+# It runs AFTER the cherry-pick refusal (nothing is committed there, so there
+# is nothing to judge) and BEFORE the merge path, so a merge commit is judged
+# too. A merge commit publishes everything the merge brought in, named or not,
+# so on a merge the inbox is judged whether or not it was named. The gate's
+# base folds MERGE_HEAD in while a merge is in progress (see gate_base), so
+# sections the merged-in side already shares with the trunk are not re-judged:
+# merging the trunk into a branch must not refuse the trunk's own inbox.
+#
+# Only a line that names a commit is taken as the base. The gate may print a
+# status line (its worktree-root notice) before the base, and a status line
+# read as a ref would judge every section as new.
+#
+# With no inbox file there is nothing to judge (the check itself answers 0
+# then), so it is not started: a copy of this wrapper laid down without its
+# sibling scripts, as the merge pin's mutant is, must still reach the merge path.
 if [ -f "$ROOT/inbox/needs-human.md" ]; then
   INBOX_BASE="$(CLAUDE_PROJECT_DIR="$ROOT" bash "$HERE/../hooks/stop_gate.sh" --print-base </dev/null 2>/dev/null || true)"
+  INBOX_BASE="${INBOX_BASE##*$'\n'}"
+  git rev-parse --verify --quiet "${INBOX_BASE:-none}^{commit}" >/dev/null 2>&1 || INBOX_BASE=""
+  INBOX_SCOPE=(-- "${PATHS[@]}")
+  if [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
+    INBOX_SCOPE=()
+  fi
+  python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_SCOPE[@]+"${INBOX_SCOPE[@]}"} || {
+    echo "loop-commit.sh: nothing was staged or committed — fix inbox/needs-human.md and run this again" >&2
+    exit 65
+  }
 fi
-python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" -- "${PATHS[@]}" || {
-  echo "loop-commit.sh: nothing was staged or committed — fix inbox/needs-human.md and run this again" >&2
-  exit 65
-}
+
+if [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
+  bash "$HERE/loop-commit-merge.sh" ${GIT_FLAGS[@]+"${GIT_FLAGS[@]}"} "${MSG_ARGS[@]}" -- "${PATHS[@]}"
+  rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "committed $(git rev-parse --short HEAD):"
+    git show --name-only --format= HEAD | sed 's/^/  /'
+  fi
+  exit "$rc"
+fi
 
 # Stage only what this caller named. Never -A, never '.'.
 git add -- "${PATHS[@]}" || exit $?

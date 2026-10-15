@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — after 0.2.3
+## Unreleased — after 0.2.4
 
 Not in any installed copy yet: Claude Code caches a plugin per version string,
 so this reaches consumers only when the manifest version is bumped.
@@ -32,11 +32,18 @@ so this reaches consumers only when the manifest version is bumped.
   section, or a new question under an old heading, is judged.
   `loop-commit.sh` asks the stop gate for its base (`stop_gate.sh
   --print-base`), so the two always give the same answer for the inbox.
+  The check runs on a merge commit too, ahead of the merge path that 0.2.4
+  added, and leaves that path as it was. While a merge is in progress the
+  gate's base folds `MERGE_HEAD` in (`git merge-base <trunk> HEAD MERGE_HEAD`,
+  the base the gate will use once the merge commit exists), so merging the
+  trunk into a branch does not re-judge the trunk's own inbox sections.
   **Upgrade note:** an open branch that added a section without the line,
   before this rule existed, is new against the trunk. Once you upgrade, the
   stop gate blocks that branch, and `loop-commit.sh` refuses any commit that
   names the inbox, until the line is added. Commits that do not name the
-  inbox still go through. Editing an old open section also needs the line,
+  inbox still go through — except a merge commit, which publishes whatever
+  the merge brought in and so is judged whether or not the inbox was named.
+  Editing an old open section also needs the line,
   or a RESOLVED stamp.
   **Known limit:** a question appended under a section already stamped
   RESOLVED is not judged; a check cannot tell a ruling from a new question.
@@ -49,6 +56,73 @@ so this reaches consumers only when the manifest version is bumped.
   half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
 - `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
   82 cases, and sixteen mutations that each have to turn their own tag red.
+- `tests/pins/inbox-precedent-on-merge.sh` — the check on a merge commit:
+  merging the trunk completes, a new bare section written mid-merge or brought
+  in from a non-trunk branch is refused, and two mutants (the check after the
+  merge path; a gate base blind to `MERGE_HEAD`) each have to turn it red.
+
+## 0.2.4 — 2026-10-04
+
+A merge that stopped on a conflict can be finished.
+
+### Fixed
+
+- **`scripts/loop-commit.sh` finishes a merge.** It always ran
+  `git commit -- <paths>`, and git refuses that form while a merge is in
+  progress: `fatal: cannot do a partial commit during a merge.` A bare
+  `git commit` is refused by `require_commit_lock.py`. Between the two, a merge
+  that stopped on a conflict had no allowed way to complete, and a branch with a
+  one-file conflict stayed stuck. Now, when `MERGE_HEAD` exists, the same call —
+  `loop-commit.sh -m "…" -- <every path you resolved>` — stages those paths and
+  commits the merge, still inside the driver lock.
+- **It does so without committing the shared index.** A merge commit publishes
+  a whole tree, which is what the pathspec form was written to prevent: a file
+  another process staged would ride along. Checking the shared index and then
+  committing it is not enough — for a whole-index commit git drops
+  `index.lock` before the pre-commit hook and reads the index again after it,
+  so a lockless `git add` during the hook lands in the commit (found in review
+  of the first version of this fix). So `scripts/loop-commit-merge.sh` builds
+  the commit in a PRIVATE index: what the merge alone produces
+  (`git merge-tree --write-tree HEAD MERGE_HEAD`, computed from the two commits)
+  plus the named paths from the working tree, then runs a real
+  `GIT_INDEX_FILE=<private> git commit` — so the parents, the project's commit
+  hooks and signing are all git's own. Afterwards only the named paths are
+  brought up to date in the shared index; a foreign staged change stays staged.
+- **A signal cannot make it commit the wrong tree.** git reads the private
+  index again after the pre-commit hook, and the second version of this fix
+  deleted it from an EXIT trap: a SIGTERM to the helper alone (an operator's
+  `pkill -f loop-commit` is enough) produced a merge commit with an EMPTY tree
+  (found in review). Now `git commit` runs as a child the helper waits on; INT,
+  HUP or TERM is passed on to it, and the private index is removed only after
+  it has exited. The outcome is read from the repository: either the merge
+  commit landed — its tree is then checked against the tree that was built
+  (exit 5 if a path appeared or vanished) and the named paths are brought up to
+  date before the helper stops — or nothing was committed and the merge and the
+  shared index are as they were. The signal is honoured, never ignored.
+- Paths are read from git NUL-separated, so a conflicted file with a non-ASCII
+  name (which git C-quotes otherwise) can be finished.
+- **Refused, exit 3, nothing committed, merge still in progress:** a conflicted
+  path that was not named; a named conflicted file still holding conflict
+  markers; a directory or `.` named on a merge (files only — a directory would
+  exempt everything under it); a path that names nothing; a shared-index change
+  outside the named paths (foreign, or from a merge option merge-tree did not
+  replay); an octopus merge; and a git older than 2.38 (no
+  `merge-tree --write-tree`, so no proof, so no commit). A merge run with
+  `-X ours`/`-X theirs` completes once the files the option resolved are named;
+  the refusal lists them.
+- **A cherry-pick in progress is refused with a reason** (exit 3) instead of
+  git's `cannot do a partial commit during a cherry-pick`. The wrapper does not
+  finish one: no equivalent proof is defined for it yet.
+
+### Unchanged, and now pinned
+
+- With no merge in progress the wrapper behaves as before: only the named paths
+  are published and a foreign staged file stays staged. The same holds during a
+  revert and at a rebase stop, where git accepts the pathspec form.
+- `tests/pins/loop-commit-finishes-a-merge.sh`, wired into `tests/selftest.sh`,
+  holds one check per risk, including a foreign `git add` fired from inside a
+  slow pre-commit hook, and proves it can fail: a helper that commits the shared
+  index is caught by both the foreign-file and the mid-commit checks.
 
 ## 0.2.3 — 2026-10-03
 
