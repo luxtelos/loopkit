@@ -84,6 +84,24 @@ MUST_BLOCK = [
      {"enabled": False, "enable": True, "url": "u"}),
     ("verdict nested in an object", "mcp__forge__pull_request_review_write", dict(PR, review={"event": {"type": "APPROVE"}})),
     ("auto_approve: true", "mcp__forge__update_pull_request", dict(PR, autoApprove=True)),
+    # ---- Round 2 (review of 5514e4d): a negate or read word ANYWHERE in the
+    # name exempted it. "Delete the branch" and "remove the source branch" are
+    # standard options on a real merge. A merge/approve/auto-merge word now
+    # refuses unless the WHOLE short name is on the pinned SAFE_NAMES list.
+    ("negate word elsewhere: merge_pull_request_and_delete_branch",
+     "mcp__forge__merge_pull_request_and_delete_branch", dict(PR)),
+    ("negate word elsewhere: merge_and_remove_source_branch (gitlab)",
+     "mcp__gitlab__merge_and_remove_source_branch", {"project_id": "1", "merge_request_iid": 3}),
+    ("negate word elsewhere: merge_and_cancel_review", "mcp__forge__merge_and_cancel_review", dict(PR)),
+    ("negate word elsewhere: approve_pr_and_dismiss_stale_reviews",
+     "mcp__forge__approve_pr_and_dismiss_stale_reviews", dict(PR)),
+    ("negate word elsewhere: enable_auto_merge_and_clear_queue",
+     "mcp__forge__enable_auto_merge_and_clear_queue", dict(PR)),
+    ("leading read word: check_and_merge_pull_request", "mcp__forge__check_and_merge_pull_request", dict(PR)),
+    ("leading read word: get_and_approve_pull_request", "mcp__forge__get_and_approve_pull_request", dict(PR)),
+    ("a PR-keyed bare merge on a non-forge server name", "mcp__tools__merge", {"pull_request_id": 7}),
+    ("a git server's git_merge (merging branches is the loop merging)", "mcp__git__git_merge",
+     {"repo_path": ".", "branch": "fix/x"}),
 ]
 
 MUST_ALLOW = [
@@ -148,6 +166,12 @@ MUST_ALLOW = [
     ("uuid server: list_pull_requests", UUID + "list_pull_requests", {"owner": "o", "repo": "r"}),
     ("an unrelated tool with a status field", "mcp__scheduled-tasks__update_scheduled_task",
      {"id": "t", "status": "completed"}),
+    # ---- Round 2: merge/approve words OUTSIDE the PR / review / merge-request
+    # surface are not merges of code. Refusing them gets the guard switched off.
+    ("spreadsheet merge_cells", "mcp__sheets__merge_cells", {"spreadsheetId": "s", "range": "A1:B2"}),
+    ("pdf merge_pdfs", "mcp__pdf__merge_pdfs", {"files": ["a.pdf", "b.pdf"], "output": "c.pdf"}),
+    ("expenses approve_expense", "mcp__expenses__approve_expense", {"expense_id": "e1"}),
+    ("pinned safe name: cancel_auto_merge", "mcp__github__cancel_auto_merge", dict(PR)),
 ]
 
 
@@ -199,6 +223,48 @@ with tempfile.TemporaryDirectory() as empty_root:
     ]:
         got = run(raw, env).returncode
         check(got == 0, f"rc={got}  {label}")
+
+# ---- Round 2: the readers have limits, and a limit is a REFUSAL on the
+# PR / review surface. 8 levels and a silent stop let `{event: APPROVE}` at
+# depth 10 through, and a 100000-deep payload crashed the parser into an allow.
+
+def nest(leaf, depth: int):
+    for _ in range(depth):
+        leaf = {"x": leaf}
+    return leaf
+
+
+def deep_raw(tool: str, depth: int) -> str:
+    """A payload too deep for json.loads: built as text, never parsed here."""
+    return ('{"tool_name": "%s", "tool_input": {"owner": "o", "pullNumber": 1, "x": ' % tool
+            + "[" * depth + "]" * depth + "}}")
+
+
+with tempfile.TemporaryDirectory() as lim_root:
+    env = dict(base_env, CLAUDE_PROJECT_DIR=lim_root)
+    print("LIMITS (risky tools refuse past a limit; ordinary tools are not walked):")
+    for label, raw, want in [
+        ("review tool: APPROVE at depth 10 is read and refused",
+         json.dumps({"tool_name": "mcp__github__pull_request_review_write",
+                     "tool_input": dict(PR, method="create", review=nest({"event": "APPROVE"}, 10))}), 2),
+        ("review tool: past the depth limit, harmless leaf -> refused as unreadable",
+         json.dumps({"tool_name": "mcp__github__pull_request_review_write",
+                     "tool_input": dict(PR, method="create", review=nest({"body": "ok"}, 80))}), 2),
+        ("review tool: past the size limit -> refused as unreadable",
+         json.dumps({"tool_name": "mcp__github__pull_request_review_write",
+                     "tool_input": dict(PR, method="create", comments=[{"body": "x"}] * 30000)}), 2),
+        ("merge-shaped tool: 100000-deep payload the parser cannot read -> refused",
+         deep_raw("mcp__forge__update_pull_request", 100000), 2),
+        ("review tool: 100000-deep payload -> refused",
+         deep_raw("mcp__github__pull_request_review_write", 100000), 2),
+        ("ordinary tool: 100000-deep payload -> allowed (documented: not this hook's surface)",
+         deep_raw("mcp__notion__create_page", 100000), 0),
+        ("ordinary tool: past the depth limit -> allowed (its parameters are never walked)",
+         json.dumps({"tool_name": "mcp__notion__create_page", "tool_input": {"blocks": nest({"t": "x"}, 80)}}), 0),
+    ]:
+        p = run(raw, env)
+        ok = p.returncode == want and (want == 0 or "BLOCKED [mcp-" in p.stderr)
+        check(ok, f"rc={p.returncode} want={want}  {label}")
 
 # Switchable off by rule name, the same reviewed way as block_dangerous.
 with tempfile.TemporaryDirectory() as cfg_root:
@@ -259,6 +325,36 @@ with tempfile.TemporaryDirectory() as fault_root:
         # this section proves nothing.
         ok = p.returncode == want and (want == 0 or "safety hook failed" in p.stderr)
         check(ok, f"rc={p.returncode} want={want}  {label}")
+
+# The allowlist of merge/approve-worded names that may run is itself pinned:
+# widening it is a reviewed change to the hook AND to this list.
+EXPECTED_SAFE_NAMES = {
+    "disable_auto_merge": "always",
+    "disable_pull_request_auto_merge": "always",
+    "cancel_auto_merge": "always",
+    "get_auto_merge_status": "always",
+    "set_auto_merge": "off",
+}
+print("PINNED ALLOWLIST (SAFE_NAMES must equal this list exactly):")
+try:
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("hook_under_test", HOOK)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    got_safe = dict(getattr(_mod, "SAFE_NAMES", {}))
+except Exception as exc:  # an unloadable hook is a failure, not a skip
+    got_safe = {"<load failed>": type(exc).__name__}
+check(got_safe == EXPECTED_SAFE_NAMES, f"SAFE_NAMES = {sorted(got_safe.items())}")
+with tempfile.TemporaryDirectory() as al_root:
+    env = dict(base_env, CLAUDE_PROJECT_DIR=al_root)
+    for label, tool, ti, want in [
+        ("set_auto_merge OFF runs (its 'off' condition)", "mcp__ccd_pr__set_auto_merge", {"enabled": False, "url": "u"}, 0),
+        ("set_auto_merge ON is refused (same name, condition fails)", "mcp__ccd_pr__set_auto_merge",
+         {"enabled": True, "url": "u"}, 2),
+        ("a safe name with a suffix is not the safe name", "mcp__github__disable_auto_merge_then_merge", dict(PR), 2),
+    ]:
+        got = rc(tool, ti, env)
+        check(got == want, f"rc={got} want={want}  {label}")
 
 print(f"\n{'ALL PASS' if fails == 0 else f'{fails} FAILED'}")
 sys.exit(1 if fails else 0)

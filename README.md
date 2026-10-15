@@ -105,7 +105,7 @@ plugins/loopkit/
   .claude-plugin/plugin.json
   hooks/hooks.json                 the wiring (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop)
   hooks/block_dangerous.py         destructive floor + merge/approve/stage-all refusal, on Bash and on the command an MCP tool would run; project extras and disables
-  hooks/block_mcp_merge_approve.py MCP tool names and parameters: merge-, auto-merge- and approve-shaped calls refused unless clearly a read or a negation
+  hooks/block_mcp_merge_approve.py MCP tool names and parameters: merge-, auto-merge- and approve-shaped calls on the code-review surface, refused unless the exact name is pinned safe
   hooks/protect_governance.py      constitution.md and specs/ by ABSOLUTE path (worktree-proof); GOVERNANCE_EDIT_OK=1 is the door
   hooks/require_contracts.py       read FILES/TOOLS/COMMANDS before any work tool; passive until init
   hooks/loop_doctrine.py           injects the tick discipline when a prompt looks like a tick; never blocks

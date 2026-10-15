@@ -74,6 +74,11 @@ MUST_BLOCK = [
      {"command": "git push --force origin main"}, "git-force-push"),
     ("a secret literal through a terminal tool", "mcp__terminal__run_in_terminal",
      {"command": f"GH_TOKEN={_GHO} gh pr list"}, "secret-on-command-line"),
+    # Round 2: the old reader stopped at depth 8 and 500 strings, silently.
+    ("non-shell tool, command key at depth 10", "mcp__forge__job_create",
+     {"x": {"x": {"x": {"x": {"x": {"x": {"x": {"x": {"x": {"x": {"command": MERGE}}}}}}}}}}}, "gh-pr-merge"),
+    ("shell tool, 600 pad strings before the command", "mcp__terminal__run_in_terminal",
+     {"pads": ["x"] * 600, "command": MERGE}, "gh-pr-merge"),
 ]
 
 MUST_ALLOW = [
@@ -90,6 +95,12 @@ MUST_ALLOW = [
     ("non-shell tool, a `title` that reads like a command", "mcp__github__create_pull_request",
      {"owner": "o", "repo": "r", "title": "docs: why " + MERGE + " is refused", "head": "a", "base": "b"}),
     ("Bash still reads `command` as before", "Bash", {"command": "ls -la"}),
+    # Round 2: `execute` alone no longer makes a tool shell-capable. A workflow
+    # runner's chat input is prose, not a command line.
+    ("workflow runner chat input with shell-looking prose", "mcp__n8n__execute_workflow",
+     {"workflowId": "w1", "inputs": {"type": "chat", "chatInput": "please rm -rf build and " + MERGE}}),
+    ("browser execute_javascript", "mcp__Control_Chrome__execute_javascript",
+     {"tab_id": 1, "code": "console.log('rm -rf is a shell thing')"}),
 ]
 
 
@@ -129,6 +140,29 @@ with tempfile.TemporaryDirectory() as root:
     for label, tool, ti in MUST_ALLOW:
         p = run({"tool_name": tool, "tool_input": ti}, env)
         check(p.returncode == 0, f"rc={p.returncode}  {label}" + (f"  [{p.stderr.splitlines()[0]}]" if p.stderr else ""))
+
+    def _nest(leaf, depth):
+        for _ in range(depth):
+            leaf = {"x": leaf}
+        return leaf
+
+    def _deep_raw(tool, depth):
+        return '{"tool_name": "%s", "tool_input": {"x": ' % tool + "[" * depth + "]" * depth + "}}"
+
+    print("LIMITS (a shell-capable tool past a limit is REFUSED; an ordinary tool is allowed, documented):")
+    for label, raw, want in [
+        ("shell tool past the depth limit", json.dumps({"tool_name": "mcp__terminal__run_in_terminal",
+                                                         "tool_input": {"command": "npm test", "x": _nest("y", 80)}}), 2),
+        ("shell tool past the string limit", json.dumps({"tool_name": "mcp__terminal__run_in_terminal",
+                                                          "tool_input": {"command": "npm test", "pads": ["x"] * 6000}}), 2),
+        ("shell tool: 100000-deep payload the parser cannot read", _deep_raw("mcp__terminal__run_in_terminal", 100000), 2),
+        ("ordinary tool past the depth limit (allowed, documented)",
+         json.dumps({"tool_name": "mcp__notion__create_page", "tool_input": {"blocks": _nest({"t": "x"}, 80)}}), 0),
+        ("ordinary tool: 100000-deep payload (allowed, documented)", _deep_raw("mcp__notion__create_page", 100000), 0),
+    ]:
+        p = subprocess.run([sys.executable, HOOK], input=raw, capture_output=True, text=True, env=env)
+        ok = p.returncode == want and (want == 0 or "BLOCKED [" in p.stderr)
+        check(ok, f"rc={p.returncode} want={want}  {label}")
 
     print("JUNK INPUT on an MCP shell tool never crashes the hook into a block (rc must be 0):")
     for label, raw in [
