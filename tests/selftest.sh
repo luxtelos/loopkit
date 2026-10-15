@@ -266,12 +266,23 @@ printf 'tests/c.test.ts :: brand new\n' > "$T/cur.txt"
 expect_rc 1 "regressions: a NEW failure fails" bash "$P/scripts/test-regressions.sh" --from-list "$T/cur.txt"
 
 # stop gate
-expect_rc 0 "stop gate short-circuits with no code change" bash "$P/hooks/stop_gate.sh"
+# Every nested gate run below is a Stop in the scratch repo, so it runs FROM
+# the scratch repo. Since #62 the gate gates the SESSION's tree, read from the
+# Stop payload's cwd or else the hook's own cwd, and refuses (SKIP, exit 0) when
+# CLAUDE_PROJECT_DIR names a different repo. Claude Code runs a Stop hook in the
+# session's cwd; a nested call made from wherever this suite was launched told
+# the gate "the session is in the loopkit checkout, the project is $T", and the
+# gate rightly skipped, so every case expecting a FAIL saw a SKIP (9 of them on
+# 77203a7). gate_in_T states the session's cwd the way the hook runner does.
+# It is a fixture, not a bypass: no LOOP_FORCE_GATE, and the gate's own skip is
+# still pinned by tests/pins/stop-gate-worktree-root.sh.
+gate_in_T() { ( cd "$T" && bash "$P/hooks/stop_gate.sh" "$@" ); }
+expect_rc 0 "stop gate short-circuits with no code change" gate_in_T
 echo "x" > "$T/app.ts"
 export LOOP_TEST_CMD="true" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="true"
-expect_rc 0 "stop gate passes with green commands" bash "$P/hooks/stop_gate.sh"
-LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" expect_rc 1 "stop gate fails on red lint" bash "$P/hooks/stop_gate.sh"
-LOOP_TEST_CMD="false" expect_rc 1 "stop gate fails on red tests (baseline present, regressions script used)" env LOOP_TEST_JSON_CMD="false" bash "$P/hooks/stop_gate.sh"
+expect_rc 0 "stop gate passes with green commands" gate_in_T
+LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" expect_rc 1 "stop gate fails on red lint" gate_in_T
+LOOP_TEST_CMD="false" LOOP_TEST_JSON_CMD="false" expect_rc 1 "stop gate fails on red tests (baseline present, regressions script used)" gate_in_T
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD
 
 # citations
@@ -798,7 +809,7 @@ echo "== stop gate: the eighth block is an override, so the seventh says so"
 export LOOP_TEST_CMD="false" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="" LOOP_TEST_JSON_CMD="false"
 SG='{"session_id":"stopblocks-selftest-'$$'","hook_event_name":"Stop"}'
 last=""
-for i in 1 2 3 4 5 6 7; do last="$(printf '%s' "$SG" | bash "$P/hooks/stop_gate.sh" 2>&1 || true)"; done
+for i in 1 2 3 4 5 6 7; do last="$(printf '%s' "$SG" | gate_in_T 2>&1 || true)"; done
 grep -q 'OVERRIDE IMMINENT: this is consecutive block 7' <<<"$last" && ok "seventh consecutive block warns that the eighth is an override" || fail "override warning: $last"
 grep -q '"event": "gate_override_imminent"' "$T/state/ticks.jsonl" && ok "override-imminent recorded in the ticks ledger" || fail "override event missing"
 export LOOP_TEST_CMD="true" LOOP_TEST_JSON_CMD="true"
@@ -807,10 +818,10 @@ printf 'tests/a.test.ts :: adds\n' > "$T/state/known-test-failures.txt"
 # except the placeholder: a `\"`-laden string built inside "$( … )" on bash
 # 3.2 arrived with a stray `}` and looked like a substitution bug (it was not).
 printf '#!/usr/bin/env bash\nprintf "{\\"testResults\\":[]}" > "$1"\n' > "$T/bin/fakereport"; chmod +x "$T/bin/fakereport"
-out="$(printf '%s' "$SG" | LOOP_TEST_JSON_CMD="$T/bin/fakereport {report}" bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+out="$(printf '%s' "$SG" | LOOP_TEST_JSON_CMD="$T/bin/fakereport {report}" gate_in_T 2>&1 || true)"
 grep -q 'PASS: all gates passed' <<<"$out" && ok "a PASS resets the counter" || fail "reset pass: $out"
 grep -q 'Running the suite once' <<<"$out" && ! grep -qE 'test-report\.json\.[A-Za-z0-9]+\}' <<<"$out" && ok "the {report} placeholder substitutes with no stray brace" || fail "placeholder: $out"
-last="$(printf '%s' "$SG" | LOOP_TEST_CMD=false LOOP_TEST_JSON_CMD=false bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+last="$(printf '%s' "$SG" | LOOP_TEST_CMD=false LOOP_TEST_JSON_CMD=false gate_in_T 2>&1 || true)"
 grep -q 'consecutive block 1)' "$T/state/progress.md" && ok "the count restarted at 1 after the PASS" || fail "counter did not reset: $(tail -2 "$T/state/progress.md")"
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD LOOP_TEST_JSON_CMD
 [ -f "$REPO/docs/research/watchlist.md" ] && grep -q 'ad-free' "$REPO/docs/research/watchlist.md" && ok "research watchlist states what is published" || fail "watchlist"

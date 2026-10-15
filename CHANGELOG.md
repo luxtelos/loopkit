@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+Tests only — no version bump; nothing under `plugins/loopkit/` changes.
+
+### Fixed
+
+- **`tests/selftest.sh` is green again after #62.** #62 made the stop gate
+  gate the session's tree (the Stop payload's `cwd`, else the hook's own cwd)
+  and SKIP, exit 0, when `CLAUDE_PROJECT_DIR` names a different repo. The
+  suite's nested stop-gate cases set `CLAUDE_PROJECT_DIR` to a scratch repo but
+  ran the gate from the suite's launch directory, so the gate rightly skipped:
+  9 failures on `77203a7`, and two "expects pass" cases that passed only
+  because a SKIP also exits 0. Every nested call now runs from the scratch
+  repo, as Claude Code runs a Stop hook from the session's cwd. The gate and
+  its pin `tests/pins/stop-gate-worktree-root.sh` are unchanged in behaviour.
+- **A downstream project name is gone from that pin's comment.** The suite's
+  project-token guard caught it; the case is described generically.
+
+### Note
+
+- #62 changed `plugins/loopkit/hooks/stop_gate.sh` without a version bump, so
+  its gate change reaches consumers only with the next bump (0.2.5).
+
 ## 0.2.4 — 2026-10-04
 
 A merge that stopped on a conflict can be finished.
