@@ -85,7 +85,7 @@ prove() {
 C=scripts/check-inbox-precedent.py
 
 prove "MUT-COMMIT: loop-commit.sh stops asking" scripts/loop-commit.sh \
-  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" -- "${PATHS[@]}" || {' \
+  'python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_SCOPE[@]+"${INBOX_SCOPE[@]}"} || {' \
   'true || {' \
   '[commit]' '[gate]'
 
