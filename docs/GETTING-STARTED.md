@@ -57,7 +57,7 @@ not initialise a project with a plugin that cannot pass its own tests.
 
 The suite also runs `check-citations.py` against **this checkout** — not
 against a fixture — so a `file:line` that has rotted in these documents turns
-the run red before you push. The invocation is at `tests/selftest.sh:332`, and
+the run red before you push. The invocation is at `tests/selftest.sh:335`, and
 CI reaches it by running the whole suite at
 `.github/workflows/selftest.yml:20`. Both lines are pinned in
 `.loopkit/citations.json`: move either one and the gate says so, and prints
@@ -283,6 +283,7 @@ to its state machine. The fixed twin exits 0.
 | `FAIL: N NEW test failure(s)` | a regression | fix it, or if it is pre-existing and you can prove it, add it to the baseline in the same PR |
 | `VERDICT: ESCALATE` from watch | 24 quiet ticks | chase the human or stop the loop |
 | a row at `blocked` | waiting on a ruling in `inbox/needs-human.md` | answer the section; the agent moves the row |
+| `REFUSED: inbox/needs-human.md — … 'Precedent searched:'` | a new or edited inbox section does not say what was searched before asking you | run the search (memory, code, ADRs/specs), then add `Precedent searched: <queries run> → <result>` to the section on one plain line, arrow `→`; if the search finds the ruling, drop the section |
 
 ## Uninstall
 

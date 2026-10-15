@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased — after 0.2.4
+
+Not in any installed copy yet: Claude Code caches a plugin per version string,
+so this reaches consumers only when the manifest version is bumped.
+
+### Added
+
+- **A new inbox section says what was searched before a human was asked.**
+  Every NEW open `## ` section of `inbox/needs-human.md` carries
+  `Precedent searched: <queries run> → <result>`. The `decision` route used to
+  ask for the whole context and the cost of both options and never asked
+  whether anybody had looked, so a question whose answer was already a ruling
+  encoded in code went to the human anyway.
+  `scripts/check-inbox-precedent.py` reads the FILE, not the command that wrote
+  it, and runs where every write path converges: `loop-commit.sh` refuses the
+  commit before staging (exit 65; not a git hook, so `--no-verify` does not
+  skip it), and `stop_gate.sh` refuses the stop — before its no-code
+  short-circuit, and against its own merge base, so a section that arrived by
+  a bare `git commit` is still judged.
+  The shape is exact: the label `Precedent searched:` at the start of one
+  plain line, the arrow `→` (U+2192; `->`, `-->`, `=>` are refused by name),
+  and at least one letter or digit, in any script, on each side (a no-break
+  or zero-width space, or `!!!`, is not text). A line inside a fenced or indented code block or an HTML
+  comment does not count, and neither does a label with its result on the next
+  line. `→ no ruling found` is a real result; an empty side, the template's
+  placeholders, or `none → none` is refused.
+  A section is old by IDENTITY: heading and body unchanged from the base. An
+  old section left as it was is never judged, and neither is a closed heading
+  (`RESOLVED <date> — …`), so no existing inbox needs rewriting. An edited old
+  section, or a new question under an old heading, is judged.
+  `loop-commit.sh` asks the stop gate for its base (`stop_gate.sh
+  --print-base`), so the two always give the same answer for the inbox.
+  The check runs on a merge commit too, ahead of the merge path that 0.2.4
+  added, and leaves that path as it was. It judges what the merge commit
+  publishes: a named inbox is the working file, an unnamed one is the merged
+  blob (`git merge-tree --write-tree HEAD MERGE_HEAD`), the same two sources
+  `loop-commit-merge.sh` commits from. While a merge is in progress the
+  gate's base folds `MERGE_HEAD` in (`git merge-base <trunk> HEAD MERGE_HEAD`,
+  the base the gate will use once the merge commit exists), so merging the
+  trunk into a branch does not re-judge the trunk's own inbox sections.
+  **Upgrade note:** an open branch that added a section without the line,
+  before this rule existed, is new against the trunk. Once you upgrade, the
+  stop gate blocks that branch, and `loop-commit.sh` refuses any commit that
+  names the inbox, until the line is added. Commits that do not name the
+  inbox still go through — except a merge commit, which publishes whatever
+  the merge brought in and so is judged whether or not the inbox was named
+  (unnamed, it is judged as merged; a fix in the working file alone is not
+  committed, so name the inbox to commit it).
+  Editing an old open section also needs the line,
+  or a RESOLVED stamp.
+  **Known limit:** a question appended under a section already stamped
+  RESOLVED is not judged; a check cannot tell a ruling from a new question.
+  Put a new question in a new section.
+- `skills/loop-assess` — the `decision` route now searches first (memory
+  adapter, code, `docs/adr/` and `specs/`) and records the line; a hit reroutes
+  the finding to `knowledge` and nobody is asked.
+- `templates/needs-human.md` lists the line as the fifth thing a section
+  carries; `templates/brief.md` gains an "Owner questions" section. The brief
+  half is a rule an agent keeps — nothing reads a brief, so nothing enforces it.
+- `tests/pins/inbox-precedent-gate.py` and `inbox-precedent-prove-red.sh` —
+  82 cases, and sixteen mutations that each have to turn their own tag red.
+- `tests/pins/inbox-precedent-on-merge.sh` — the check on a merge commit:
+  merging the trunk completes, a new bare section written mid-merge or brought
+  in from a non-trunk branch is refused, a fix made only in the working file
+  of an unnamed inbox does not let the merged bare section through, a
+  working-only bare section the merge does not commit is not refused, and
+  three mutants (the check after the merge path; a gate base blind to
+  `MERGE_HEAD`; the merge judging the working file) each have to turn it red.
+- `tests/pins/inbox-precedent-prove-red.sh` exits 1, naming the mutation,
+  when any mutation does not apply or is not caught.
+
 ## 0.2.4 — 2026-10-04
 
 A merge that stopped on a conflict can be finished.
