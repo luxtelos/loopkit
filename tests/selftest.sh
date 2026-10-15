@@ -1134,6 +1134,16 @@ bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
 [ "$bsr_n" = 4 ] && [ "$bsr_not" = 0 ] && ok "all four halves of the branch-shape fix are provably catchable" \
   || fail "branch-shape mutations: $bsr_n/4 red, $bsr_not not red"
 
+echo "== stop gate: session worktree wins over CLAUDE_PROJECT_DIR"
+# A Stop hook that always cds into CLAUDE_PROJECT_DIR gated the main checkout's
+# stale baseline while the session worked in a linked worktree — hundreds of
+# consecutive false FAIL ticks. Prefer the session worktree; SKIP when the
+# project dir is a different repo entirely.
+wt_out="$(bash "$REPO/tests/pins/stop-gate-worktree-root.sh" "$REPO" 2>&1)"; wt_rc=$?
+printf '%s\n' "$wt_out" | grep -E '^  FAIL' || true
+[ "$wt_rc" = 0 ] && ok "session worktree is gated; unrelated CLAUDE_PROJECT_DIR skips" \
+  || fail "worktree root: $(printf '%s' "$wt_out" | tail -1)"
+
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
 # tools/remote-gate.sh exited 0 on a suite printing "FAILURE: 3 checks failed".
