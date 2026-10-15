@@ -1,8 +1,85 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 — 2026-10-04
+
+A merge that stopped on a conflict can be finished.
+
+### Fixed
+
+- **`scripts/loop-commit.sh` finishes a merge.** It always ran
+  `git commit -- <paths>`, and git refuses that form while a merge is in
+  progress: `fatal: cannot do a partial commit during a merge.` A bare
+  `git commit` is refused by `require_commit_lock.py`. Between the two, a merge
+  that stopped on a conflict had no allowed way to complete, and a branch with a
+  one-file conflict stayed stuck. Now, when `MERGE_HEAD` exists, the same call —
+  `loop-commit.sh -m "…" -- <every path you resolved>` — stages those paths and
+  commits the merge, still inside the driver lock.
+- **It does so without committing the shared index.** A merge commit publishes
+  a whole tree, which is what the pathspec form was written to prevent: a file
+  another process staged would ride along. Checking the shared index and then
+  committing it is not enough — for a whole-index commit git drops
+  `index.lock` before the pre-commit hook and reads the index again after it,
+  so a lockless `git add` during the hook lands in the commit (found in review
+  of the first version of this fix). So `scripts/loop-commit-merge.sh` builds
+  the commit in a PRIVATE index: what the merge alone produces
+  (`git merge-tree --write-tree HEAD MERGE_HEAD`, computed from the two commits)
+  plus the named paths from the working tree, then runs a real
+  `GIT_INDEX_FILE=<private> git commit` — so the parents, the project's commit
+  hooks and signing are all git's own. Afterwards only the named paths are
+  brought up to date in the shared index; a foreign staged change stays staged.
+- **A signal cannot make it commit the wrong tree.** git reads the private
+  index again after the pre-commit hook, and the second version of this fix
+  deleted it from an EXIT trap: a SIGTERM to the helper alone (an operator's
+  `pkill -f loop-commit` is enough) produced a merge commit with an EMPTY tree
+  (found in review). Now `git commit` runs as a child the helper waits on; INT,
+  HUP or TERM is passed on to it, and the private index is removed only after
+  it has exited. The outcome is read from the repository: either the merge
+  commit landed — its tree is then checked against the tree that was built
+  (exit 5 if a path appeared or vanished) and the named paths are brought up to
+  date before the helper stops — or nothing was committed and the merge and the
+  shared index are as they were. The signal is honoured, never ignored.
+- Paths are read from git NUL-separated, so a conflicted file with a non-ASCII
+  name (which git C-quotes otherwise) can be finished.
+- **Refused, exit 3, nothing committed, merge still in progress:** a conflicted
+  path that was not named; a named conflicted file still holding conflict
+  markers; a directory or `.` named on a merge (files only — a directory would
+  exempt everything under it); a path that names nothing; a shared-index change
+  outside the named paths (foreign, or from a merge option merge-tree did not
+  replay); an octopus merge; and a git older than 2.38 (no
+  `merge-tree --write-tree`, so no proof, so no commit). A merge run with
+  `-X ours`/`-X theirs` completes once the files the option resolved are named;
+  the refusal lists them.
+- **A cherry-pick in progress is refused with a reason** (exit 3) instead of
+  git's `cannot do a partial commit during a cherry-pick`. The wrapper does not
+  finish one: no equivalent proof is defined for it yet.
+
+### Unchanged, and now pinned
+
+- With no merge in progress the wrapper behaves as before: only the named paths
+  are published and a foreign staged file stays staged. The same holds during a
+  revert and at a rebase stop, where git accepts the pathspec form.
+- `tests/pins/loop-commit-finishes-a-merge.sh`, wired into `tests/selftest.sh`,
+  holds one check per risk, including a foreign `git add` fired from inside a
+  slow pre-commit hook, and proves it can fail: a helper that commits the shared
+  index is caught by both the foreign-file and the mid-commit checks.
+
+## 0.2.3 — 2026-10-03
 
 The guard rail that was only a sentence.
+
+This version exists because #50, #51 and #52 merged while both manifests still
+said 0.2.2. Claude Code caches an installed plugin per version string, so an
+unbumped manifest reaches nobody: every consumer kept the 0.2.2 copy. Merged in
+this version:
+
+- #50 — `git-add-force` is case-sensitive, so `-F` no longer reads as `-f`.
+- #51 — prose in a heredoc body is not a commit for `require_commit_lock`.
+- #52 — push rules read the shell, not a regex (`loopkit_core/push_guard.py`).
+- #56 — `require_recall` ignores comments, by the file's own comment syntax
+  (below), and the version bump itself.
+
+Everything else in this section had also merged after the 0.2.2 tag and was
+never released until now.
 
 ### Added
 
@@ -55,6 +132,38 @@ The guard rail that was only a sentence.
 
 ### Fixed
 
+- **A comment that names an invariant no longer blocks.** `require_recall.py`
+  matched its content rule against the whole body, so `# rows are keyed by the
+  primary key of users` in a `.py` file, or a `//` line in a `.ts` file, was
+  refused while changing no schema. The body is now read with the comment
+  syntax of the file's language, picked from its extension (`comment_style`),
+  and comment text is dropped before matching. Strings are always kept (real
+  DDL lives in strings), `/*` opens a block only where it starts a word (in
+  shell and YAML it is a glob), an unclosed block gives its text back, and a
+  file type not in the table is not stripped at all. Each `edits[]` fragment is
+  read on its own. Ported from a downstream fix that passed two rounds of
+  independent review, with that review's three follow-ups:
+  `dockerfile` matches only `dockerfile`, `dockerfile.<x>` with no code
+  extension, or `<x>.dockerfile` (a prefix match read `dockerfile-render.ts`
+  with `#` comments); `.fizz` uses Python comments; and YAML and JSX are each
+  read twice — once as before, once opening a quote only where a YAML scalar
+  or shell word can start (so `it's` is not a quote) or a backtick only where
+  a JS expression can start (so a backtick in JSX text is not a template) —
+  and the gate blocks if either reading shows an invariant. The second reading
+  can only add blocks. Pinned in `hooks/test_require_recall.py` (126 cases,
+  including the reviewer's round-2 attack corpus); the four accepted holes —
+  an Edit fragment that starts inside a string — are reported, not asserted.
+- **Prose in a heredoc is not a commit.** `require_commit_lock.py` refused a
+  `gh issue create` whose body, written with `cat > f <<'EOF'`, said
+  "`git add x && git commit -F m` passes there": the `&&` inside the prose read
+  as a command position. A heredoc body is now blanked before matching only
+  when a data sink opens it (`cat`, `tee`, `gh`, `paste`) and nothing after
+  the operator is piped. Every other body stays visible — `bash`, `sudo bash`,
+  `env sh`, `docker exec -i c sh`, `cat <<EOF | sh` — and a `<<` inside quotes,
+  in a comment, escaped, or in `$(( ))` opens no heredoc at all. The first
+  version used a blocklist and read any `<<WORD` as a heredoc; independent
+  review found twelve commit shapes it let through that main blocked. Cases
+  pinned in `test_require_commit_lock.py`.
 - **The refusal message printed the command back.** `block_dangerous.py` ended
   every block with `dangerous command pattern detected: <the whole command>`. The
   commerce profile's `no-live-keys` pattern fires on `sk_live_` literals, so
@@ -66,12 +175,37 @@ The guard rail that was only a sentence.
 - **The leading `\b` made a glued token invisible.** `\b` between two word
   characters does not exist, so `my_gho_<body>` matched nothing. A token glued to
   a preceding word character is a leak, not a false positive; the anchor is gone.
+- **Force push and remote delete are read the way the shell reads them.**
+  `git-force-push` and `git-push-delete` were regexes with `[^\n]*`, so a plain
+  push chained into `gh pr create` whose title said "-F ... -f" was refused.
+  Stopping the regex at `;`, `&`, `|` was tried first and failed independent
+  review: it let nine real force pushes and deletes through (a quoted `"-f"`,
+  a `;` inside a quoted ref, `2>&1 -f`, `$(a; b) -f`, …), because a regex
+  cannot read shell quoting. New `loopkit_core/push_guard.py`, ported from the
+  copy a downstream project landed after three rounds of independent review: it splits
+  the command at REAL separators only (quotes, `$( )`, backticks, heredocs,
+  redirects honoured), tokenises each piece with `shlex`, and reads every
+  `git … push` argv. It also catches what the regexes never did: `-uf`, `+main`,
+  `-d`, `git -C dir push -f`, `--mirror`, `--prune`, abbreviated `--forc`/`--del`,
+  `bash -c`/`eval`/heredocs that run a push. It FAILS CLOSED — unreadable
+  quoting, a `$F` before the remote, or a crash on a command that mentions git
+  and push is blocked. Rule names unchanged; each is still switchable off in
+  `.loopkit/block-disabled.txt` on its own, and a short-flag cluster is read
+  whole, so with `git-force-push` off, `-fd` / `-ufd` / `-df` still trip
+  `git-push-delete` (review found them deleting a branch when the cluster was
+  read only to its first letter). Pinned in `test_block_dangerous.py`.
 - **Encodings that occur in ordinary config are now decoded before scanning**:
   base64, percent-encoding, `\uXXXX` inside a JSON string, and a shell line
   continuation (which is not an evasion — it is what the shell will actually
   run). Reversed text is deliberately NOT decoded, and the module says so: it is
   not a shape anybody produces by accident, and it would widen the
   false-positive surface for no real case.
+- **`-F` no longer reads as `-f`.** Every pattern is matched case-insensitively,
+  so `git-add-force` also caught an uppercase `-F` in a `git add` segment, and
+  commit-message-from-file commands were refused. Agents dodged it with
+  `--file=`. The flag part of the rule is now a case-sensitive `(?-i:...)`
+  group: lowercase `-f` (also inside `-vf`, `-Af`) or `--force` only.
+  `git-add-all` is unchanged. Control cases pinned in `test_block_dangerous.py`.
 
 ### Changed
 
