@@ -140,7 +140,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock; do
+for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock test_require_recall; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
@@ -1180,6 +1180,16 @@ bsr_not="$(printf '%s' "$bsr_out" | grep -c 'NOT RED' || true)"
 [ "$bsr_n" = 4 ] && [ "$bsr_not" = 0 ] && ok "all four halves of the branch-shape fix are provably catchable" \
   || fail "branch-shape mutations: $bsr_n/4 red, $bsr_not not red"
 
+echo "== stop gate: session worktree wins over CLAUDE_PROJECT_DIR"
+# A Stop hook that always cds into CLAUDE_PROJECT_DIR gated the main checkout's
+# stale baseline while the session worked in a linked worktree — hundreds of
+# consecutive false FAIL ticks. Prefer the session worktree; SKIP when the
+# project dir is a different repo entirely.
+wt_out="$(bash "$REPO/tests/pins/stop-gate-worktree-root.sh" "$REPO" 2>&1)"; wt_rc=$?
+printf '%s\n' "$wt_out" | grep -E '^  FAIL' || true
+[ "$wt_rc" = 0 ] && ok "session worktree is gated; unrelated CLAUDE_PROJECT_DIR skips" \
+  || fail "worktree root: $(printf '%s' "$wt_out" | tail -1)"
+
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
 # tools/remote-gate.sh exited 0 on a suite printing "FAILURE: 3 checks failed".
@@ -1199,6 +1209,21 @@ rgt_out="$(bash "$REPO/tests/pins/remote-gate-sends-working-tree.sh" "$REPO" 2>&
 printf '%s\n' "$rgt_out" | grep -E '^  FAIL' || true
 [ "$rgt_rc" = 0 ] && ok "the remote gate sends the working tree, says so, and keeps bare-host mode" \
   || fail "remote gate tree: $(printf '%s' "$rgt_out" | tail -1)"
+
+echo "== loop-commit.sh finishes a merge, and only a merge it can vouch for"
+# `git commit -- <paths>` is refused by git while a merge is in progress, and a
+# bare commit is refused by require_commit_lock.py, so a merge that stopped on a
+# conflict had no allowed way to finish. A merge commit publishes a whole tree —
+# the one thing the pathspec form exists to prevent — so the pin holds a check
+# per way that can go wrong: a foreign staged file, a foreign `git add` DURING
+# the commit (from a slow pre-commit hook), a signal to the helper mid-commit
+# (once produced an empty-tree merge), an unresolved path, conflict markers, a
+# directory named, non-ASCII names, the ordinary no-merge path, and the other
+# in-progress states.
+lcm_out="$(bash "$REPO/tests/pins/loop-commit-finishes-a-merge.sh" "$REPO" 2>&1)"; lcm_rc=$?
+printf '%s\n' "$lcm_out" | grep -E '^  FAIL' || true
+[ "$lcm_rc" = 0 ] && ok "a stopped merge completes through the wrapper; a foreign staged file is refused, not swept in" \
+  || fail "loop-commit mid-merge: $(printf '%s' "$lcm_out" | tail -1)"
 
 # The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
 # all four unreviewed" and handed the owner all four in the same breath. The
@@ -1241,6 +1266,17 @@ qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
 printf '%s\n' "$qz" | grep '^  FAIL' || true
 [ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
   || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
+
+echo "== criterion 5's purity check survives being attacked"
+# The check has been defeated twice, both times by a rule about NAMES applied
+# to the wrong namespace. This pin holds the attacks, not just the answer: it
+# asserts the round-2 check IS still fooled by them, so a harness that stopped
+# reproducing the defect fails loudly instead of printing a clean sheet.
+c5="$(python3 "$REPO/tests/pins/criterion5-purity-attacks.py" 2>&1)"; c5_rc=$?
+printf '%s\n' "$c5" | grep '^  FAIL' || true
+printf '%s\n' "$c5" | grep '^  gap ' || true
+[ "$c5_rc" = 0 ] && ok "the sealed evaluator refuses every attack, and its known gaps are named" \
+  || fail "criterion 5 purity: $(printf '%s' "$c5" | tail -1)"
 
 echo "== the secret scanner knows every shape it claims to know"
 ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?

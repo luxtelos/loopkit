@@ -27,7 +27,13 @@
 # Every path is required to be named. There is deliberately no "commit
 # everything" mode: that is the `git add -A` habit the constitution refuses.
 #
-# EXIT: git's own code; 2 on a usage error; 75 if the lock stayed busy.
+# A MERGE IN PROGRESS is finished by the same call: name every path you
+# resolved (files, not directories). See loop-commit-merge.sh for how the
+# merge commit is built without committing the shared index, and what it checks.
+#
+# EXIT: git's own code; 2 on a usage error; 3 if an operation in progress was
+# refused; 4 if a merge commit landed on a HEAD that moved; 75 if the lock
+# stayed busy.
 
 set -uo pipefail
 
@@ -40,7 +46,7 @@ PATHS=()
 seen_sep=0
 
 usage() {
-  sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -77,6 +83,33 @@ if [ -z "${LOOPKIT_DRIVER_LOCK:-}" ]; then
 fi
 
 # --- inside the critical section -------------------------------------------
+
+# An operation in progress changes what a commit is, so it is decided first.
+#   merge        git refuses the pathspec form ("cannot do a partial commit
+#                during a merge"). loop-commit-merge.sh builds the merge commit
+#                from a PRIVATE index — what the merge alone produced, plus the
+#                named paths — so the shared index is never committed and a
+#                file somebody else stages, even mid-commit, cannot ride along.
+#   cherry-pick  git refuses the pathspec form here too, and the helper does
+#                not handle one yet. Refused, exit 3, with the way out.
+#   anything else (a revert, a rebase stop, nothing at all) is the ordinary
+#                path below, unchanged: only the named paths are published.
+if [ -f "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ]; then
+  echo "loop-commit.sh: a cherry-pick is in progress and this wrapper does not finish one." >&2
+  echo "  git refuses a pathspec commit during a cherry-pick, and committing the whole" >&2
+  echo "  index would publish whatever any other process staged here." >&2
+  echo "  Either \`git cherry-pick --abort\`, or ask a human to finish it. Nothing was committed." >&2
+  exit 3
+fi
+if [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
+  bash "$HERE/loop-commit-merge.sh" ${GIT_FLAGS[@]+"${GIT_FLAGS[@]}"} "${MSG_ARGS[@]}" -- "${PATHS[@]}"
+  rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "committed $(git rev-parse --short HEAD):"
+    git show --name-only --format= HEAD | sed 's/^/  /'
+  fi
+  exit "$rc"
+fi
 
 # Stage only what this caller named. Never -A, never '.'.
 git add -- "${PATHS[@]}" || exit $?
