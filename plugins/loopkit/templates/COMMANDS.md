@@ -42,7 +42,7 @@ Constitution: the agent that wrote code never approves it.
 | PreToolUse (Bash)            | `require_commit_lock.py` — a bare `git commit` is refused; commit via `loop-commit.sh`       |
 | PreToolUse (Write/Edit)      | `protect_governance.py` — `constitution.md` and `specs/` need `GOVERNANCE_EDIT_OK=1`        |
 | PostToolUse (Write/Edit/Bash)| `notify_needs_human.py` — edits to `inbox/needs-human.md` ping a webhook (fail-open)        |
-| Stop                         | `stop_gate.sh` (precheck, tests, lint, typecheck, build) + `acceptance-review` against `specs/` |
+| Stop                         | `stop_gate.sh` (inbox precedent line, precheck, tests, lint, typecheck, build) + `acceptance-review` against `specs/` |
 
 ## Running the loop (human-pulled, not timer-pushed)
 
@@ -87,6 +87,7 @@ file per worktree, shared by every process in it. So the lock is per worktree,
 | Committing              | `loop-commit.sh -m "…" -- <paths>` — stages AND commits inside one critical section |
 | Finishing a merge       | the same call, naming every FILE you resolved — committed from a private index (merge result + named files), so nothing staged by anyone else rides along |
 | A bare `git commit`     | refused by `require_commit_lock.py` (PreToolUse, Bash)                             |
+| A new inbox section     | `loop-commit.sh` and the stop gate (same base) refuse a new or edited one with no usable `Precedent searched: <queries run> → <result>` line; they read the file, not the command that wrote it (`check-inbox-precedent.py`) |
 | Writing `state/triage.md` | `triage_state.py` upsert/update/ensure-schema take the same lock                  |
 | Who holds it right now  | `driver_lock.py status`                                                            |
 | Running anything else under it | `driver_lock.py run --label … -- <cmd>`                                     |

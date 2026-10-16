@@ -255,7 +255,16 @@ gate_base() {
     local default_ref base head_branch
     default_ref="$(gate_default_ref)"
     if [ -z "$default_ref" ]; then printf ''; return 0; fi
-    base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
+    # While a merge is in progress the change being judged is the merge's
+    # RESULT, not HEAD. `git merge-base T HEAD MERGE_HEAD` is the base of T and
+    # a hypothetical merge of HEAD and MERGE_HEAD — exactly the base this gate
+    # will compute once the merge commit exists. Without it, merging the trunk
+    # into a branch judged the trunk's own changes (its inbox sections among
+    # them) as new work of this branch, and loop-commit.sh, which asks this
+    # function for its base, refused the merge.
+    local merge_head=""
+    if git rev-parse --verify --quiet MERGE_HEAD >/dev/null 2>&1; then merge_head="MERGE_HEAD"; fi
+    base="$(git merge-base "$default_ref" HEAD ${merge_head:+"$merge_head"} 2>/dev/null || true)"
     # base == HEAD means HEAD adds nothing the trunk does not already have.
     # Usually that is honest and the empty diff is the right answer (a feature
     # branch with no commits yet). The one exception is a repo with NO remote
@@ -277,6 +286,17 @@ gate_base() {
     fi
     printf '%s' "$base"
 }
+
+# `stop_gate.sh --print-base` prints the base and exits, running nothing else.
+# loop-commit.sh asks this, so the inbox precedent check judges a commit
+# against exactly the base the gate will judge the stop against. One
+# definition of "the base", asked of its owner, instead of a second copy that
+# would drift: two copies once disagreed, and an old branch could commit what
+# the gate then refused.
+if [[ "${1:-}" == "--print-base" ]]; then
+    gate_base
+    exit 0
+fi
 
 # Whenever the gate is NOT looking at a merge base it is reading the working
 # tree only, and any committed work is invisible to it. Say so — every time,
@@ -357,6 +377,22 @@ echo ">> stop_gate: running checks before 'done' is allowed"
 # the enclosing block and the note with it.
 GATE_BASE="$(gate_base)"
 gate_scope_note "$GATE_BASE"
+
+# --- A new inbox section says what was searched before a human was asked -----
+# BEFORE the short-circuit, on purpose: an inbox edit is Markdown, so a turn
+# that only escalated something has "no changed code files" and would leave
+# through the SKIP below without this ever running.
+#
+# It reads the FILE against the same base the rest of the gate uses, so it does
+# not matter how the section got there. loop-commit.sh refuses the commit, but
+# a bare `git commit` from a shell never passes through it; the branch still
+# differs from its merge base, and that difference is what is judged here.
+# Sections the base already holds are never judged (check-inbox-precedent.py).
+if [[ -f "$ROOT/inbox/needs-human.md" ]]; then
+    if ! python3 "$PLUGIN_ROOT/scripts/check-inbox-precedent.py" --root "$ROOT" --base "${GATE_BASE:-HEAD}"; then
+        fail "a new inbox/needs-human.md section has no usable 'Precedent searched: <queries run> → <result>' line"
+    fi
+fi
 
 # --- Short-circuit on no-op turns -------------------------------------------
 # The gate verifies CODE changes. A turn that only touched state/, docs, specs
