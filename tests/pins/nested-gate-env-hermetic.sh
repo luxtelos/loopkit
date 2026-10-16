@@ -111,20 +111,25 @@ replay="$(polluted bash -c '
     ( cd "$T" && git init -q . && git -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m init )
     export CLAUDE_PROJECT_DIR="$T"
     bash "$P/scripts/loopkit-init.sh" --project "$T" >/dev/null 2>&1
+    # Each nested gate runs FROM the scratch repo, as the suite does (its
+    # gate_in_T): since #62 the gate gates the session cwd and SKIPs when
+    # CLAUDE_PROJECT_DIR names another repo, so a call from elsewhere asserts
+    # nothing. A fixture, not a bypass: no LOOP_FORCE_GATE is added.
+    gate_in_T() { ( cd "$T" && bash "$GATE" "$@" ); }
     reason() { grep -oE "SKIP: no changed code files|FAIL: lint failed|FAIL: new test failures|FAIL: test suite failed|No such file or directory|PASS: all gates passed" | sort -u | tr "\n" "," ; }
-    out="$(bash "$GATE" 2>&1)"; echo "short-circuit rc=$? $(reason <<<"$out")"
+    out="$(gate_in_T 2>&1)"; echo "short-circuit rc=$? $(reason <<<"$out")"
     echo "x" > "$T/app.ts"
     export LOOP_TEST_CMD="true" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="true"
-    out="$(bash "$GATE" 2>&1)"; echo "green rc=$? $(reason <<<"$out")"
-    out="$(LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" bash "$GATE" 2>&1)"; echo "red-lint rc=$? $(reason <<<"$out")"
-    out="$(LOOP_TEST_CMD="false" env LOOP_TEST_JSON_CMD="false" bash "$GATE" 2>&1)"; echo "red-tests rc=$? $(reason <<<"$out")"
+    out="$(gate_in_T 2>&1)"; echo "green rc=$? $(reason <<<"$out")"
+    out="$(LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" gate_in_T 2>&1)"; echo "red-lint rc=$? $(reason <<<"$out")"
+    out="$(LOOP_TEST_CMD="false" LOOP_TEST_JSON_CMD="false" gate_in_T 2>&1)"; echo "red-tests rc=$? $(reason <<<"$out")"
     unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD
     # Control: a knob a test sets ON PURPOSE after the scrub must still take.
     rm -f "$T/app.ts"
     # An empty jest-shaped report, written by python so no shell quoting can
     # strip the braces or the quotes on the way through `bash -c`.
     FAKE_REPORT="python3 -c \"import json,sys; json.dump(dict(testResults=[]), open(sys.argv[1], chr(119)))\" {report}"
-    out="$(LOOP_FORCE_GATE=1 LOOP_TEST_CMD="echo FORCED-SUITE-RAN" LOOP_LINT_CMD=true LOOP_TYPECHECK_CMD= LOOP_BUILD_CMD= LOOP_TEST_JSON_CMD="$FAKE_REPORT" bash "$GATE" 2>&1)"
+    out="$(LOOP_FORCE_GATE=1 LOOP_TEST_CMD="echo FORCED-SUITE-RAN" LOOP_LINT_CMD=true LOOP_TYPECHECK_CMD= LOOP_BUILD_CMD= LOOP_TEST_JSON_CMD="$FAKE_REPORT" gate_in_T 2>&1)"
     echo "explicit-force rc=$? $(grep -oE "SKIP: no changed code files|PASS: all gates passed" <<<"$out" | sort -u | tr "\n" ",")"
     find "$T" -delete
 ' _ "$HELPER" "$P" 2>&1)"
@@ -156,8 +161,10 @@ d_out="$(env CLAUDE_PLUGIN_ROOT="$REPO/nonexistent-plugin-root" bash -c '
     bash "$P/scripts/loopkit-init.sh" --project "$T" >/dev/null 2>&1
     echo "x" > "$T/app.ts"
     FAKE_REPORT="python3 -c \"import json,sys; json.dump(dict(testResults=[]), open(sys.argv[1], chr(119)))\" {report}"
-    LOOP_TEST_CMD=true LOOP_LINT_CMD=true LOOP_TYPECHECK_CMD= LOOP_BUILD_CMD= \
-        LOOP_TEST_JSON_CMD="$FAKE_REPORT" bash "$GATE" 2>&1
+    # From the scratch repo, as in B: otherwise the gate SKIPs on the cwd check
+    # and never reaches the plugin-root resolution this case is about.
+    ( cd "$T" && LOOP_TEST_CMD=true LOOP_LINT_CMD=true LOOP_TYPECHECK_CMD= LOOP_BUILD_CMD= \
+        LOOP_TEST_JSON_CMD="$FAKE_REPORT" bash "$GATE" 2>&1 )
     find "$T" -delete
 ' _ "$HELPER" "$P" 2>&1)"
 grep -q 'Running the suite once' <<<"$d_out" \
