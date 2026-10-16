@@ -37,7 +37,8 @@ Constitution: the agent that wrote code never approves it.
 | SessionStart                 | one orientation line (or "run /loopkit:init")                                               |
 | UserPromptSubmit             | `loop_doctrine.py` — injects the tick discipline when a prompt looks like a tick            |
 | PreToolUse (\*)              | `require_contracts.py` — blocks work tools until FILES/TOOLS/COMMANDS are read              |
-| PreToolUse (Bash)            | `block_dangerous.py` — destructive-command floor; merge/approve/stage-all refused           |
+| PreToolUse (Bash, mcp\_\_.\*) | `block_dangerous.py` — destructive-command floor; merge/approve/stage-all refused, on Bash and on the command an MCP tool would run |
+| PreToolUse (mcp\_\_.\*)       | `block_mcp_merge_approve.py` — merge-, auto-merge- and approve-shaped MCP names and parameters, on the code-review surface, refused unless the exact name is pinned safe |
 | PreToolUse (Bash)            | `require_commit_lock.py` — a bare `git commit` is refused; commit via `loop-commit.sh`       |
 | PreToolUse (Write/Edit)      | `protect_governance.py` — `constitution.md` and `specs/` need `GOVERNANCE_EDIT_OK=1`        |
 | PostToolUse (Write/Edit/Bash)| `notify_needs_human.py` — edits to `inbox/needs-human.md` ping a webhook (fail-open)        |
