@@ -54,7 +54,7 @@ and run those serially.
 
 | Stage        | What to run                                                   | Then set the row to                                            |
 | ------------ | ------------------------------------------------------------- | -------------------------------------------------------------- |
-| `new`        | `loopkit:loop-assess` Mode A — baseline, classify, route      | `spec-draft` if `code`; otherwise `inbox`                      |
+| `new`        | `loopkit:loop-assess` Mode A — sources (A0), baseline, classify, route | `spec-draft` if `code` AND the assessment carries its evidence; otherwise `inbox` |
 | `spec-draft` | `loopkit:spec-writer` — EARS criteria, carrying the control case | `spec-ready`                                                |
 | `spec-ready` | implementer agent, in its own worktree and branch             | `fixing`                                                       |
 | `fixing`     | reviewer agent + the stop gate                                | `pr-open` ONLY on a recorded PASS; stay `fixing` on FAIL, citing the criterion |
@@ -71,6 +71,20 @@ by hand. A scope label is how the owner finds the PR at all.
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/triage_state.py" update --state state/triage.md --source "<row source>" --status <new-status>
 ```
+
+**`spec-draft`, `spec-ready` and `pr-open` also pass the evidence gate**
+(docs/adr/0008-evidence-gate.md). `triage_state.py` finds the row's assessment
+by its `Row source: <source>` line under `state/` and refuses the move unless
+`## Sources` names at least two `read:` rows on different systems of record,
+one of them live (identity, data, runtime) unless it says
+`Live state: none — <why>`, and every `## Does not fit` item is
+`explained:`. The refusal lists what is missing; fix the assessment, do not
+route around it. When a human decides to go ahead anyway, the door is
+`--override-sources "<reason>" --approved-by "<human name>"` — never your own
+name or any agent's; there is no urgent-fix label that skips this — the
+reason and the approver land under
+`## Evidence-gate overrides` in `state/triage.md`, so commit that file with the
+tick, as you already do.
 
 `update` keys on `--source`, not `--finding`. Upsert keys on source too, so two
 findings with the same source overwrite each other — give each row a distinct
@@ -239,3 +253,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/loop-scan.py"
   lane — read the `unscoped new=N` note before calling the loop idle.
 - A `NEXT: CONTINUE` followed by a ScheduleWakeup is the bug this rule exists
   for. The wakeup is for waiting, and CONTINUE means nobody is waiting.
+- Rows already past `new` when the gate arrived are gated at their next move
+  too; there is no grandfathering (owner, 2026-10-16).
+- An evidence-gate refusal at `spec-draft` is the tick working, not a tool
+  fault. The row stays `new`; the next move is more reading (loop-assess A0),
+  not `--override-sources`. The override is for a human's decision, and its
+  reason is committed for everyone to read.

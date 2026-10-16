@@ -1,11 +1,112 @@
 # Changelog
 
-## Unreleased — after 0.2.4
+## 0.2.5 — 2026-10-15
 
-Not in any installed copy yet: Claude Code caches a plugin per version string,
-so this reaches consumers only when the manifest version is bumped.
+A finding moves forward only on evidence it wrote down. Owner request,
+2026-10-15. ADR 0008; the EARS spec is a draft at
+`state/2026-10-15-spec-draft-evidence-gate.md` awaiting ratification.
+
+### Why
+
+A loop built and reviewed a fix on a one-source cause: a response-field name
+and a URL parameter, both copies of one stale flag, were read as proof that a
+user had a pending invite. Nobody read the identity provider or the database
+rows; three later reads showed there was no invite. Merged alone, the fix would
+have turned a harmless redirect loop into a consent prompt that deletes data.
+"Check several sources" already existed as a rule in context. Nothing enforced
+it, and the loop's own note that a plain sign-in did not loop — the
+contradiction — was never reconciled.
 
 ### Added
+
+- **The evidence gate in `triage_state.py`.** `update` and `upsert` refuse
+  `spec-draft`, `spec-ready` and `pr-open` unless the row's assessment carries
+  a `## Sources` section with at least two `read:` rows on **different systems
+  of record**, at least one of them from a **live** class (identity, data,
+  runtime) unless the section declares `Live state: none — <why>` (owner
+  ruling 2026-10-16: "both above options are needed"; the declaration waives
+  only the live read, never the two systems — a code-only finding reads code
+  plus memory or the tracker), and a
+  `## Does not fit` section that is either `- none — <what was checked>` or one
+  item per contradiction, each with `explained:`. A missing section, an empty
+  one, leftover placeholders, an unknown class or an unexplained item is
+  refused, with the reason listed. The gate is pure and runs before the
+  verdict gate, so a refusal leaves no transition, no row change and no
+  override behind. It fails closed when its checker or `sources.json` cannot
+  be read.
+- **Independence is counted over systems, not rows.** Each sources row names a
+  class; the class maps to a system in `.loopkit/sources.json`. Two rows of one
+  class, or two classes on one system, count once. Class `derived` — a response
+  field, a URL parameter, a cached flag — is recorded and worth zero.
+- **`--override-sources "<reason>" --approved-by "<human name>"`.** Owner
+  ruling 2026-10-16: "nothing skips a human in loop at least once". An
+  override without a named approver is refused, and so is an approver that
+  looks like an agent or process (a role or tool word such as `agent`, `bot`,
+  `claude`, `reviewer`, `ci`; a `[bot]` tag; an `@` address; a 4+ digit id; or
+  the acting `LOOPKIT_AGENT`). `.loopkit/approvers.txt`, if present, is a
+  strict allowlist of the humans who may approve. There is no label-based skip
+  of any kind. The reason and the approver are written to the ledger AND under
+  `## Evidence-gate overrides` in `state/triage.md`, so they are committed with
+  the tick — the ledger never is. Recorded only after the row write succeeded;
+  an empty reason is refused.
+- **The gate's own configuration is trusted only as committed.**
+  `.loopkit/sources.json` and `.loopkit/approvers.txt` are refused by
+  `protect_governance.py` (Write, Edit, shell redirect), and — because that
+  hook is a tool blocklist an interpreter can walk past — `triage_state.py`
+  also refuses to trust either file unless it is tracked and identical in the
+  working tree, the index and HEAD. So who may approve, and what counts as a
+  source, change only through a commit a reviewer sees. **Commit
+  `.loopkit/sources.json` after init**, or the gate refuses until you do.
+- Placeholder reads (`read: TODO`, `TBD`, `?`, `...`, `<…>`) are refused, and
+  `explained:` counts only at the start of its own line under the item.
+- The approver may not equal `LOOPKIT_AGENT`, `GIT_AUTHOR_NAME` or
+  `GIT_COMMITTER_NAME` when set, even if allowlisted. Nothing in the plugin
+  sets `LOOPKIT_AGENT`; `git config user.name` is not used (locally it is
+  usually the human's own name).
+- **`scripts/source-snapshot.py`** (loop-assess step A0): writes the
+  `## Sources` skeleton, one row per class, matches the finding's nouns to
+  classes as a suggestion, and probes which CLIs answer. Anything it cannot
+  probe — including every MCP server — is `unknown`, never connected; MCP
+  server names are printed, their configuration never is.
+- **`templates/loopkit/sources.json`**, laid down by init; identical to the
+  built-in defaults (pinned).
+- **`loopkit_core/evidence.py`**, the pure parser.
+- Pins: `tests/pins/evidence-gate.py` (299 cases) and
+  `tests/pins/evidence-gate-prove-red.sh` (43 mutations, one per half of the
+  gate, each in a scratch copy).
+
+### Also in this release
+
+- **The inbox precedent gate (#58) ships in this release.** A new inbox
+  section must carry a `Precedent searched: <queries> → <result>` line,
+  checked at commit (including merge commits) and at stop. Details below.
+
+### Changed
+
+- `loop-assess`: new step A0; the A3 template gains `Row source:`,
+  `## Sources` and `## Does not fit`. `loop-tick` documents the gate.
+- `tests/pins/pr-open-needs-a-verdict.py`: its scratch rows now carry a
+  passing assessment, so it keeps testing exactly the verdict gate.
+- `tests/pins/loop-next-output-parity.py`: each fixture row at a gated status
+  gets a minimal `Live state: none` assessment (code + tracker) beside the queue (an override
+  would need a human approver, and no human approved a fixture); an older
+  recorder ignores the file, so `--regen <older ref>` still works.
+- `tests/selftest.sh`: the end-to-end `spec-draft` move first proves the
+  refusal with no assessment, then writes one; and `docs/GETTING-STARTED.md`'s
+  citation of the suite's citation-gate line moved with it (now 372).
+
+### Upgrading
+
+No grandfathering (owner ruling 2026-10-16: "Gate them too"). A row already
+past `new` meets the gate at its next `spec-draft`, `spec-ready` or `pr-open`
+move. Add the two sections to its assessment, or
+override with a reason and a named human approver (for example
+`--override-sources "pre-0.2.5 row, evidence not recorded" --approved-by "<you>"`).
+
+### The inbox precedent gate (#58), in detail
+
+Landed on main as "Unreleased — after 0.2.4" without a version bump; it ships
+with this release. Its notes, unchanged:
 
 - **A new inbox section says what was searched before a human was asked.**
   Every NEW open `## ` section of `inbox/needs-human.md` carries

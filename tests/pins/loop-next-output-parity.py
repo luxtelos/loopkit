@@ -90,7 +90,7 @@ def build_project(scripts: Path, queue: list[dict]) -> Path:
         # the day it was written.
         override = (["--override-verdict",
                      "fixture construction in loop-next-output-parity.py"]
-                    if row.get("status") == "pr-open" else [])
+                    if row.get("status") == "pr-open" else []) + evidence_fixture(state, row)
         subprocess.run(
             [sys.executable, str(triage), "upsert", "--state", str(state),
              "--finding", row.get("finding", ""), "--source", row.get("source", ""),
@@ -119,6 +119,28 @@ def normalize(text: str, scripts: Path, project: Path) -> str:
             .replace(str(scripts), "<SCRIPTS>")
             .replace(str(project.resolve()), "<PROJECT>")
             .replace(str(project), "<PROJECT>"))
+
+
+def evidence_fixture(state: Path, row: dict) -> list[str]:
+    """The evidence gate (0.2.5, docs/adr/0008) refuses spec-draft, spec-ready
+    and pr-open without an assessment. These rows are fixtures, so each gated
+    one gets a minimal passing assessment beside the queue, rather than an
+    override: an override must name a human approver (owner, 2026-10-16), and
+    no human approved a fixture. An older recorder ignores the file, so
+    `--regen <older ref>` still builds its queues. Returns no extra flags.
+    Defined down here, not inline, so that no line above it moves:
+    specs/blocked-waits-on-what.md cites this file by line number."""
+    if row.get("status") not in ("spec-draft", "spec-ready", "pr-open"):
+        return []
+    slug = "".join(c if c.isalnum() else "-" for c in row.get("source", "")).strip("-") or "row"
+    (state.parent / f"fixture-{slug}-assessment.md").write_text(
+        f"Row source: {row.get('source', '')}\n\n## Sources\n\n"
+        "Live state: none — a fixture row built by loop-next-output-parity.py\n\n"
+        "| class | system of record | evidence |\n|---|---|---|\n"
+        "| code | code graph and git | read: spec/fixtures, the queue this row comes from |\n"
+        "| tracker | tracker | read: the fixture's source id, as written |\n\n"
+        "## Does not fit\n\n- none — fixture; nothing observed\n", encoding="utf-8")
+    return []
 
 
 def capture(scripts: Path, case: str) -> str:

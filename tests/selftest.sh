@@ -185,6 +185,10 @@ done
 for f in constitution.md FILES.md TOOLS.md COMMANDS.md state/triage.md inbox/needs-human.md .loopkit/scopes.json; do
   [ -f "$T/$f" ] && ok "created $f" || fail "missing $f"
 done
+# The evidence gate's systems of record (docs/adr/0008-evidence-gate.md).
+[ -f "$T/.loopkit/sources.json" ] && cmp -s "$T/.loopkit/sources.json" "$P/templates/loopkit/sources.json" \
+  && ok "init lays down .loopkit/sources.json from the template" \
+  || fail "init did not lay down .loopkit/sources.json"
 
 # require_contracts: gated once the contracts exist, open before a Read marks them
 payload='{"session_id":"selftest-'$$'","tool_name":"Bash","tool_input":{"command":"ls"}}'
@@ -215,6 +219,17 @@ grep -q '^NEXT: WAIT' <<<"$out" && ok "loop-next says WAIT when only a human rul
 find "$E" -delete
 out="$(bash "$P/scripts/loop-next.sh" --scope billing)"
 grep -q '^TARGET: Invoice totals' <<<"$out" && ok "--scope billing picks the invoice row" || fail "scope pick: $out"
+# Since 0.2.5 a row reaches spec-draft only with an assessment that carries its
+# evidence (docs/adr/0008-evidence-gate.md); without one the move is refused.
+python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null 2>&1 \
+  && fail "spec-draft was allowed with no assessment on disk" \
+  || ok "spec-draft is refused while the row has no assessment"
+printf 'Row source: GitHub #12\n\n## Sources\n\n| class | system of record | evidence |\n|---|---|---|\n| data | database | read: invoice and refund rows, dev |\n| runtime | logs | read: the refund handler log at the time, dev |\n\n## Does not fit\n\n- none — compared both reads; they agree\n' > "$T/state/2026-01-01-invoice-drift-assessment.md"
+# init laid down .loopkit/sources.json; the gate trusts it only once committed.
+python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null 2>&1 \
+  && fail "spec-draft was allowed while .loopkit/sources.json is uncommitted" \
+  || ok "spec-draft is refused while init's .loopkit/sources.json is uncommitted"
+git -C "$T" add .loopkit/sources.json && git -C "$T" -c commit.gpgsign=false -c user.email=t@t -c user.name=t commit -q --no-verify -m "commit the gate's systems of record" -- .loopkit/sources.json
 python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null
 # Capture first, grep second: under pipefail, `script | grep -q` fails when grep
 # exits on the first match and the script takes SIGPIPE on its next echo.
@@ -1238,6 +1253,29 @@ gv="$(python3 "$REPO/tests/pins/pr-open-needs-a-verdict.py" 2>&1)"; gv_rc=$?
 printf '%s\n' "$gv" | grep '^  FAIL' || true
 [ "$gv_rc" = 0 ] && ok "the recorder REFUSES pr-open without a verdict, and has a visible override" \
   || fail "pr-open gate: $(printf '%s' "$gv" | tail -1)"
+
+# The 2026-10-15 owner request: a fix was built and reviewed on a one-source
+# cause (a response field and a URL parameter, both copies of one stale flag),
+# while "check several sources" sat in context unenforced. The recorder now
+# refuses spec-draft, spec-ready and pr-open unless the row's assessment names
+# two independent systems of record (or says `Live state: none — <why>`) and
+# explains every observation that does not fit. docs/adr/0008-evidence-gate.md.
+echo "== evidence gate: a cause moves forward only on evidence it wrote down"
+eg="$(python3 "$REPO/tests/pins/evidence-gate.py" 2>&1)"; eg_rc=$?
+printf '%s\n' "$eg" | grep '^  FAIL' || true
+eg_ok="$(printf '%s\n' "$eg" | grep -c '^  ok ' || true)"
+[ "$eg_rc" = 0 ] && [ "$eg_ok" -ge 299 ] \
+  && ok "one source, one system read twice, derived values, missing or empty sections and unexplained contradictions are refused; two systems with one live, a stated 'Live state: none' with two systems, and a human-approved override pass ($eg_ok cases)" \
+  || fail "evidence gate: rc=$eg_rc, $eg_ok/299 cases ok — $(printf '%s' "$eg" | tail -1)"
+# Each half must be able to fail on its own: one mutation per half, each in a
+# scratch copy, each required to turn its own line red.
+egr="$(bash "$REPO/tests/pins/evidence-gate-prove-red.sh" "$REPO" 2>&1)"
+egr_red="$(printf '%s\n' "$egr" | grep -c '^RED, as required' || true)"
+egr_not="$(printf '%s\n' "$egr" | grep -c 'NOT RED' || true)"
+printf '%s\n' "$egr" | grep 'NOT RED' || true
+[ "$egr_red" = 43 ] && [ "$egr_not" = 0 ] \
+  && ok "all 43 halves of the evidence gate are provably catchable, and the harness left the tracked tree alone" \
+  || fail "evidence gate mutations: $egr_red/43 red, $egr_not not red"
 
 
 echo "== the queue never parses as empty when it is not"
