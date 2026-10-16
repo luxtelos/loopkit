@@ -3,9 +3,9 @@
 #
 # WHY. Claude Code / Cursor set CLAUDE_PROJECT_DIR to the main checkout even when
 # the session's tools run in a linked worktree. The Stop hook then cds into the
-# main tree and diffs ITS suite against ITS baseline — Balancia recorded 800+
-# consecutive "new test failures vs state/known-test-failures.txt" blocks while
-# the session worktrees had zero gate events.
+# main tree and diffs ITS suite against ITS baseline — one consuming project
+# recorded 800+ consecutive "new test failures vs state/known-test-failures.txt"
+# blocks while the session worktrees had zero gate events.
 #
 # This pin requires:
 #   1. linked worktree + CLAUDE_PROJECT_DIR=main → suite runs IN the worktree
