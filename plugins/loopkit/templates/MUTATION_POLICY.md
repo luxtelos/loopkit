@@ -31,7 +31,10 @@ down BEFORE any shared-data write, in `state/`, and the write cites them.
 ## Enforcement — what is a gate and what is a rule
 
 - `block_dangerous.py` refuses history rewrites, stage-everything, merge and
-  approve for every agent. That is a gate.
+  approve for every agent on the gh CLI — on Bash and on the command line an
+  MCP shell tool would run — and `block_mcp_merge_approve.py` refuses
+  merge-, auto-merge- and approve-shaped MCP tool names and parameters. That
+  is a gate, with the limits the 0.2.5 CHANGELOG entry names.
 - Project extras in `.loopkit/block-patterns.txt` (e.g. a secrets-manager write
   aimed at the prod config, a management-API call carrying a prod project id)
   are gates once written there.

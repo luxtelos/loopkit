@@ -1,11 +1,110 @@
 # Changelog
 
-## Unreleased — after 0.2.4
+## Unreleased
 
-Not in any installed copy yet: Claude Code caches a plugin per version string,
-so this reaches consumers only when the manifest version is bumped.
+### Fixed (tests only — #66, after #62; nothing under `plugins/loopkit/` changes)
 
-### Added
+- **`tests/selftest.sh` is green again after #62.** #62 made the stop gate
+  gate the session's tree (the Stop payload's `cwd`, else the hook's own cwd)
+  and SKIP, exit 0, when `CLAUDE_PROJECT_DIR` names a different repo. The
+  suite's nested stop-gate cases set `CLAUDE_PROJECT_DIR` to a scratch repo but
+  ran the gate from the suite's launch directory, so the gate rightly skipped:
+  9 failures on `77203a7`, and two "expects pass" cases that passed only
+  because a SKIP also exits 0. Every nested call now runs from the scratch
+  repo, as Claude Code runs a Stop hook from the session's cwd. The gate and
+  its pin `tests/pins/stop-gate-worktree-root.sh` are unchanged in behaviour.
+- **The green stop-gate case no longer depends on the host's npx.** Once
+  those cases gated for real, "stop gate passes with green commands" failed
+  on a Linux host: the scratch repo has a baseline, so the gate runs
+  `LOOP_TEST_JSON_CMD`, whose default `npx vitest` could not start on that
+  host's node ("no JSON report produced"). The same broken vitest also made
+  "fails on red lint" fail for the wrong reason. Both cases now use a script
+  that writes an empty green report, the fixture the override section already
+  uses.
+- **A downstream project name is gone from that pin's comment.** The suite's
+  project-token guard caught it; the case is described generically.
+
+### Note (#66)
+
+- #62 changed `plugins/loopkit/hooks/stop_gate.sh` without a version bump, so
+  its gate change reaches consumers only with the next bump (0.2.5).
+
+## 0.2.5 — 2026-10-07
+
+Merge and approve are refused through MCP tools too — what that covers, and
+what it does not, is stated below rather than rounded up.
+
+### Fixed
+
+- **`block_dangerous.py` now runs on MCP tools that execute shell commands.**
+  It was wired to the `Bash` matcher only, so `gh pr merge 1` typed through a
+  terminal-style MCP tool (`run_in_terminal {command}`, `start_process
+  {command}`, `interact_with_process {input}`, `execute_command`) met no hook
+  (independent review FAIL of this PR's first head). The matcher is now
+  `Bash|mcp__.*`, and `commands_from_payload` decides what the call would run:
+  a SHELL-CAPABLE tool — a pinned name (`SHELL_TOOL_NAMES`: run_in_terminal,
+  start_process, interact_with_process, execute_command, ...), a shell-only
+  word (terminal, shell, bash, ssh, tmux), or a run-verb with a command-object
+  (execute_command, run_script, spawn_process) — has every string in its input
+  checked; `execute` alone does not count, so a workflow runner's
+  `execute_workflow` chat input is not read as shell lines. Any other MCP tool
+  has the strings under command-like keys checked (`COMMAND_KEY_TOKENS`:
+  command, cmd, script, shell, commandLine, argv, ...) down to depth 64; an
+  argv list is checked joined, a list of commands one by one. Each line goes
+  through the same secret, pattern and push checks a Bash command does — one
+  code path, no second copy of the rules. Prose in a non-shell tool (`body`,
+  `title`, `query`) is not read as a command. The reader stops at depth 64 and
+  5000 strings; for a shell-capable tool, hitting either limit or sending a
+  payload that will not parse is refused as `mcp-input-unreadable`. Pinned in
+  `hooks/test_block_dangerous_mcp.py`, which also reads `hooks.json` the way
+  Claude Code does and drives real PreToolUse payloads on stdin through every
+  guard it wires.
+- **New hook `hooks/block_mcp_merge_approve.py` (PreToolUse, matcher
+  `mcp__.*`) judges an MCP tool's own name and parameters as a shape rule,
+  not a list of known names.** Its first version enumerated
+  `merge_pull_request`, `approve_merge_request` and friends and allowed
+  everything else, so `merge_pull_request_by_number`, a bare `merge`, an
+  ADO-style `status: completed`, `autoComplete: true`, `vote: 10` and an
+  APPROVE inside a list all ran (same review). Now, with `pull_request` /
+  `merge_request` read as one noun: on the code-review surface (a pull / pr /
+  review / merge_request word in the short or server name, a code-host server
+  such as git, github or gitlab, or input keys that reference a pull request)
+  a name carrying a merge or approve word — and anywhere, an auto-merge /
+  auto-complete word — is refused (`mcp-merge`, `mcp-approve`,
+  `mcp-auto-merge`) unless the whole short name is on the pinned `SAFE_NAMES`
+  list (`disable_auto_merge`, `disable_pull_request_auto_merge`,
+  `cancel_auto_merge`, `get_auto_merge_status`, and `set_auto_merge` only when
+  every toggle says OFF). No negate or read word elsewhere in a name exempts
+  it: a second review found `merge_pull_request_and_delete_branch` and
+  `check_and_merge_pull_request` passing. Outside that surface a merge or
+  approve word runs (`merge_cells`, `approve_expense`). After the names, a
+  plain read (one read verb, no `and`) is allowed whatever its parameters say;
+  otherwise, on the PR/review surface, parameters are read down to depth 64
+  and 20000 values, lists included — a verdict of APPROVE, a vote above 0,
+  `approved: true`, a status of completed/merged, a `merge*` value, an
+  auto-merge/auto-complete/merge_when_* value that is not OFF — and past
+  either limit the call is refused as `mcp-unreadable-input`, as is a payload
+  that will not parse when its name, found by plain string search, is on that
+  surface. A PR tool whose name has no verb known to be safe (land_, squash_,
+  rebase_, submit_ without review) is refused as `mcp-pr-unknown-action`.
+  Reading, searching, commenting, creating, updating, closing, reviewer
+  requests, COMMENT / REQUEST_CHANGES reviews, `update_pull_request_branch`
+  and switching auto-merge OFF stay allowed. Any other parse error is an
+  allow; a crash after the call parsed falls back to a wider substring test
+  that blocks rather than lets a merge or approve run. Each rule switches off
+  by name in `.loopkit/block-disabled.txt`. Pinned in
+  `hooks/test_block_mcp_merge_approve.py`, `SAFE_NAMES` included.
+- **Each pin is shown to catch.** `hooks/test_mcp_guard_mutants.py` copies
+  the hooks, takes one piece out at a time (the `Bash|mcp__.*` matcher, the
+  shell-name rule, the command keys, argv joining, the merge word, list
+  walking, vote, status, auto keys, the unknown-action rule, the safe-name
+  allowlist, both readers' limits and unparseable-payload refusals, and — for
+  the allow half — the read exemption, the OFF toggle, the code-review
+  context and the tightened shell-tool rule) and requires the pin to fail on
+  every mutant and pass on the control. All three run in
+  `tests/selftest.sh`.
+
+### Added (#58, which landed without a version bump)
 
 - **A new inbox section says what was searched before a human was asked.**
   Every NEW open `## ` section of `inbox/needs-human.md` carries
@@ -71,32 +170,39 @@ so this reaches consumers only when the manifest version is bumped.
 - `tests/pins/inbox-precedent-prove-red.sh` exits 1, naming the mutation,
   when any mutation does not apply or is not caught.
 
-### Fixed (tests only — #66, after #62; nothing under `plugins/loopkit/` changes)
+### What is enforced, and what is not
 
-- **`tests/selftest.sh` is green again after #62.** #62 made the stop gate
-  gate the session's tree (the Stop payload's `cwd`, else the hook's own cwd)
-  and SKIP, exit 0, when `CLAUDE_PROJECT_DIR` names a different repo. The
-  suite's nested stop-gate cases set `CLAUDE_PROJECT_DIR` to a scratch repo but
-  ran the gate from the suite's launch directory, so the gate rightly skipped:
-  9 failures on `77203a7`, and two "expects pass" cases that passed only
-  because a SKIP also exits 0. Every nested call now runs from the scratch
-  repo, as Claude Code runs a Stop hook from the session's cwd. The gate and
-  its pin `tests/pins/stop-gate-worktree-root.sh` are unchanged in behaviour.
-- **The green stop-gate case no longer depends on the host's npx.** Once
-  those cases gated for real, "stop gate passes with green commands" failed
-  on a Linux host: the scratch repo has a baseline, so the gate runs
-  `LOOP_TEST_JSON_CMD`, whose default `npx vitest` could not start on that
-  host's node ("no JSON report produced"). The same broken vitest also made
-  "fails on red lint" fail for the wrong reason. Both cases now use a script
-  that writes an empty green report, the fixture the override section already
-  uses.
-- **A downstream project name is gone from that pin's comment.** The suite's
-  project-token guard caught it; the case is described generically.
-
-### Note (#66)
-
-- #62 changed `plugins/loopkit/hooks/stop_gate.sh` without a version bump, so
-  its gate change reaches consumers only with the next bump (0.2.5).
+- Enforced by hook, for every agent: `gh pr merge`, `gh pr review --approve`
+  and `gh api .../pulls/N/merge` on Bash **and** on any MCP tool whose input
+  carries them as a command line as described above; MCP tools whose name or
+  parameters are merge-, auto-merge- or approve-shaped as described above.
+- Limits, stated: the command reader stops at depth 64 and 5000 strings, the
+  parameter reader at depth 64 and 20000 values. Past a limit, a shell-capable
+  tool or a PR/review-surface tool is refused; any other MCP tool is allowed,
+  because nothing it carries is read as a command or a verdict.
+- **Not** enforced: an MCP tool whose name and keys carry no merge, approve,
+  auto-merge, shell or PR word at all (a `ship_it {number}`); a command line
+  hidden in a non-command key of a non-shell tool (a `body` that some server
+  happens to execute); keystrokes typed into a terminal window by a
+  screen-driving tool (its `text` is not read as a command); a direct push to
+  a protected branch through a file-writing tool. Branch protection on the
+  forge is the floor for those.
+- **Not** enforced, also: a merge or approve word on a server this hook does
+  not know as a code host and with no pull-request key in its input; a
+  command line under a command-like key deeper than 64 levels, or past the
+  first 5000 such strings, in a tool that is not shell-capable.
+- Fails closed by design: a dangerous pattern in ANY string of a
+  shell-capable tool (its `title`, say) is refused; so is a READ whose name
+  carries a merge or approve word on the code-review surface
+  (`get_merge_request_approvals`) unless its exact name is added to
+  `SAFE_NAMES` and its pin; the fix for a false
+  refusal is a named line in `.loopkit/block-disabled.txt`.
+- Not verified here: live firing inside a Claude Code session (the payload
+  shape and the matcher reading come from the documented hook contract, and
+  the pins assume the stricter full-match reading of a matcher), and the real
+  tool names of GitLab, Bitbucket, Gitea, Gerrit or Azure DevOps MCP servers.
+- `constitution.md` and its template still name only `block_dangerous.py`;
+  that file is ratified governance and is left for a human to amend.
 
 ## 0.2.4 — 2026-10-04
 

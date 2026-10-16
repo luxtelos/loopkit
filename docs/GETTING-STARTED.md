@@ -276,6 +276,8 @@ to its state machine. The fixed twin exits 0.
 | --- | --- | --- |
 | `BLOCKED [git-add-all]` | you (or the agent) ran `git add -A` / `.` | name the files |
 | `BLOCKED [gh-pr-merge]` | the loop never merges | a human merges |
+| `BLOCKED [mcp-merge]` / `[mcp-auto-merge]` / `[mcp-approve]` / `[mcp-pr-unknown-action]` | the same rule, reached through an MCP tool's name or parameters | a human merges or approves; post a verdict as a COMMENT |
+| `BLOCKED [gh-pr-merge]: (via MCP tool …)` | the command was typed through an MCP shell tool | the same: a human merges |
 | `BLOCKED: constitution.md is ratified governance` | a guarded file | re-run with `GOVERNANCE_EDIT_OK=1` if a human ratified it |
 | `BLOCKED — LoopKit contracts not read yet` | start of session | Read `FILES.md`, `TOOLS.md`, `COMMANDS.md` |
 | `STAGE: error — no state file` | project not initialised | `/loopkit:init` |
