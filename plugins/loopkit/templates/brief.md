@@ -1,6 +1,6 @@
 # Subagent brief — <one-line objective>
 
-Every brief carries four things, or the subagent will spend its context
+Every brief carries four things, plus any question for the owner, or the subagent will spend its context
 guessing at them (anthropic.com/engineering/multi-agent-research-system: an
 objective, an output format, guidance on tools and sources, and clear task
 boundaries). Fill every section; delete nothing.
@@ -31,6 +31,14 @@ carries the path.
 Which tools to use, which to avoid, and which sources are authoritative.
 ("Read + Grep only. Do not run tests. `specs/billing.md` is the acceptance
 contract; the PR description is not.")
+
+## Owner questions
+
+Anything in this brief, or in the return, that only the owner can answer is
+flagged here rather than left in the prose, one line each, with the search that
+was run before asking: `Precedent searched: <queries run> → <result>`. A
+question with no search behind it is not ready to be asked. Write "none" if
+there are none — an empty section and a forgotten one look the same.
 
 ## Boundaries
 

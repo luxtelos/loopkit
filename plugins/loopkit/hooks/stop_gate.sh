@@ -20,7 +20,14 @@
 #   LOOP_ENV_WRAPPER        prefix for every command, e.g.
 #                           "doppler run --project p --config c --"
 #   LOOP_CODE_GLOBS         which files count as code (default below)
-#   LOOP_FORCE_GATE=1       run the gate even when no code file changed
+#   LOOP_FORCE_GATE=1       run the gate even when no code file changed;
+#                           also overrides the worktree/cwd mismatch skip
+#
+# Worktree root: Claude Code / Cursor often set CLAUDE_PROJECT_DIR to the main
+# checkout while the session's tools run in a linked worktree. Gating the main
+# tree against its baseline then fails every Stop for days. Prefer the session
+# cwd's git toplevel when it is a linked worktree of the same repo; otherwise
+# SKIP (PASS) when the would-be gate root is not the session cwd.
 #
 # Tests prefer the regression diff (scripts/test-regressions.sh) over a raw
 # suite run whenever state/known-test-failures.txt exists: a suite that carries
@@ -44,8 +51,74 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
-ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+
+# --- Resolve gate root (session worktree over CLAUDE_PROJECT_DIR) -----------
+# See header comment. Helpers are local to this block; they must not leak names
+# into the rest of the script's environment assumptions.
+_loopkit_canon() {
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
+}
+_loopkit_toplevel() {
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
+}
+_loopkit_common_dir() {
+    local d
+    d="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [[ -z "$d" ]]; then
+        d="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null || true)"
+        [[ -n "$d" ]] || { printf ''; return; }
+        if [[ "$d" != /* ]]; then
+            d="$(cd "$1" && cd "$d" 2>/dev/null && pwd -P)" || { printf ''; return; }
+        else
+            d="$(cd "$d" 2>/dev/null && pwd -P)" || { printf ''; return; }
+        fi
+    fi
+    printf '%s' "$d"
+}
+
+SESSION_HINT="$(printf '%s' "${LOOPKIT_HOOK_STDIN:-}" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+cwd = d.get("cwd") or d.get("working_directory") or ""
+print(cwd if isinstance(cwd, str) else "")
+' 2>/dev/null || true)"
+SESSION_PWD="$(_loopkit_canon "${SESSION_HINT:-$(pwd)}")"
+SESSION_TOP="$(_loopkit_toplevel "$SESSION_PWD")"
+[[ -n "$SESSION_TOP" ]] || SESSION_TOP="$SESSION_PWD"
+SESSION_TOP="$(_loopkit_canon "$SESSION_TOP")"
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
+PROJECT_TOP=""
+if [[ -n "$PROJECT_DIR" ]]; then
+    PROJECT_TOP="$(_loopkit_toplevel "$PROJECT_DIR")"
+    [[ -n "$PROJECT_TOP" ]] || PROJECT_TOP="$PROJECT_DIR"
+    PROJECT_TOP="$(_loopkit_canon "$PROJECT_TOP")"
+fi
+
+if [[ -n "$PROJECT_TOP" && "$PROJECT_TOP" != "$SESSION_TOP" ]]; then
+    session_common="$(_loopkit_common_dir "$SESSION_TOP")"
+    project_common="$(_loopkit_common_dir "$PROJECT_TOP")"
+    if [[ -n "$session_common" && -n "$project_common" && "$session_common" == "$project_common" ]]; then
+        echo ">> stop_gate: session worktree $SESSION_TOP (CLAUDE_PROJECT_DIR was $PROJECT_TOP)"
+        ROOT="$SESSION_TOP"
+    elif [[ "${LOOP_FORCE_GATE:-0}" == "1" ]]; then
+        echo ">> stop_gate: FORCE — gating CLAUDE_PROJECT_DIR $PROJECT_TOP despite session cwd $SESSION_TOP"
+        ROOT="$PROJECT_TOP"
+    else
+        echo ">> SKIP: gate root ($PROJECT_TOP) != session cwd ($SESSION_TOP) — refuse to gate the wrong tree."
+        echo ">> PASS: gate short-circuited. Set LOOP_FORCE_GATE=1 to override."
+        exit 0
+    fi
+elif [[ -n "$PROJECT_TOP" ]]; then
+    ROOT="$PROJECT_TOP"
+else
+    ROOT="$SESSION_TOP"
+fi
 cd "$ROOT"
+# ---------------------------------------------------------------------------
 
 if [[ -f "$ROOT/.loopkit/config.env" ]]; then
     set -a
@@ -182,7 +255,16 @@ gate_base() {
     local default_ref base head_branch
     default_ref="$(gate_default_ref)"
     if [ -z "$default_ref" ]; then printf ''; return 0; fi
-    base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"
+    # While a merge is in progress the change being judged is the merge's
+    # RESULT, not HEAD. `git merge-base T HEAD MERGE_HEAD` is the base of T and
+    # a hypothetical merge of HEAD and MERGE_HEAD — exactly the base this gate
+    # will compute once the merge commit exists. Without it, merging the trunk
+    # into a branch judged the trunk's own changes (its inbox sections among
+    # them) as new work of this branch, and loop-commit.sh, which asks this
+    # function for its base, refused the merge.
+    local merge_head=""
+    if git rev-parse --verify --quiet MERGE_HEAD >/dev/null 2>&1; then merge_head="MERGE_HEAD"; fi
+    base="$(git merge-base "$default_ref" HEAD ${merge_head:+"$merge_head"} 2>/dev/null || true)"
     # base == HEAD means HEAD adds nothing the trunk does not already have.
     # Usually that is honest and the empty diff is the right answer (a feature
     # branch with no commits yet). The one exception is a repo with NO remote
@@ -204,6 +286,17 @@ gate_base() {
     fi
     printf '%s' "$base"
 }
+
+# `stop_gate.sh --print-base` prints the base and exits, running nothing else.
+# loop-commit.sh asks this, so the inbox precedent check judges a commit
+# against exactly the base the gate will judge the stop against. One
+# definition of "the base", asked of its owner, instead of a second copy that
+# would drift: two copies once disagreed, and an old branch could commit what
+# the gate then refused.
+if [[ "${1:-}" == "--print-base" ]]; then
+    gate_base
+    exit 0
+fi
 
 # Whenever the gate is NOT looking at a merge base it is reading the working
 # tree only, and any committed work is invisible to it. Say so — every time,
@@ -284,6 +377,22 @@ echo ">> stop_gate: running checks before 'done' is allowed"
 # the enclosing block and the note with it.
 GATE_BASE="$(gate_base)"
 gate_scope_note "$GATE_BASE"
+
+# --- A new inbox section says what was searched before a human was asked -----
+# BEFORE the short-circuit, on purpose: an inbox edit is Markdown, so a turn
+# that only escalated something has "no changed code files" and would leave
+# through the SKIP below without this ever running.
+#
+# It reads the FILE against the same base the rest of the gate uses, so it does
+# not matter how the section got there. loop-commit.sh refuses the commit, but
+# a bare `git commit` from a shell never passes through it; the branch still
+# differs from its merge base, and that difference is what is judged here.
+# Sections the base already holds are never judged (check-inbox-precedent.py).
+if [[ -f "$ROOT/inbox/needs-human.md" ]]; then
+    if ! python3 "$PLUGIN_ROOT/scripts/check-inbox-precedent.py" --root "$ROOT" --base "${GATE_BASE:-HEAD}"; then
+        fail "a new inbox/needs-human.md section has no usable 'Precedent searched: <queries run> → <result>' line"
+    fi
+fi
 
 # --- Short-circuit on no-op turns -------------------------------------------
 # The gate verifies CODE changes. A turn that only touched state/, docs, specs

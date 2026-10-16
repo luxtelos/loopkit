@@ -152,7 +152,7 @@ done
 node --check "$P/skills/run-state-model/driver.mjs" && ok "node --check driver.mjs" || fail "driver.mjs syntax"
 
 echo "== hook tests"
-for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock; do
+for t in test_block_dangerous test_loop_doctrine test_protect_governance test_require_commit_lock test_require_recall; do
   expect_rc 0 "$t" python3 "$P/hooks/$t.py"
 done
 
@@ -266,7 +266,10 @@ case "$rows" in *"retry budget"*) has_bridge=1 ;; *) has_bridge=0 ;; esac
 find "$C" -delete
 
 # inbox bridge
-printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
+# The open section carries its `Precedent searched:` line because this scratch
+# repo is stop-gated below, and the gate refuses a NEW section without one
+# (tests/pins/inbox-precedent-gate.py pins the refusal itself).
+printf '\n## Decide the refund window (2026-01-01)\n\nText.\n\nPrecedent searched: grep -rn "refund window" specs docs/adr → no ruling found\n\n## RESOLVED 2026-01-02 — old one\n\nText.\n' >> "$T/inbox/needs-human.md"
 out="$(python3 "$P/scripts/inbox_to_triage.py" --inbox "$T/inbox/needs-human.md" --state "$T/state/triage.md")"
 grep -q 'VERDICT: 1 finding' <<<"$out" && ok "bridge files the open heading, skips the RESOLVED one" || fail "inbox bridge"
 
@@ -278,13 +281,35 @@ printf 'tests/c.test.ts :: brand new\n' > "$T/cur.txt"
 expect_rc 1 "regressions: a NEW failure fails" bash "$P/scripts/test-regressions.sh" --from-list "$T/cur.txt"
 
 # stop gate
-expect_rc 0 "stop gate short-circuits with no code change" bash "$P/hooks/stop_gate.sh"
+# Every nested gate run below is a Stop in the scratch repo, so it runs FROM
+# the scratch repo. Since #62 the gate gates the SESSION's tree, read from the
+# Stop payload's cwd or else the hook's own cwd, and refuses (SKIP, exit 0) when
+# CLAUDE_PROJECT_DIR names a different repo. Claude Code runs a Stop hook in the
+# session's cwd; a nested call made from wherever this suite was launched told
+# the gate "the session is in the loopkit checkout, the project is $T", and the
+# gate rightly skipped, so every case expecting a FAIL saw a SKIP (9 of them on
+# 77203a7). gate_in_T states the session's cwd the way the hook runner does.
+# It is a fixture, not a bypass: no LOOP_FORCE_GATE, and the gate's own skip is
+# still pinned by tests/pins/stop-gate-worktree-root.sh.
+gate_in_T() { ( cd "$T" && bash "$P/hooks/stop_gate.sh" "$@" ); }
+expect_rc 0 "stop gate short-circuits with no code change" gate_in_T
 echo "x" > "$T/app.ts"
+# $T has a baseline (state/known-test-failures.txt, above), so the gate takes
+# the regression path and runs LOOP_TEST_JSON_CMD, not LOOP_TEST_CMD. Left
+# unset, that is the default `npx vitest … --reporter=json`: the green case
+# then passed or failed on whether this machine's npx/node can start vitest
+# (a Linux host with an older node fails at startup: "no JSON report
+# produced"). It went unseen because the gate SKIPped this case after #62. A
+# script file writes an empty green report, the same fixture the override
+# section below uses; it lives outside $T so it is not a changed file there.
+GR="$(mktemp -d "${TMPDIR:-/tmp}/loopkit-greenreport.XXXXXX")"
+printf '#!/usr/bin/env bash\nprintf "{\\"testResults\\":[]}" > "$1"\n' > "$GR/greenreport"; chmod +x "$GR/greenreport"
 export LOOP_TEST_CMD="true" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="true"
-expect_rc 0 "stop gate passes with green commands" bash "$P/hooks/stop_gate.sh"
-LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" expect_rc 1 "stop gate fails on red lint" bash "$P/hooks/stop_gate.sh"
-LOOP_TEST_CMD="false" expect_rc 1 "stop gate fails on red tests (baseline present, regressions script used)" env LOOP_TEST_JSON_CMD="false" bash "$P/hooks/stop_gate.sh"
+LOOP_TEST_JSON_CMD="$GR/greenreport {report}" expect_rc 0 "stop gate passes with green commands" gate_in_T
+LOOP_LINT_CMD="false" LOOP_LINT_FALLBACK_CMD="" LOOP_TEST_JSON_CMD="$GR/greenreport {report}" expect_rc 1 "stop gate fails on red lint" gate_in_T
+LOOP_TEST_CMD="false" LOOP_TEST_JSON_CMD="false" expect_rc 1 "stop gate fails on red tests (baseline present, regressions script used)" gate_in_T
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD
+find "$GR" -delete
 
 # citations
 printf '# CLAUDE.md\nSee `app.ts:1` and `app.ts:9`.\n' > "$T/CLAUDE.md"
@@ -645,7 +670,7 @@ err="$(printf '{"tool_name":"Bash","tool_input":{"command":"stripe subscriptions
 
 echo "== rulings-extract (dry run, then apply)"
 printf '\n## RESOLVED 2026-09-01 — Grace-lane reactivation goes through a fresh checkout\n\nOwner ruled: reactivation from grace is a new checkout, never an un-cancel.\n' >> "$T/inbox/needs-human.md"
-printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n' >> "$T/inbox/needs-human.md"
+printf '\n## ~~Two SHALLs fire on undefined conditions~~ — RESOLVED 2026-08-31\n\nRewritten as EARS lines.\n\n## [superseded] 2026-07-23 (EOD) — Spec v3 SHIPPED: PR open for review\n\nStatus report.\n\n## Still open: the pricing anchor question\n\nNot ruled.\n\nPrecedent searched: grep -rn "pricing anchor" specs docs/adr → no ruling found\n' >> "$T/inbox/needs-human.md"
 mkdir -p "$T/docs/adr"; printf '# ADR-001: Postgres-direct for new domains\n\n## Decision\n\nNew domains write to Postgres directly; the BI layer is read-only.\n' > "$T/docs/adr/ADR-001-postgres-direct.md"
 out="$(python3 "$P/scripts/rulings-extract.py" --root "$T")"
 grep -q 'Grace-lane reactivation' <<<"$out" && grep -q 'ADR-001' <<<"$out" && grep -q 'dry run' <<<"$out" && ok "extract finds the inbox ruling and the ADR, writes nothing" || fail "extract: $out"
@@ -810,7 +835,7 @@ echo "== stop gate: the eighth block is an override, so the seventh says so"
 export LOOP_TEST_CMD="false" LOOP_LINT_CMD="true" LOOP_TYPECHECK_CMD="" LOOP_BUILD_CMD="" LOOP_TEST_JSON_CMD="false"
 SG='{"session_id":"stopblocks-selftest-'$$'","hook_event_name":"Stop"}'
 last=""
-for i in 1 2 3 4 5 6 7; do last="$(printf '%s' "$SG" | bash "$P/hooks/stop_gate.sh" 2>&1 || true)"; done
+for i in 1 2 3 4 5 6 7; do last="$(printf '%s' "$SG" | gate_in_T 2>&1 || true)"; done
 grep -q 'OVERRIDE IMMINENT: this is consecutive block 7' <<<"$last" && ok "seventh consecutive block warns that the eighth is an override" || fail "override warning: $last"
 grep -q '"event": "gate_override_imminent"' "$T/state/ticks.jsonl" && ok "override-imminent recorded in the ticks ledger" || fail "override event missing"
 export LOOP_TEST_CMD="true" LOOP_TEST_JSON_CMD="true"
@@ -819,10 +844,10 @@ printf 'tests/a.test.ts :: adds\n' > "$T/state/known-test-failures.txt"
 # except the placeholder: a `\"`-laden string built inside "$( … )" on bash
 # 3.2 arrived with a stray `}` and looked like a substitution bug (it was not).
 printf '#!/usr/bin/env bash\nprintf "{\\"testResults\\":[]}" > "$1"\n' > "$T/bin/fakereport"; chmod +x "$T/bin/fakereport"
-out="$(printf '%s' "$SG" | LOOP_TEST_JSON_CMD="$T/bin/fakereport {report}" bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+out="$(printf '%s' "$SG" | LOOP_TEST_JSON_CMD="$T/bin/fakereport {report}" gate_in_T 2>&1 || true)"
 grep -q 'PASS: all gates passed' <<<"$out" && ok "a PASS resets the counter" || fail "reset pass: $out"
 grep -q 'Running the suite once' <<<"$out" && ! grep -qE 'test-report\.json\.[A-Za-z0-9]+\}' <<<"$out" && ok "the {report} placeholder substitutes with no stray brace" || fail "placeholder: $out"
-last="$(printf '%s' "$SG" | LOOP_TEST_CMD=false LOOP_TEST_JSON_CMD=false bash "$P/hooks/stop_gate.sh" 2>&1 || true)"
+last="$(printf '%s' "$SG" | LOOP_TEST_CMD=false LOOP_TEST_JSON_CMD=false gate_in_T 2>&1 || true)"
 grep -q 'consecutive block 1)' "$T/state/progress.md" && ok "the count restarted at 1 after the PASS" || fail "counter did not reset: $(tail -2 "$T/state/progress.md")"
 unset LOOP_TEST_CMD LOOP_LINT_CMD LOOP_TYPECHECK_CMD LOOP_BUILD_CMD LOOP_TEST_JSON_CMD
 [ -f "$REPO/docs/research/watchlist.md" ] && grep -q 'ad-free' "$REPO/docs/research/watchlist.md" && ok "research watchlist states what is published" || fail "watchlist"
@@ -1155,6 +1180,16 @@ printf '%s\n' "$ng_out" | grep -E '^  FAIL' || true
 [ "$ng_rc" = 0 ] && ok "nested stop-gate runs ignore the outer gate's LOOP_* / CLAUDE_PROJECT_DIR" \
   || fail "nested gate env: $(printf '%s' "$ng_out" | tail -1)"
 
+echo "== stop gate: session worktree wins over CLAUDE_PROJECT_DIR"
+# A Stop hook that always cds into CLAUDE_PROJECT_DIR gated the main checkout's
+# stale baseline while the session worked in a linked worktree — hundreds of
+# consecutive false FAIL ticks. Prefer the session worktree; SKIP when the
+# project dir is a different repo entirely.
+wt_out="$(bash "$REPO/tests/pins/stop-gate-worktree-root.sh" "$REPO" 2>&1)"; wt_rc=$?
+printf '%s\n' "$wt_out" | grep -E '^  FAIL' || true
+[ "$wt_rc" = 0 ] && ok "session worktree is gated; unrelated CLAUDE_PROJECT_DIR skips" \
+  || fail "worktree root: $(printf '%s' "$wt_out" | tail -1)"
+
 echo "== remote gate runner: its verdict can be false"
 # `suite | grep | tail` then `echo "suite-rc=$?"` reported TAIL's status, so
 # tools/remote-gate.sh exited 0 on a suite printing "FAILURE: 3 checks failed".
@@ -1174,6 +1209,21 @@ rgt_out="$(bash "$REPO/tests/pins/remote-gate-sends-working-tree.sh" "$REPO" 2>&
 printf '%s\n' "$rgt_out" | grep -E '^  FAIL' || true
 [ "$rgt_rc" = 0 ] && ok "the remote gate sends the working tree, says so, and keeps bare-host mode" \
   || fail "remote gate tree: $(printf '%s' "$rgt_out" | tail -1)"
+
+echo "== loop-commit.sh finishes a merge, and only a merge it can vouch for"
+# `git commit -- <paths>` is refused by git while a merge is in progress, and a
+# bare commit is refused by require_commit_lock.py, so a merge that stopped on a
+# conflict had no allowed way to finish. A merge commit publishes a whole tree —
+# the one thing the pathspec form exists to prevent — so the pin holds a check
+# per way that can go wrong: a foreign staged file, a foreign `git add` DURING
+# the commit (from a slow pre-commit hook), a signal to the helper mid-commit
+# (once produced an empty-tree merge), an unresolved path, conflict markers, a
+# directory named, non-ASCII names, the ordinary no-merge path, and the other
+# in-progress states.
+lcm_out="$(bash "$REPO/tests/pins/loop-commit-finishes-a-merge.sh" "$REPO" 2>&1)"; lcm_rc=$?
+printf '%s\n' "$lcm_out" | grep -E '^  FAIL' || true
+[ "$lcm_rc" = 0 ] && ok "a stopped merge completes through the wrapper; a foreign staged file is refused, not swept in" \
+  || fail "loop-commit mid-merge: $(printf '%s' "$lcm_out" | tail -1)"
 
 # The owner's 2026-09-07 correction: a tick reported "READY TO MERGE: none —
 # all four unreviewed" and handed the owner all four in the same breath. The
@@ -1216,6 +1266,17 @@ qz="$(python3 "$REPO/tests/pins/queue-never-reads-empty.py" 2>&1)"; qz_rc=$?
 printf '%s\n' "$qz" | grep '^  FAIL' || true
 [ "$qz_rc" = 0 ] && ok "an unknown or renamed column is refused, and a truly empty queue still parses" \
   || fail "queue silent-zero: $(printf '%s' "$qz" | tail -1)"
+
+echo "== criterion 5's purity check survives being attacked"
+# The check has been defeated twice, both times by a rule about NAMES applied
+# to the wrong namespace. This pin holds the attacks, not just the answer: it
+# asserts the round-2 check IS still fooled by them, so a harness that stopped
+# reproducing the defect fails loudly instead of printing a clean sheet.
+c5="$(python3 "$REPO/tests/pins/criterion5-purity-attacks.py" 2>&1)"; c5_rc=$?
+printf '%s\n' "$c5" | grep '^  FAIL' || true
+printf '%s\n' "$c5" | grep '^  gap ' || true
+[ "$c5_rc" = 0 ] && ok "the sealed evaluator refuses every attack, and its known gaps are named" \
+  || fail "criterion 5 purity: $(printf '%s' "$c5" | tail -1)"
 
 echo "== the secret scanner knows every shape it claims to know"
 ss="$(python3 "$REPO/tests/pins/secret-shapes.py" 2>&1)"; ss_rc=$?
@@ -1262,6 +1323,48 @@ for c in "ssh host \"echo \$CODEX_GITHUB_PAT\"" \
   run_hook "$c"
   [ "$HOOK_RC" = 0 ] && ok "allowed: ${c:0:44}" || fail "FALSE POSITIVE (rc=$HOOK_RC): $c"
 done
+
+echo "== a new inbox section says what was searched before a human was asked"
+# The failure: an agent escalated a question the repository had already
+# answered, because the `decision` route never asked for a search and nothing
+# read the section. The pin checks the rule over file CONTENT and at both
+# places every write path converges (loop-commit.sh, stop_gate.sh), including
+# the bare-commit path the wrapper never sees.
+ip="$(python3 "$REPO/tests/pins/inbox-precedent-gate.py" 2>&1)"; ip_rc=$?
+printf '%s\n' "$ip" | grep '^  FAIL' || true
+ip_ok="$(printf '%s\n' "$ip" | grep -c '^  ok ' || true)"
+[ "$ip_rc" = 0 ] && [ "$ip_ok" -ge 82 ] \
+  && ok "a new or edited section without a usable, visible, one-line 'Precedent searched: … → …' is refused at commit and at stop, against one base; unchanged old sections and other commits are untouched ($ip_ok cases)" \
+  || fail "inbox precedent gate: rc=$ip_rc, $ip_ok/82 cases ok — $(printf '%s' "$ip" | tail -1)"
+# And each half must be able to FAIL on its own. Sixteen mutations, one per
+# pre-mortem risk; each has to turn its own tag red and leave another green.
+ipr="$(bash "$REPO/tests/pins/inbox-precedent-prove-red.sh" "$REPO" 2>&1)"; ipr_rc=$?
+ipr_red="$(printf '%s' "$ipr" | grep -c 'RED, as required' || true)"
+ipr_not="$(printf '%s' "$ipr" | grep -c 'NOT RED' || true)"
+[ "$ipr_rc" = 0 ] && [ "$ipr_red" = 16 ] && [ "$ipr_not" = 0 ] && ok "all sixteen halves of the inbox precedent gate are provably catchable" \
+  || fail "inbox precedent mutations: rc=$ipr_rc, $ipr_red/16 red, $ipr_not not red"
+# The merge path exits loop-commit.sh, so a check placed after it never sees a
+# merge commit; and judged against the branch's OLD base, merging the trunk in
+# re-judges the trunk's own sections. The pin holds both, and two mutants (the
+# check after the merge path; a gate base blind to MERGE_HEAD) must turn it red.
+ipm="$(bash "$REPO/tests/pins/inbox-precedent-on-merge.sh" "$REPO" 2>&1)"; ipm_rc=$?
+printf '%s\n' "$ipm" | grep '^  FAIL' || true
+[ "$ipm_rc" = 0 ] && ok "a merge commit is judged for new inbox sections too, and merging the trunk does not re-judge the trunk's own (both mutants caught)" \
+  || fail "inbox precedent on a merge commit: $(printf '%s' "$ipm" | tail -1)"
+grep -q 'Precedent searched: <queries run> → <result>' "$P/templates/needs-human.md" \
+  && grep -q 'Precedent searched: <queries run> → <result>' "$REPO/inbox/needs-human.md" \
+  && ok "the inbox template, and this repo's own inbox, tell a new user the line exists" \
+  || fail "the inbox template or this repo's inbox no longer documents the 'Precedent searched:' line"
+python3 - "$P/skills/loop-assess/SKILL.md" <<'PY' && ok "loop-assess searches for precedent BEFORE it routes a decision to the inbox" || fail "loop-assess's decision route does not put the precedent search before the inbox"
+import re, sys
+s = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r"^- `decision` → (.*?)(?=^- |\Z)", s, re.S | re.M)
+route = m.group(1) if m else ""
+# Order, not presence: the search has to come before the inbox in the route.
+a, b = route.find("search for precedent first"), route.find("inbox/needs-human.md")
+ok = 0 <= a < b and all(w in route for w in ("memory.py recall", "docs/adr/", "Precedent searched:", "knowledge"))
+sys.exit(0 if ok else 1)
+PY
 
 # The verdict of the watcher started at the top of this file. Deliberately the
 # LAST check, so it covers every harness above it. It fails on two distinct

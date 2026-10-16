@@ -31,6 +31,37 @@ MUST_BLOCK = [
     ("with -c config", f"{GIT} -c user.name=t{COMMIT} -m 'x'"),
     ("newline separated", f"echo hi\n{GIT}{COMMIT} -F m.txt"),
     ("inside a subshell", f"({GIT}{COMMIT} -m 'x')"),
+    # Heredoc controls: only a heredoc body that is DATA is skipped.
+    ("a commit after the heredoc ends",
+     f"cat > m.txt <<'EOF'\nsubject line\nEOF\n{GIT}{COMMIT} -F m.txt"),
+    ("a commit on the operator's own line",
+     f"cat > m.txt <<'EOF' && {GIT}{COMMIT} -F m.txt\nsubject line\nEOF"),
+    ("a heredoc fed to bash is code",
+     f"bash <<'EOF'\n{GIT} add a.md && {GIT}{COMMIT} -m 'x'\nEOF"),
+    ("a heredoc piped into sh is code",
+     f"cat <<'EOF' | sh\n{GIT}{COMMIT} -m 'x'\nEOF"),
+    ("a here-string (<<<) opens no heredoc",
+     f"grep x <<< 'EOF'\n{GIT}{COMMIT} -m 'x'"),
+    ("a commit after two heredocs on one line",
+     f"paste <<A <<'B'\none\nA\ntwo\nB\n{GIT}{COMMIT} -m 'x'"),
+    # Independent review FAIL on e1924ff (2026-10-03): twelve commit shapes
+    # main blocked and the first heredoc version let through. A `<<` that is
+    # not a heredoc must open nothing...
+    ('a quoted "<<EOF", then a commit on the next line',
+     f'echo "<<EOF"\n{GIT}{COMMIT} -m x'),
+    ("a single-quoted '<<EOF', then a commit", f"echo '<<EOF'\n{GIT}{COMMIT} -m x"),
+    ("grep for '<<EOF', then a commit", f"grep -n '<<EOF' notes.md\n{GIT}{COMMIT} -m x"),
+    ("a # comment naming <<EOF, then a commit", f"# write it with <<EOF\n{GIT}{COMMIT} -m x"),
+    ("an arithmetic shift $((1<<X)), then a commit", f"echo $((1<<X))\n{GIT}{COMMIT} -m x"),
+    ("an escaped \\<<EOF, then a commit", f"echo \\<<EOF\n{GIT}{COMMIT} -m x"),
+    ("<<E\\OF (bash reads delimiter EOF), commit after it",
+     f"cat > f <<E\\OF\nhi\nEOF\n{GIT}{COMMIT} -m x"),
+    # ...and a body that a shell runs must stay visible, whatever word comes first.
+    ("sudo bash <<EOF", f"sudo bash <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("env bash <<EOF", f"env bash <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("exec sh <<EOF", f"exec sh <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
+    ("cat <<EOF | sudo sh", f"cat <<'EOF' | sudo sh\n{GIT}{COMMIT} -m x\nEOF"),
+    ("docker exec -i c sh <<EOF", f"docker exec -i c sh <<'EOF'\n{GIT}{COMMIT} -m x\nEOF"),
 ]
 
 MUST_ALLOW = [
@@ -45,6 +76,22 @@ MUST_ALLOW = [
     ("prose mentioning it", f'echo "never run a bare {GIT}{COMMIT} here"'),
     ("a path that merely contains the word",
      f"{GIT} add docs/commit-policy.md"),
+    # Found 2026-10-02: an issue body written through a heredoc said
+    # "`git add x && git commit -F m` passes there". The `&&` inside the PROSE
+    # read as a command position, and `gh issue create` was refused.
+    ("heredoc prose (the 2026-10-02 case)",
+     f"cat > /tmp/issue.md <<'EOF'\nSo `{GIT} add x && {GIT}{COMMIT} -F m` passes there.\nEOF\n"
+     "gh issue create --title t --body-file /tmp/issue.md"),
+    ("heredoc prose, unquoted delimiter",
+     f"cat > b.md <<EOF\nstep two:\n{GIT}{COMMIT} -m 'x'\nEOF"),
+    ("heredoc prose, <<- with a tab-indented terminator",
+     f"cat > b.md <<-END\n\t{GIT}{COMMIT} -m 'x'\n\tEND"),
+    ("prose in two heredocs on one line",
+     f"paste <<A <<'B'\none; {GIT}{COMMIT} -m x\nA\ntwo && {GIT}{COMMIT} -m y\nB\necho done"),
+    ('prose that only quotes "<<EOF"',
+     f'echo "use <<EOF for {GIT}{COMMIT} messages"'),
+    ("heredoc prose as a PR body",
+     f"gh pr create --title t --body-file - <<'MSG'\n1. {GIT} add a.md\n2. {GIT}{COMMIT} -m x\nMSG"),
     ("inline door", f"LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),
     ("inline door after another assignment",
      f"FOO=1 LOOPKIT_COMMIT_UNLOCKED=1 {GIT}{COMMIT} -m 'x'"),
