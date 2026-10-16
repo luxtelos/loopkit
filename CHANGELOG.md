@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Fixed (tests only — #66, after #62; nothing under `plugins/loopkit/` changes)
+
+- **`tests/selftest.sh` is green again after #62.** #62 made the stop gate
+  gate the session's tree (the Stop payload's `cwd`, else the hook's own cwd)
+  and SKIP, exit 0, when `CLAUDE_PROJECT_DIR` names a different repo. The
+  suite's nested stop-gate cases set `CLAUDE_PROJECT_DIR` to a scratch repo but
+  ran the gate from the suite's launch directory, so the gate rightly skipped:
+  9 failures on `77203a7`, and two "expects pass" cases that passed only
+  because a SKIP also exits 0. Every nested call now runs from the scratch
+  repo, as Claude Code runs a Stop hook from the session's cwd. The gate and
+  its pin `tests/pins/stop-gate-worktree-root.sh` are unchanged in behaviour.
+- **The green stop-gate case no longer depends on the host's npx.** Once
+  those cases gated for real, "stop gate passes with green commands" failed
+  on a Linux host: the scratch repo has a baseline, so the gate runs
+  `LOOP_TEST_JSON_CMD`, whose default `npx vitest` could not start on that
+  host's node ("no JSON report produced"). The same broken vitest also made
+  "fails on red lint" fail for the wrong reason. Both cases now use a script
+  that writes an empty green report, the fixture the override section already
+  uses.
+- **A downstream project name is gone from that pin's comment.** The suite's
+  project-token guard caught it; the case is described generically.
+
+### Note (#66)
+
+- #62 changed `plugins/loopkit/hooks/stop_gate.sh` without a version bump, so
+  its gate change reaches consumers only with the next bump (0.2.5).
+
 ## 0.2.5 — 2026-10-07
 
 Merge and approve are refused through MCP tools too — what that covers, and
