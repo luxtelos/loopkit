@@ -78,8 +78,8 @@ check() {  # <label> <expected substring in the pin's failure output>
 
 # 1. Go back to asking for a branch name. Detached HEAD loses its base.
 echo "MUT-NAME: resolve the base from the branch name again"
-mutate 'base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"' \
-       'base=""; [ "$(git rev-parse --abbrev-ref HEAD)" != HEAD ] && base="$(git merge-base "$default_ref" HEAD 2>/dev/null || true)"'
+mutate 'base="$(git merge-base "$default_ref" HEAD ${merge_head:+"$merge_head"} 2>/dev/null || true)"' \
+       'base=""; [ "$(git rev-parse --abbrev-ref HEAD)" != HEAD ] && base="$(git merge-base "$default_ref" HEAD ${merge_head:+"$merge_head"} 2>/dev/null || true)"'
 check "detached HEAD reverts to working-tree-only" "detached HEAD"
 
 # 2. Go back to a local-only trunk lookup. `develop` and CI checkouts lose it.

@@ -31,9 +31,16 @@
 # resolved (files, not directories). See loop-commit-merge.sh for how the
 # merge commit is built without committing the shared index, and what it checks.
 #
+# ONE CONTENT RULE RIDES ALONG. If the commit would publish
+# inbox/needs-human.md, every NEW or CHANGED section in it must carry a usable
+# `Precedent searched: <queries run> → <result>` line, judged against the same
+# base as the stop gate, or the commit is refused before anything is staged (see check-inbox-precedent.py for the rule
+# and for why it reads the file rather than the command that wrote it). It runs
+# on a merge commit too. This is not a git hook, so --no-verify does not skip it.
+#
 # EXIT: git's own code; 2 on a usage error; 3 if an operation in progress was
-# refused; 4 if a merge commit landed on a HEAD that moved; 75 if the lock
-# stayed busy.
+# refused; 4 if a merge commit landed on a HEAD that moved; 65 if a new inbox
+# section has no usable precedent line; 75 if the lock stayed busy.
 
 set -uo pipefail
 
@@ -46,7 +53,7 @@ PATHS=()
 seen_sep=0
 
 usage() {
-  sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -101,6 +108,58 @@ if [ -f "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ]; then
   echo "  Either \`git cherry-pick --abort\`, or ask a human to finish it. Nothing was committed." >&2
   exit 3
 fi
+
+# The inbox rule, BEFORE staging, so a refusal leaves the index as it found it.
+# The working file is what `git commit -- <paths>` is about to publish. The
+# base is the stop gate's own (its merge base against the trunk), asked of the
+# gate, so the two never disagree: judging against HEAD instead let a branch
+# that had added a bare section before this rule existed commit the inbox
+# again, while the gate refused the stop. HEAD only when the gate has no base.
+# Any non-zero answer refuses, including "the check could not run": a check
+# that fails open is a check that is not there.
+#
+# It runs AFTER the cherry-pick refusal (nothing is committed there, so there
+# is nothing to judge) and BEFORE the merge path, so a merge commit is judged
+# too. On a merge it judges what the merge commit PUBLISHES (--merge-commit):
+# a named inbox is the working file; an unnamed one is the merged blob, since
+# loop-commit-merge.sh commits what the merge produced for every path not
+# named. Judging the working file there let a bare section through (refused,
+# the line added to the working file only, the rerun passed, the merged blob
+# committed bare) and refused merges over working-only edits never committed.
+# The gate's base folds MERGE_HEAD in while a merge is in progress (see
+# gate_base), so sections the merged-in side already shares with the trunk are
+# not re-judged: merging the trunk into a branch must not refuse the trunk's
+# own inbox.
+#
+# Only a line that names a commit is taken as the base. The gate may print a
+# status line (its worktree-root notice) before the base, and a status line
+# read as a ref would judge every section as new.
+#
+# With no inbox anywhere (not on disk, and on a merge in neither parent) there
+# is nothing to judge, so the check is not started: a copy of this wrapper laid
+# down without its sibling scripts, as the merge pin's mutant is, must still
+# reach the merge path.
+INBOX_MERGING=0
+[ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ] && INBOX_MERGING=1
+HAS_INBOX=0
+if [ -f "$ROOT/inbox/needs-human.md" ]; then
+  HAS_INBOX=1
+elif [ "$INBOX_MERGING" = 1 ] && { git cat-file -e "HEAD:inbox/needs-human.md" 2>/dev/null || git cat-file -e "MERGE_HEAD:inbox/needs-human.md" 2>/dev/null; }; then
+  HAS_INBOX=1
+fi
+if [ "$HAS_INBOX" = 1 ]; then
+  INBOX_BASE="$(CLAUDE_PROJECT_DIR="$ROOT" bash "$HERE/../hooks/stop_gate.sh" --print-base </dev/null 2>/dev/null || true)"
+  INBOX_BASE="${INBOX_BASE##*$'\n'}"
+  git rev-parse --verify --quiet "${INBOX_BASE:-none}^{commit}" >/dev/null 2>&1 || INBOX_BASE=""
+  INBOX_MODE=()
+  [ "$INBOX_MERGING" = 1 ] && INBOX_MODE=(--merge-commit)
+  python3 "$HERE/check-inbox-precedent.py" --root "$ROOT" --base "${INBOX_BASE:-HEAD}" ${INBOX_MODE[@]+"${INBOX_MODE[@]}"} -- "${PATHS[@]}" || {
+    echo "loop-commit.sh: nothing was staged or committed — fix inbox/needs-human.md and run this again" >&2
+    [ "$INBOX_MERGING" = 1 ] && echo "  On a merge, an inbox you do not name is committed as the merge produced it; to commit your fix, name inbox/needs-human.md." >&2
+    exit 65
+  }
+fi
+
 if [ -f "$(git rev-parse --git-path MERGE_HEAD 2>/dev/null)" ]; then
   bash "$HERE/loop-commit-merge.sh" ${GIT_FLAGS[@]+"${GIT_FLAGS[@]}"} "${MSG_ARGS[@]}" -- "${PATHS[@]}"
   rc=$?
