@@ -69,11 +69,16 @@ with `read: <what you read, which env>` or `n/a: <why>`. Two rules decide
 whether the finding may move on, and `triage_state.py` enforces both at
 `spec-draft`, `spec-ready` and `pr-open`:
 
-- **At least two `read:` rows on different systems of record**, or the explicit
-  line `Live state: none — <why>` when the finding makes no claim about live
-  state (a doc typo, a refactor). Two reads of one system are one source. A
-  `derived` row — response field, URL parameter, cached flag — is recorded and
-  worth zero. A missing or empty section is refused; a stated zero is not.
+- **Always at least two `read:` rows on different systems of record, and one
+  of them LIVE** — identity, data (read-only) or runtime/logs — whenever the
+  finding is about a real user, row, flag or runtime behaviour. Code, memory,
+  tracker and `derived` values (response field, URL parameter, cached flag)
+  never count as live; a `derived` row is worth zero altogether. Two reads of
+  one system are one source.
+- A finding that claims nothing live (a doc typo, a refactor, a parser bug)
+  says `Live state: none — <why>`. That waives the live read, not the two
+  systems: a code-only finding reads code plus memory or the tracker.
+  A missing or empty section is refused.
 - **Every observation that does not fit is explained.** `## Does not fit`
   holds `- none — <what was checked>`, or one item per contradiction with an
   `explained:` line. The incident's own note — "a plain sign-in did not loop"
@@ -82,8 +87,10 @@ whether the finding may move on, and `triage_state.py` enforces both at
 The gate cannot tell whether a `read:` happened or whether you read the right
 systems; it makes you say which, where a reviewer will see it. If a human
 decides to move on without the evidence, the door is
-`--override-sources "<reason>"`, and the reason is written into
-`state/triage.md`, which the tick commits.
+`--override-sources "<reason>" --approved-by "<human name>"`. Nothing skips a
+human: the approver must be a person (an agent, bot or CI identity is
+refused; `.loopkit/approvers.txt`, if present, is the allowlist), and the
+reason and approver are written into `state/triage.md`, which the tick commits.
 
 ### A1. Establish the baseline before you touch anything
 
@@ -175,8 +182,9 @@ Row source: <the triage row's source, exactly as in state/triage.md>
 | identity | identity provider | <read: what, env — or n/a: why> |
 | data | database | <read: what, env — or n/a: why> |
 
-<!-- or, when the finding makes no claim about live state, instead of the table: -->
+<!-- when the finding makes no claim about live state, add above the table: -->
 <!-- Live state: none — <why no system holds state about this> -->
+<!-- (two systems are still required; it waives only the live read) -->
 
 ## Does not fit
 
@@ -333,8 +341,10 @@ agent implements and a third judges.
   read the system they were copied from. Two reads of one system are one
   source; the gate counts systems, not rows.
 - `Live state: none — <why>` is a statement a reviewer can disagree with, not a
-  way past the gate. Use it only when no system holds state the finding is
-  about.
+  way past the gate. It waives only the live read; the two systems stay. Use
+  it only when no system holds state the finding is about.
+- Rows that were in flight before the gate are not exempt (owner, 2026-10-16:
+  "Gate them too"). Add the sections at the row's next move.
 
 ## Reference files
 

@@ -1,6 +1,7 @@
 # 0008 — A finding moves forward only on evidence from two systems of record
 
-Status: **proposed** (owner request, 2026-10-15). The EARS wording is a draft at
+Status: **proposed** (owner request, 2026-10-15; the three open questions were
+ruled by the owner on 2026-10-16 and are built — decisions 2, 5 and Consequences). The EARS wording is a draft at
 `state/2026-10-15-spec-draft-evidence-gate.md` and awaits ratification.
 
 ## Context
@@ -38,14 +39,17 @@ contradiction list in which any unexplained observation blocks the conclusion.
 The gate does **not** try to detect "a claim about live state" from free text.
 That is a blocklist of phrasings, and it leaks the first time somebody phrases
 the claim a new way. Instead every assessment states its position explicitly,
-in a `## Sources` section, as one of:
+in a `## Sources` section:
 
-- **at least two `read:` rows on different systems of record**, or
-- **`Live state: none — <why>`**, a declared zero.
+- **always at least two `read:` rows on different systems of record**; and
+- **one of them from a LIVE system** (identity, data, runtime) — unless the
+  assessment declares **`Live state: none — <why>`**, which waives only the
+  live requirement, never the two systems.
 
 A missing section, an empty section, a table with no usable rows, or a `none`
-with no reason is a *fabricated* zero and is refused. A *real* zero is
-allowed, because it is written down where a reviewer can disagree with it.
+with no reason is a *fabricated* declaration and is refused. A real
+`Live state: none` is allowed, because it is written down where a reviewer can
+disagree with it.
 
 ### 2. "Independent" means a different system of record — and the gate decides which system, not the writer
 
@@ -69,12 +73,19 @@ display, the class is the key. Systems are an allowlist owned by the project.
 
 What the gate **cannot** do is prove that a `read:` happened. It makes the
 agent name two systems of record and say what it read, in which environment;
-whether that is true stays the reviewer's job. Nor does it check that the
-*right* systems were read — two honest reads of code and memory pass a claim
-about a user's state. Requiring a read from a "live" class (identity, data,
-runtime) unless `Live state: none` is declared would close that, at the cost of
-an extra read or an extra declaration on every code-only finding. That is a
-product choice left to the owner; see the PR.
+whether that is true stays the reviewer's job.
+
+**Live systems** (owner ruling 2026-10-16 on whether one read must be live:
+"both above options are needed"). Classes marked `live: true` — by default
+`identity`, `data` (read-only) and `runtime` (logs, analytics) — are where live
+state is *kept*. A finding about a real user, firm, row, flag or runtime
+behaviour must read at least one of them; `code`, `memory`, `tracker` and
+`derived` describe or copy the state and never satisfy this. Two honest reads
+of code and memory therefore no longer pass a claim about a user. A finding
+that claims nothing live declares `Live state: none — <why>`, and still needs
+two systems for what it does claim: **a code-only finding reads code plus one
+more system — memory (a trap or ruling about that code) or the tracker (the
+report that raised it).**
 
 ### 3. Contradictions block until each one is explained
 
@@ -104,18 +115,38 @@ used. None is refused; more than one is refused and names them, and
 row). The queue keeps its five columns — `specs/blocked-waits-on-what.md`
 forbids a sixth.
 
-### 5. One override, and its reason is committed
+### 5. One override, approved by a named human, and its reason is committed
 
-`--override-sources "<reason>"`, the same shape as `--override-verdict`. An
-empty reason is refused. An override on a transition the evidence already
+`--override-sources "<reason>" --approved-by "<human name>"`. An empty reason
+is refused, and so is an override with no approver. **There is no label-based
+skip of any kind** — no flag, priority or word in the finding opens the door,
+urgent fixes included. Owner ruling, 2026-10-16: "i should always review,
+nothing skips a human in loop at least once".
+
+How a human approver is told from an agent, strongest rule first:
+
+1. If `<project>/.loopkit/approvers.txt` exists, the name must be on it
+   (case-insensitive). This is the guarantee; projects that want it add the
+   file.
+2. The name may not equal `LOOPKIT_AGENT`, the agent running the command.
+3. Without an allowlist, a name is refused when any of its words is a role or
+   tool word (`agent`, `bot`, `claude`, `reviewer`, `implementer`, `ci`,
+   `runner`, `github`, `noreply`, … — `evidence.AGENT_WORDS`), when it carries
+   `[bot]` or an `@` address, when it holds a run of four or more digits, or
+   when it has no word of two letters.
+
+Rule 3 is a tripwire against an agent writing its own role, model or CI
+identity into the field — the failure that actually happens — not proof of
+humanity. A human-looking name typed by an agent passes it; that is why the
+name is committed where a human reads it, and why rule 1 exists. An override on a transition the evidence already
 allows records nothing.
 
 An earlier review found that override reasons written only to
 `state/ticks.jsonl` never reach a commit. So this one is written twice: as a
 `sources-override` event in the ledger, and as a line under
 `## Evidence-gate overrides` in `state/triage.md` — the file every tick already
-commits — naming the date, the row, the target status, the reason and the
-agent (or `unset`). It is written only after the row write succeeded, so a
+commits — naming the date, the row, the target status, the reason, the human
+approver and the agent that ran it (or `unset`). It is written only after the row write succeeded, so a
 transition that failed for another reason leaves no override behind.
 
 ### 6. Fail closed
@@ -128,10 +159,11 @@ that could not run is not a pass.
 ## Consequences
 
 - Every finding at `new` that goes to the pipeline now needs an assessment with
-  both sections before `spec-draft`. Rows already past `new` when a project
-  upgrades meet the gate at their next gated move; the honest options are to
-  add the sections or to override with a reason (`pre-0.2.5 row`). Whether to
-  grandfather such rows automatically is left to the owner.
+  both sections before `spec-draft`.
+- **No grandfathering** (owner ruling 2026-10-16: "Gate them too"). A row
+  already past `new` when a project upgrades is checked at its NEXT gated move
+  like any other. The way through is adding the evidence, or an override with
+  a reason and a named human approver.
 - `source-snapshot.py` writes the `## Sources` skeleton: one row per class, the
   finding's nouns matched to classes as a *suggestion*, and a probe of which
   tools answer. A tool it cannot probe — including every MCP server, which a

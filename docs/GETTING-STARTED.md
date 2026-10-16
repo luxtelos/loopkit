@@ -224,7 +224,8 @@ That is the whole prompt. A hook injects the discipline the moment it sees
    ```
    That move is refused unless the row's assessment (the file under `state/`
    carrying `Row source: <row source>`) has a `## Sources` section naming at
-   least two systems of record it read — or `Live state: none — <why>` — and a
+   least two systems of record it read, one of them live (identity, data,
+   runtime) unless it says `Live state: none — <why>`, and a
    `## Does not fit` section with every contradiction explained. The same
    check guards `spec-ready` and `pr-open`. `source-snapshot.py` writes the
    skeleton; docs/adr/0008-evidence-gate.md says why.

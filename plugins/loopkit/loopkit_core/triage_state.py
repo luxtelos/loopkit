@@ -610,7 +610,8 @@ def iter_rows(
 # transitions that commit the loop to a cause (writing acceptance for it,
 # building it, asking a human to merge it) now require the row's assessment to
 # carry a `## Sources` section naming at least two independent systems of
-# record (or `Live state: none — <why>`), and a `## Does not fit` section in
+# record, one of them live unless it says `Live state: none — <why>`, and a
+# `## Does not fit` section in
 # which every contradiction is explained. The parsing is pure and lives in
 # `evidence.py`; this half only decides and records.
 #
@@ -651,10 +652,14 @@ def check_evidence(
     status: str | None,
     assessment: str | None,
     override: str | None,
+    approved_by: str | None = None,
 ) -> dict | None:
     """Pure. None when the transition is not gated, or passes. A pending
     override record when the evidence fails and a reasoned override was given.
     Raises ValueError when the transition is refused."""
+    if approved_by is not None and override is None:
+        raise ValueError("--approved-by only means something with --override-sources; "
+                         "an approval of nothing is refused")
     if normalize_cell(status or "") not in EVIDENCE_GATED_STATUSES:
         return None
     ev = _evidence_module()
@@ -663,6 +668,11 @@ def check_evidence(
             "--override-sources needs a reason. An override with no reason is not a "
             "decision, it is the gate switched off."
         )
+    if override is not None:
+        who = ev.approver_problems(approved_by, os.environ.get("LOOPKIT_AGENT"),
+                                   project_root_for(state))
+        if who:
+            raise ValueError(who[0])
     try:
         path, problems = ev.evaluate(project_root_for(state), normalize_cell(source), assessment)
     except ValueError as exc:
@@ -674,6 +684,7 @@ def check_evidence(
             "source": normalize_cell(source),
             "status": normalize_cell(status or ""),
             "reason": normalize_cell(override),
+            "approved_by": normalize_cell(approved_by or ""),
             "assessment": str(path) if path else None,
             "problems": problems,
         }
@@ -685,7 +696,8 @@ def check_evidence(
         f"Fix the assessment (loop-assess A0 writes the `## Sources` skeleton: "
         f"`python3 <plugin>/scripts/source-snapshot.py --finding \"<the finding>\"`), or, "
         f"if a human has decided to go ahead without it, say so where it is committed:\n"
-        f"  triage_state.py update ... --status {status} --override-sources \"<reason>\""
+        f"  triage_state.py update ... --status {status} --override-sources \"<reason>\" "
+        f"--approved-by \"<human name>\""
     )
 
 
@@ -695,12 +707,14 @@ def record_sources_override(state: Path, record: dict) -> str:
     import datetime
     agent = os.environ.get("LOOPKIT_AGENT") or "unset"
     _append_event(state, "sources-override", source=record["source"], status=record["status"],
-                  reason=record["reason"], assessment=record.get("assessment"),
+                  reason=record["reason"], approved_by=record["approved_by"],
+                  assessment=record.get("assessment"),
                   problems=record["problems"][:5], by=agent)
     day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     first = normalize_cell(record["problems"][0]).split(". ")[0][:200] if record["problems"] else ""
     line = (f"- {day} `{record['source']}` → {record['status']}: {record['reason']} "
-            f"(by {agent}; the gate said: {first})").replace("|", "\\|")
+            f"(approved by {record['approved_by']}; run by {agent}; the gate said: "
+            f"{first})").replace("|", "\\|")
     table = parse_table(state)
     lines = table.suffix.split("\n") if table.suffix else [""]
     heads = [i for i, l in enumerate(lines) if l.strip() == OVERRIDES_HEADING]
@@ -720,7 +734,8 @@ def record_sources_override(state: Path, record: dict) -> str:
     write_table(state, table)
     return (
         f"OVERRIDE: '{record['source']}' moved to {record['status']} WITHOUT the evidence the "
-        f"gate asks for.\n  reason: {record['reason']}\n  the gate said: {first}\n"
+        f"gate asks for.\n  reason: {record['reason']}\n  approved by: {record['approved_by']}\n"
+        f"  the gate said: {first}\n"
         f"  recorded under '{OVERRIDES_HEADING}' in {state} (commit it with the tick) and in "
         f"{ledger_path(state)} as a sources-override event."
     )
@@ -743,6 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     upsert_parser.add_argument("--override-verdict", default=None, metavar="REASON")
     upsert_parser.add_argument("--assessment", default=None, metavar="PATH")
     upsert_parser.add_argument("--override-sources", default=None, metavar="REASON")
+    upsert_parser.add_argument("--approved-by", default=None, metavar="HUMAN")
 
     update_parser = subparsers.add_parser("update")
     update_parser.add_argument("--state", required=True)
@@ -768,6 +784,12 @@ def build_parser() -> argparse.ArgumentParser:
              "the evidence the gate asks for. The reason is written to state/triage.md "
              "under '## Evidence-gate overrides' (committed with the tick) and to the "
              "ledger. For a human who has decided — not for an agent in a hurry.",
+    )
+    update_parser.add_argument(
+        "--approved-by", default=None, metavar="HUMAN",
+        help="required with --override-sources: the human who approved moving on "
+             "without the evidence. Recorded with the override. An agent or process "
+             "identity is refused; .loopkit/approvers.txt, if present, is the allowlist.",
     )
 
     verdict_parser = subparsers.add_parser(
@@ -840,7 +862,8 @@ def main() -> int:
                 # The evidence gate first: it is pure, so a refusal here leaves
                 # nothing behind — not even the verdict gate's override event.
                 pending = check_evidence(state_path, args.source, args.status,
-                                         args.assessment, args.override_sources)
+                                         args.assessment, args.override_sources,
+                                         args.approved_by)
                 note = check_gate(state_path, args.source, args.status, args.override_verdict)
                 if note:
                     print(note, file=sys.stderr)
@@ -863,7 +886,8 @@ def main() -> int:
                 # refused. The evidence gate is pure and goes first, so its
                 # refusal leaves no trace of the verdict gate either.
                 pending = check_evidence(state_path, args.source, args.status,
-                                         args.assessment, args.override_sources)
+                                         args.assessment, args.override_sources,
+                                         args.approved_by)
                 note = check_gate(state_path, args.source, args.status, args.override_verdict)
                 if note:
                     print(note, file=sys.stderr)

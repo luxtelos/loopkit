@@ -1237,18 +1237,18 @@ echo "== evidence gate: a cause moves forward only on evidence it wrote down"
 eg="$(python3 "$REPO/tests/pins/evidence-gate.py" 2>&1)"; eg_rc=$?
 printf '%s\n' "$eg" | grep '^  FAIL' || true
 eg_ok="$(printf '%s\n' "$eg" | grep -c '^  ok ' || true)"
-[ "$eg_rc" = 0 ] && [ "$eg_ok" -ge 148 ] \
-  && ok "one source, one system read twice, derived values, missing or empty sections and unexplained contradictions are refused; two systems, a stated 'Live state: none' and a recorded override pass ($eg_ok cases)" \
-  || fail "evidence gate: rc=$eg_rc, $eg_ok/148 cases ok — $(printf '%s' "$eg" | tail -1)"
+[ "$eg_rc" = 0 ] && [ "$eg_ok" -ge 244 ] \
+  && ok "one source, one system read twice, derived values, missing or empty sections and unexplained contradictions are refused; two systems with one live, a stated 'Live state: none' with two systems, and a human-approved override pass ($eg_ok cases)" \
+  || fail "evidence gate: rc=$eg_rc, $eg_ok/244 cases ok — $(printf '%s' "$eg" | tail -1)"
 # Each half must be able to fail on its own: one mutation per half, each in a
 # scratch copy, each required to turn its own line red.
 egr="$(bash "$REPO/tests/pins/evidence-gate-prove-red.sh" "$REPO" 2>&1)"
 egr_red="$(printf '%s\n' "$egr" | grep -c '^RED, as required' || true)"
 egr_not="$(printf '%s\n' "$egr" | grep -c 'NOT RED' || true)"
 printf '%s\n' "$egr" | grep 'NOT RED' || true
-[ "$egr_red" = 24 ] && [ "$egr_not" = 0 ] \
-  && ok "all 24 halves of the evidence gate are provably catchable, and the harness left the tracked tree alone" \
-  || fail "evidence gate mutations: $egr_red/24 red, $egr_not not red"
+[ "$egr_red" = 34 ] && [ "$egr_not" = 0 ] \
+  && ok "all 34 halves of the evidence gate are provably catchable, and the harness left the tracked tree alone" \
+  || fail "evidence gate mutations: $egr_red/34 red, $egr_not not red"
 
 
 echo "== the queue never parses as empty when it is not"

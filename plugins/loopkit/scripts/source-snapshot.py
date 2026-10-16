@@ -129,9 +129,10 @@ def render(snap: dict) -> str:
         f"<!-- source-snapshot.py {snap['date']}. Replace every evidence cell with "
         f"`read: <what you read, which env>` or `n/a: <why>`. At least "
         f"{evidence.MIN_INDEPENDENT} `read:` rows on different systems are needed for "
-        f"spec-draft, spec-ready and pr-open; a `derived` row is recorded and worth zero. "
-        f"If the finding makes no claim about live state, replace the table with "
-        f"`Live state: none — <why>`. -->",
+        f"spec-draft, spec-ready and pr-open, one of them from a live class (identity, "
+        f"data, runtime); a `derived` row is recorded and worth zero. If the finding makes "
+        f"no claim about live state, add `Live state: none — <why>` above the table; the "
+        f"two systems are still needed. -->",
         "",
         "| class | system of record | evidence | finding mentions | note |",
         "|---|---|---|---|---|",

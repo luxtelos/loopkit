@@ -54,21 +54,21 @@ plugins/loopkit/loopkit_core/evidence.py
 @@
 FAIL [E4] REFUSED: two reads of the SAME system
 @@
-            key = system_key(spec["system"])
-            if key not in systems:
-                systems.append(key)
+        if counts and key not in systems:
+            systems.append(key)
 @@
-            systems.append(system_key(spec["system"]))
+        if counts:
+            systems.append(key)
 @@@@
 DERIVED-COUNTS
 @@
 plugins/loopkit/loopkit_core/evidence.py
 @@
-FAIL [E5] REFUSED: the incident's own evidence
+FAIL [E5] REFUSED: identity plus a derived value is ONE system
 @@
-        if m.group(1).lower() == "read" and spec.get("counts", True) is not False:
+        counts = spec.get("counts", True) is not False
 @@
-        if m.group(1).lower() == "read":
+        counts = True
 @@@@
 MISSING-SOURCES-PASSES
 @@
@@ -108,11 +108,41 @@ LIVE-NONE-IGNORED
 @@
 plugins/loopkit/loopkit_core/evidence.py
 @@
-FAIL [E7] ALLOWED: `Live state: none
+FAIL [E7] ALLOWED: `Live state: none — <why>` with two non-live systems
 @@
-    if live_none is None and len(systems) < MIN_INDEPENDENT:
+    if live_none is None and not live:
+@@
+    if not live:
+@@@@
+LIVE-NONE-WAIVES-TWO-SYSTEMS
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E7] REFUSED: `Live state: none — <why>` with NO reads
 @@
     if len(systems) < MIN_INDEPENDENT:
+@@
+    if live_none is None and len(systems) < MIN_INDEPENDENT:
+@@@@
+LIVE-READ-NOT-REQUIRED
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E23] REFUSED: code + memory on a LIVE-state finding
+@@
+    if live_none is None and not live:
+@@
+    if False:
+@@@@
+DERIVED-COUNTS-AS-LIVE
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E23] REFUSED: a derived value never satisfies the live requirement
+@@
+        if counts and spec.get("live") is True and key not in live:
+@@
+        if (spec.get("live") is True or not counts) and key not in live:
 @@@@
 UNKNOWN-CLASS-IGNORED
 @@
@@ -228,7 +258,8 @@ FAIL [E1] REFUSED: upsert is gated too
 @@
                 # nothing behind — not even the verdict gate's override event.
                 pending = check_evidence(state_path, args.source, args.status,
-                                         args.assessment, args.override_sources)
+                                         args.assessment, args.override_sources,
+                                         args.approved_by)
 @@
                 # nothing behind — not even the verdict gate's override event.
                 pending = None
@@ -302,6 +333,81 @@ FAIL [E18] it prints the server NAME and never its configuration
     return sorted(str(k) for k in servers) if isinstance(servers, dict) else []
 @@
     return sorted(f"{k} {json.dumps(v)}" for k, v in servers.items()) if isinstance(servers, dict) else []
+@@@@
+APPROVER-OPTIONAL
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E20] REFUSED: an override with NO named approver
+@@
+    if override is not None:
+        who = ev.approver_problems(
+@@
+    if False:
+        who = ev.approver_problems(
+@@@@
+APPROVED-BY-ALONE
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E20] REFUSED: --approved-by without --override-sources
+@@
+    if approved_by is not None and override is None:
+@@
+    if False:
+@@@@
+APPROVER-NOT-RECORDED
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E20]   ...the committed record names the human approver
+@@
+            f"(approved by {record['approved_by']}; run by {agent}; the gate said: "
+@@
+            f"(run by {agent}; the gate said: "
+@@@@
+AGENT-SHAPE-IGNORED
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E21] REFUSED: an override whose approver looks like an agent or process
+@@
+    if hits or "[bot]" in who.lower() or "@" in who or _LONG_DIGITS.search(who):
+@@
+    if False:
+@@@@
+SELF-APPROVAL
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E21] REFUSED: an approver equal to the acting agent
+@@
+    if acting_agent and who.lower() == norm(acting_agent).lower():
+@@
+    if False:
+@@@@
+ALLOWLIST-IGNORED
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E21] REFUSED: with .loopkit/approvers.txt present
+@@
+    allow = approvers_allowlist(root)
+@@
+    allow = None
+@@@@
+GRANDFATHER-ROWS-WITHOUT-ASSESSMENT
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E24] REFUSED: an in-flight fixing row with NO assessment
+@@
+    if not hits:
+        return None, [f"no assessment under
+@@
+    if not hits:
+        return None, []
+        return None, [f"no assessment under
 EOF
 
 # Split the data into one directory per mutation: id, file, want, old, new.

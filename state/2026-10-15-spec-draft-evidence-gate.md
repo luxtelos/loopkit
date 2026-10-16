@@ -9,7 +9,8 @@
 - ADR: `docs/adr/0008-evidence-gate.md`
 - Outcome: a finding cannot move to `spec-draft`, `spec-ready` or `pr-open`
   unless its assessment names at least two independent systems of record it
-  read, or declares in writing that it makes no claim about live state — and
+  read — one of them live, unless it declares in writing that it makes no
+  claim about live state — and
   every observation that does not fit the conclusion has been explained.
 
 ## Why
@@ -57,9 +58,10 @@ finding *should* have read; any new queue column or status.
   `Live state: none — <why>` line nor a sources table with at least one row,
   THE recorder SHALL refuse the transition (an empty section is a fabricated
   zero).
-- **E3** WHEN the usable `read:` rows name fewer than two independent systems
-  and no usable `Live state: none` line is present, THE recorder SHALL refuse
-  the transition and name the systems it counted.
+- **E3** WHEN the usable `read:` rows name fewer than two independent systems,
+  THE recorder SHALL refuse the transition and name the systems it counted —
+  whether or not `Live state: none` is declared (owner, 2026-10-16: "both
+  above options are needed").
 - **E4** WHEN two `read:` rows are of the same class, or of classes mapped to
   the same system, THE recorder SHALL count them as one system.
 - **E5** WHEN a `read:` row's class sets `counts: false` (the default
@@ -69,7 +71,16 @@ finding *should* have read; any new queue column or status.
   evidence is neither a usable `read:` nor a usable `n/a:`, THE recorder SHALL
   refuse the transition and name the row.
 - **E7** WHEN the section carries a usable `Live state: none — <why>` line,
-  THE recorder SHALL accept the sources half with zero reads.
+  THE recorder SHALL waive the live requirement (E23) and SHALL still require
+  two independent systems (E3); a code-only finding reads code plus memory or
+  the tracker.
+- **E23** WHEN no usable `Live state: none` line is present, THE recorder
+  SHALL refuse unless at least one counted `read:` comes from a class with
+  `live: true` (defaults: `identity`, `data`, `runtime`); `code`, `memory`,
+  `tracker` and `derived` SHALL never satisfy it.
+- **E24** WHEN a row that was already past `new` before the gate existed makes
+  its next gated move, THE recorder SHALL check it like any other row (owner,
+  2026-10-16: "Gate them too"); there is no grandfathering.
 
 **Contradictions**
 
@@ -91,14 +102,29 @@ finding *should* have read; any new queue column or status.
 **Override**
 
 - **E12** WHEN `--override-sources "<reason>"` is given with a usable reason
-  and the evidence would refuse, THE recorder SHALL allow the transition, say
+  and an acceptable approver (E20, E21), and the evidence would refuse, THE recorder SHALL allow the transition, say
   so on stderr, append a `sources-override` event to `state/ticks.jsonl`, AND
-  append a line naming date, row, status, reason and agent under
+  append a line naming date, row, status, reason, approver and agent under
   `## Evidence-gate overrides` in `state/triage.md`.
 - **E13** WHEN the override reason is empty or not usable, THE recorder SHALL
   refuse the transition.
 - **E14** WHEN the transition fails for any other reason (unknown source,
   verdict gate), THE recorder SHALL record no override.
+
+**Approver** (owner ruling 2026-10-16: "nothing skips a human in loop at least once")
+
+- **E20** WHEN `--override-sources` is given without a usable `--approved-by
+  <human name>`, THE recorder SHALL refuse the transition; WHEN
+  `--approved-by` is given without `--override-sources`, THE recorder SHALL
+  refuse; WHEN an override is allowed, THE approver SHALL appear in both the
+  `state/triage.md` line and the ledger event.
+- **E21** IF `.loopkit/approvers.txt` exists, THEN THE approver SHALL be on it;
+  OTHERWISE THE recorder SHALL refuse an approver equal to `LOOPKIT_AGENT`, or
+  one with a role/tool word (`evidence.AGENT_WORDS`), a `[bot]` tag, an `@`
+  address or a run of 4+ digits.
+- **E22** THE recorder SHALL offer no label-, priority- or flag-based skip of
+  the gate; a row labelled as an urgent fix with no evidence SHALL be refused
+  like any other.
 
 **Control**
 

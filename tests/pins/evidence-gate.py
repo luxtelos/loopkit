@@ -211,6 +211,14 @@ refused("E5", "the incident's own evidence: a response field and a URL parameter
 | code    | code graph + git | read: the handler that sets both, at the deployed commit |
 """)))
 
+refused("E5", "identity plus a derived value is ONE system, not two", project(assessment(sources="""## Sources
+
+| class    | system of record  | evidence |
+|---|---|---|
+| identity | identity provider | read: user record, dev |
+| derived  | app output        | read: the response field agrees |
+""")))
+
 refused("E1", "no `## Sources` section at all", project(assessment(sources=None)))
 
 refused("E2", "an EMPTY `## Sources` section (a fabricated zero)", project(assessment(
@@ -219,8 +227,16 @@ refused("E2", "an EMPTY `## Sources` section (a fabricated zero)", project(asses
 refused("E2", "a `## Sources` table with a header and no rows", project(assessment(
     sources="## Sources\n\n| class | system of record | evidence |\n|---|---|---|\n")))
 
-refused("E2", "`Live state: none` with no reason", project(assessment(
-    sources="## Sources\n\nLive state: none —\n")))
+refused("E2", "`Live state: none` with no reason (even beside two non-live reads)", project(assessment(
+    sources="""## Sources
+
+Live state: none —
+
+| class  | system of record | evidence |
+|---|---|---|
+| code   | code graph + git | read: the parser at main |
+| memory | memory           | read: the parser trap note |
+""")))
 
 refused("E6", "the snapshot's placeholders left in (`read: <what, env>`)", project(assessment(
     sources="""## Sources
@@ -288,9 +304,32 @@ p = project(assessment())
 refused("E11", "--assessment naming a file that declares a DIFFERENT row", p, "spec-draft",
         "--assessment", str(p / "state" / "other-assessment.md"))
 
+def with_pass(root):
+    """A recorded reviewer PASS, so a pr-open refusal can only come from the
+    evidence gate and not from the verdict gate."""
+    run(root, "verdict", "--source", "src/one", "--result", "PASS", "--by", "reviewer")
+    return root
+
+
 for target in ("spec-ready", "pr-open"):
-    refused("E1", f"the gate bites {target} too, not only spec-draft",
-            project(assessment(sources=None), status="fixing"), target, start="fixing")
+    refused("E1", f"the gate bites {target} too, not only spec-draft (verdict PASS on record)",
+            with_pass(project(assessment(sources=None), status="fixing")), target, start="fixing")
+
+# Owner ruling 2026-10-16 on Q3, "Gate them too": no grandfathering. A row that
+# was already past `new` when the gate arrived is checked at its NEXT gated
+# move like any other. The old-style assessment below is what a pre-0.2.5 row
+# carries: the A3 sections as they were, no Sources, no Does not fit.
+OLD_STYLE = ("# Assessment\n\nRow source: src/one\n\n## Observed\n\nx\n\n## Evidence\n\ny\n\n"
+             "## Control case\n\nz\n\n## Classification\n\ncode\n")
+refused("E24", "an in-flight spec-draft row with an old-style assessment, at its next move (spec-ready)",
+        project(OLD_STYLE, status="spec-draft"), "spec-ready", start="spec-draft")
+refused("E24", "an in-flight fixing row with NO assessment at all, at its next move (pr-open)",
+        with_pass(project(None, status="fixing")), "pr-open", start="fixing")
+p = project(OLD_STYLE, status="spec-draft")
+r = move(p, "spec-ready", "--override-sources", "in flight before the gate; evidence to follow",
+         "--approved-by", "Asha Rao")
+check("E24", "...the documented way through for such a row is an override naming a human",
+      r.returncode == 0 and status_of(p) == "spec-ready", r.stdout + r.stderr)
 
 p = project(assessment(sources=None))
 before = (p / "state" / "triage.md").read_bytes()
@@ -300,9 +339,52 @@ check("E1", "REFUSED: upsert is gated too (a gate on one verb is a signposted de
       r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
 
 refused("E13", "--override-sources with an EMPTY reason", project(assessment(sources=None)),
-        "spec-draft", "--override-sources", "")
+        "spec-draft", "--override-sources", "", "--approved-by", "Asha Rao")
 refused("E13", "--override-sources with a reason that says nothing", project(assessment(sources=None)),
-        "spec-draft", "--override-sources", " - ")
+        "spec-draft", "--override-sources", " - ", "--approved-by", "Asha Rao")
+
+# Owner ruling 2026-10-16 on hotfixes: "i should always review, nothing skips a
+# human in loop at least once". So an override names the human who approved it,
+# and an approver that is an agent or a process is refused.
+out = refused("E20", "an override with NO named approver", project(assessment(sources=None)),
+              "spec-draft", "--override-sources", "owner said go")
+check("E20", "  ...and the refusal says a human must be named", "--approved-by" in out, out)
+refused("E20", "an override whose approver is blank", project(assessment(sources=None)),
+        "spec-draft", "--override-sources", "owner said go", "--approved-by", "  ")
+for who in ("reviewer", "loopkit-implementer", "claude", "Claude Opus", "github-actions[bot]",
+            "ci", "tick-agent", "dependabot", "noreply@example.com", "agent 7", "runner-4821"):
+    refused("E21", f"an override whose approver looks like an agent or process: '{who}'",
+            project(assessment(sources=None)), "spec-draft",
+            "--override-sources", "owner said go", "--approved-by", who)
+p = project(assessment(sources=None))
+r = run(p, "update", "--source", "src/one", "--status", "spec-draft",
+        "--override-sources", "owner said go", "--approved-by", "Sam Lee",
+        env={"LOOPKIT_AGENT": "Sam Lee"})
+check("E21", "REFUSED: an approver equal to the acting agent (LOOPKIT_AGENT) — self-approval",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+p = project(assessment(sources=None))
+(p / ".loopkit").mkdir()
+(p / ".loopkit" / "approvers.txt").write_text("# humans who may approve an override\nAsha Rao\n")
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Sam Lee")
+check("E21", "REFUSED: with .loopkit/approvers.txt present, a name not on it",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "asha rao")
+check("E21", "ALLOWED: a name on .loopkit/approvers.txt (case-insensitive)",
+      r.returncode == 0 and status_of(p) == "spec-draft", r.stdout + r.stderr)
+r = move(project(assessment()), "spec-draft", "--approved-by", "Asha Rao")
+check("E20", "REFUSED: --approved-by without --override-sources (an approval of nothing)",
+      r.returncode != 0, r.stdout + r.stderr)
+
+# No hotfix bypass of any kind: no flag, and no label in the row opens the door.
+p = project(assessment(sources=None), rows="| [hotfix] prod down | src/one | hotfix |  | new |\n")
+refused("E22", "a row labelled hotfix (finding and priority) with no evidence", p)
+helptext = run(project(None), "update", "--help").stdout + run(project(None), "upsert", "--help").stdout
+check("E22", "no hotfix flag exists on update or upsert", "hotfix" not in helptext.lower(), helptext)
+srcs = ((PLUGIN / "loopkit_core" / "evidence.py").read_text()
+        + (PLUGIN / "loopkit_core" / "triage_state.py").read_text())
+# The word is kept out of the gate's source on purpose (comments say "urgent
+# fix"), so this stays a one-line grep a reviewer can trust.
+check("E22", "the gate's code never reads the word hotfix", "hotfix" not in srcs.lower())
 
 refused("E17", "a sources.json that is not JSON fails CLOSED", project(assessment(),
         sources_json="{ this is not json"))
@@ -316,9 +398,64 @@ allowed("E3", "two systems read, every contradiction explained", project(assessm
 p = project(assessment(), status="fixing")
 allowed("E3", "spec-ready with the same assessment", p, "spec-ready")
 
-allowed("E7", "`Live state: none — <why>` with no reads at all", project(assessment(
-    sources="## Sources\n\nLive state: none — a typo in a doc; no system holds state about it\n",
-    dnf=NONE_DNF)))
+# Owner ruling 2026-10-16 on Q2, "both above options are needed": two systems
+# ALWAYS, and one of them LIVE unless the finding states it claims nothing live.
+refused("E7", "`Live state: none — <why>` with NO reads: the two-system rule still applies",
+        project(assessment(
+            sources="## Sources\n\nLive state: none — a typo in a doc; no system holds state about it\n",
+            dnf=NONE_DNF)))
+allowed("E7", "`Live state: none — <why>` with two non-live systems (code + memory)", project(assessment(
+    sources="""## Sources
+
+Live state: none — a parser bug; the claim is about what the code does, not about any user or row
+
+| class  | system of record | evidence |
+|---|---|---|
+| code   | code graph + git | read: the parser at the deployed commit |
+| memory | memory           | read: the earlier trap note about the parser |
+""", dnf=NONE_DNF)))
+allowed("E7", "a code-only finding: `Live state: none` + code + tracker", project(assessment(
+    sources="""## Sources
+
+Live state: none — a doc typo
+
+| class   | system of record | evidence |
+|---|---|---|
+| code    | code graph + git | read: the doc at main |
+| tracker | tracker          | read: the issue that reported it |
+""", dnf=NONE_DNF)))
+
+refused("E23", "code + memory on a LIVE-state finding (no `Live state: none`)", project(assessment(
+    sources="""## Sources
+
+| class  | system of record | evidence |
+|---|---|---|
+| code   | code graph + git | read: the handler that sets the invite flag |
+| memory | memory           | read: a note saying invites were flaky |
+""")))
+refused("E23", "a derived value never satisfies the live requirement (code + memory + derived)",
+        project(assessment(sources="""## Sources
+
+| class   | system of record | evidence |
+|---|---|---|
+| code    | code graph + git | read: the handler |
+| memory  | memory           | read: a note |
+| derived | app output       | read: the response field says the invite is pending |
+""")))
+allowed("E23", "code + identity on a live-state finding", project(assessment(sources="""## Sources
+
+| class    | system of record  | evidence |
+|---|---|---|
+| code     | code graph + git  | read: the handler at the deployed commit |
+| identity | identity provider | read: the user's record and roles, dev |
+""")))
+allowed("E23", "code + runtime (logs) on a live-state finding", project(assessment(sources="""## Sources
+
+| class   | system of record   | evidence |
+|---|---|---|
+| code    | code graph + git   | read: the handler at the deployed commit |
+| runtime | logs and analytics | read: the redirect log lines at the time, dev |
+""")))
 
 allowed("E10", "`- none — <what was checked>` alone", project(assessment(dnf=NONE_DNF)))
 
@@ -330,7 +467,8 @@ allowed("E11", "--assessment picks one of two declaring files", p, "spec-draft",
 # The override: allowed, loud, and recorded where a commit will carry it.
 p = project(assessment(sources=None))
 reason = "owner ruled in the PR thread: hotfix | read the logs after"
-r = allowed("E12", "a REASONED --override-sources", p, "spec-draft", "--override-sources", reason,
+r = allowed("E12", "a REASONED --override-sources with a NAMED human approver", p, "spec-draft",
+            "--override-sources", reason, "--approved-by", "Asha Rao",
             env={"LOOPKIT_AGENT": "tick-agent"})
 check("E12", "  ...says so loudly on stderr", "OVERRIDE" in r.stderr, r.stderr)
 ev = [e for e in ledger(p) if e.get("event") == "sources-override"]
@@ -343,9 +481,14 @@ check("E12", "  ...naming the row, the status and the agent",
       "src/one" in tri.split("## Evidence-gate overrides")[-1]
       and "spec-draft" in tri.split("## Evidence-gate overrides")[-1]
       and "tick-agent" in tri.split("## Evidence-gate overrides")[-1], tri)
+check("E20", "  ...the committed record names the human approver",
+      "approved by Asha Rao" in tri.split("## Evidence-gate overrides")[-1], tri)
+check("E20", "  ...and so does the ledger event",
+      bool(ev) and ev[0].get("approved_by") == "Asha Rao", json.dumps(ledger(p)))
 check("E12", "  ...and the queue still parses with a `|` in the reason",
       status_of(p) == "spec-draft", f"status={status_of(p)}")
-r2 = move(p, "spec-ready", "--override-sources", "second override, same row")
+r2 = move(p, "spec-ready", "--override-sources", "second override, same row",
+          "--approved-by", "Asha Rao")
 tri2 = (p / "state" / "triage.md").read_text()
 check("E12", "  ...a second override appends under the same heading, never a second heading",
       r2.returncode == 0 and tri2.count("## Evidence-gate overrides") == 1
@@ -353,14 +496,14 @@ check("E12", "  ...a second override appends under the same heading, never a sec
 
 p = project(assessment(sources=None))
 r = run(p, "update", "--source", "src/nope", "--status", "spec-draft",
-        "--override-sources", "a real reason")
+        "--override-sources", "a real reason", "--approved-by", "Asha Rao")
 check("E14", "an override on a transition that fails anyway records NOTHING",
       r.returncode != 0 and "Evidence-gate overrides" not in (p / "state" / "triage.md").read_text()
       and not [e for e in ledger(p) if e.get("event") == "sources-override"],
       r.stdout + r.stderr + json.dumps(ledger(p)))
 
 p = project(assessment())
-r = move(p, "spec-draft", "--override-sources", "not needed here")
+r = move(p, "spec-draft", "--override-sources", "not needed here", "--approved-by", "Asha Rao")
 check("E12", "an override the evidence did not need is a no-op, not a record",
       r.returncode == 0 and "Evidence-gate overrides" not in (p / "state" / "triage.md").read_text()
       and not [e for e in ledger(p) if e.get("event") == "sources-override"],

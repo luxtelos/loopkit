@@ -1,8 +1,9 @@
 {
-  "_comment": "Systems of record for the evidence gate (docs/adr/0008-evidence-gate.md). An assessment's `## Sources` row names a CLASS; independence is counted over each class's `system` (lower-cased, whitespace collapsed), so two classes with one system are one source. `counts: false` = recorded, worth zero. `nouns` are only suggestions for source-snapshot.py; the gate never reads them. `probes` are argv lists the snapshot runs to see whether a CLI answers; a class with none is reported unknown. Edit freely: add your identity provider's CLI as a probe, split a class, add one. A class not listed here is refused, not ignored.",
+  "_comment": "Systems of record for the evidence gate (docs/adr/0008-evidence-gate.md). An assessment's `## Sources` row names a CLASS; independence is counted over each class's `system` (lower-cased, whitespace collapsed), so two classes with one system are one source. `counts: false` = recorded, worth zero. `live: true` marks a system where live state is kept; unless the assessment says `Live state: none — <why>`, one of its two systems must be live. `nouns` are only suggestions for source-snapshot.py; the gate never reads them. `probes` are argv lists the snapshot runs to see whether a CLI answers; a class with none is reported unknown. Edit freely: add your identity provider's CLI as a probe, split a class, add one. A class not listed here is refused, not ignored.",
   "classes": {
     "identity": {
       "system": "identity provider",
+      "live": true,
       "note": "users, roles, tenants, sign-in; read the provider, not the app's copy",
       "nouns": [
         "user",
@@ -28,6 +29,7 @@
     },
     "data": {
       "system": "database",
+      "live": true,
       "note": "rows, flags, counts; read-only, never write while assessing",
       "nouns": [
         "row",
@@ -58,6 +60,7 @@
     },
     "runtime": {
       "system": "logs and analytics",
+      "live": true,
       "note": "behaviour, errors, timing; read the logs at the time it happened",
       "nouns": [
         "error",

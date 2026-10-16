@@ -22,7 +22,11 @@ contradiction — was never reconciled.
 - **The evidence gate in `triage_state.py`.** `update` and `upsert` refuse
   `spec-draft`, `spec-ready` and `pr-open` unless the row's assessment carries
   a `## Sources` section with at least two `read:` rows on **different systems
-  of record** — or an explicit `Live state: none — <why>` — and a
+  of record**, at least one of them from a **live** class (identity, data,
+  runtime) unless the section declares `Live state: none — <why>` (owner
+  ruling 2026-10-16: "both above options are needed"; the declaration waives
+  only the live read, never the two systems — a code-only finding reads code
+  plus memory or the tracker), and a
   `## Does not fit` section that is either `- none — <what was checked>` or one
   item per contradiction, each with `explained:`. A missing section, an empty
   one, leftover placeholders, an unknown class or an unexplained item is
@@ -34,10 +38,17 @@ contradiction — was never reconciled.
   class; the class maps to a system in `.loopkit/sources.json`. Two rows of one
   class, or two classes on one system, count once. Class `derived` — a response
   field, a URL parameter, a cached flag — is recorded and worth zero.
-- **`--override-sources "<reason>"`**, the same shape as `--override-verdict`.
-  The reason is written to the ledger AND under `## Evidence-gate overrides`
-  in `state/triage.md`, so it is committed with the tick — the ledger never
-  is. Recorded only after the row write succeeded; an empty reason is refused.
+- **`--override-sources "<reason>" --approved-by "<human name>"`.** Owner
+  ruling 2026-10-16: "nothing skips a human in loop at least once". An
+  override without a named approver is refused, and so is an approver that
+  looks like an agent or process (a role or tool word such as `agent`, `bot`,
+  `claude`, `reviewer`, `ci`; a `[bot]` tag; an `@` address; a 4+ digit id; or
+  the acting `LOOPKIT_AGENT`). `.loopkit/approvers.txt`, if present, is a
+  strict allowlist of the humans who may approve. There is no label-based skip
+  of any kind. The reason and the approver are written to the ledger AND under
+  `## Evidence-gate overrides` in `state/triage.md`, so they are committed with
+  the tick — the ledger never is. Recorded only after the row write succeeded;
+  an empty reason is refused.
 - **`scripts/source-snapshot.py`** (loop-assess step A0): writes the
   `## Sources` skeleton, one row per class, matches the finding's nouns to
   classes as a suggestion, and probes which CLIs answer. Anything it cannot
@@ -46,8 +57,8 @@ contradiction — was never reconciled.
 - **`templates/loopkit/sources.json`**, laid down by init; identical to the
   built-in defaults (pinned).
 - **`loopkit_core/evidence.py`**, the pure parser.
-- Pins: `tests/pins/evidence-gate.py` (148 cases) and
-  `tests/pins/evidence-gate-prove-red.sh` (24 mutations, one per half of the
+- Pins: `tests/pins/evidence-gate.py` (244 cases) and
+  `tests/pins/evidence-gate-prove-red.sh` (34 mutations, one per half of the
   gate, each in a scratch copy).
 
 ### Also in this release
@@ -62,19 +73,21 @@ contradiction — was never reconciled.
   `## Sources` and `## Does not fit`. `loop-tick` documents the gate.
 - `tests/pins/pr-open-needs-a-verdict.py`: its scratch rows now carry a
   passing assessment, so it keeps testing exactly the verdict gate.
-- `tests/pins/loop-next-output-parity.py`: fixture rows at a gated status are
-  built with `--override-sources "fixture construction…"`, the same way they
-  already said `--override-verdict`; offered only to a recorder that knows the
-  flag, so `--regen <older ref>` still works.
+- `tests/pins/loop-next-output-parity.py`: each fixture row at a gated status
+  gets a minimal `Live state: none` assessment (code + tracker) beside the queue (an override
+  would need a human approver, and no human approved a fixture); an older
+  recorder ignores the file, so `--regen <older ref>` still works.
 - `tests/selftest.sh`: the end-to-end `spec-draft` move first proves the
   refusal with no assessment, then writes one; and `docs/GETTING-STARTED.md`'s
   citation of the suite's citation-gate line moved with it (332 → 342).
 
 ### Upgrading
 
-A row already past `new` meets the gate at its next `spec-draft`,
-`spec-ready` or `pr-open` move. Add the two sections to its assessment, or
-override with a reason (for example `pre-0.2.5 row, evidence not recorded`).
+No grandfathering (owner ruling 2026-10-16: "Gate them too"). A row already
+past `new` meets the gate at its next `spec-draft`, `spec-ready` or `pr-open`
+move. Add the two sections to its assessment, or
+override with a reason and a named human approver (for example
+`--override-sources "pre-0.2.5 row, evidence not recorded" --approved-by "<you>"`).
 
 ### The inbox precedent gate (#58), in detail
 

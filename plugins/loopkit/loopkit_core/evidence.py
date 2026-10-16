@@ -4,17 +4,18 @@
 A finding may move to `spec-draft`, `spec-ready` or `pr-open` only when its
 assessment says, in two sections a parser can read, what it rests on:
 
-  ## Sources       at least two `read:` rows on DIFFERENT systems of record,
-                   or an explicit `Live state: none — <why>`.
+  ## Sources       always at least two `read:` rows on DIFFERENT systems of
+                   record, one of them LIVE (identity, data, runtime) unless
+                   the section declares `Live state: none — <why>`.
   ## Does not fit  `- none — <what was checked>`, or one item per observation
                    that does not fit the conclusion, each with `explained:`.
 
 Why a declared value and not a guess. The gate never tries to spot "a claim
 about live state" in prose: that is a blocklist of phrasings and it leaks the
 first time a claim is phrased a new way. Every assessment states its position
-instead. A real zero (`Live state: none — <why>`) is written down where a
-reviewer can disagree with it; a fabricated zero — a missing section, an empty
-table — is refused.
+instead. A real `Live state: none — <why>` is written down where a reviewer
+can disagree with it, and waives only the live requirement; a fabricated one —
+a missing section, an empty table, a `none` with no reason — is refused.
 
 Why the CLASS decides the system and not the cell. Each sources row names a
 class; the class maps to a system of record in `<project>/.loopkit/sources.json`
@@ -49,6 +50,9 @@ SOURCES_CONFIG = (".loopkit", "sources.json")
 #   system   the system of record; independence is counted over these, after
 #            lower-casing and collapsing whitespace.
 #   counts   false: recorded, worth zero (a value the app derived itself).
+#   live     true: a system where live state is KEPT (identity, data, runtime).
+#            Unless an assessment says `Live state: none — <why>`, one of its
+#            two systems must be live. Code, memory, tracker and derived are not.
 #   nouns    what source-snapshot.py matches in a finding, as a SUGGESTION.
 #            The gate never reads nouns.
 #   probes   argv lists source-snapshot.py runs to see whether a tool answers.
@@ -57,6 +61,7 @@ SOURCES_CONFIG = (".loopkit", "sources.json")
 DEFAULT_CLASSES: dict[str, dict] = {
     "identity": {
         "system": "identity provider",
+        "live": True,
         "note": "users, roles, tenants, sign-in; read the provider, not the app's copy",
         "nouns": ["user", "users", "role", "roles", "tenant", "tenants", "login", "sign-in",
                   "signin", "invite", "invites", "invitation", "member", "membership",
@@ -65,6 +70,7 @@ DEFAULT_CLASSES: dict[str, dict] = {
     },
     "data": {
         "system": "database",
+        "live": True,
         "note": "rows, flags, counts; read-only, never write while assessing",
         "nouns": ["row", "rows", "flag", "flags", "count", "counts", "record", "records",
                   "table", "column", "profile", "balance", "total", "totals"],
@@ -72,6 +78,7 @@ DEFAULT_CLASSES: dict[str, dict] = {
     },
     "runtime": {
         "system": "logs and analytics",
+        "live": True,
         "note": "behaviour, errors, timing; read the logs at the time it happened",
         "nouns": ["error", "errors", "timeout", "timeouts", "latency", "timing", "crash",
                   "exception", "log", "logs", "slow", "retry", "redirect", "loop", "500"],
@@ -239,7 +246,7 @@ def check_sources(body: str | None, classes: dict[str, dict]) -> tuple[list[str]
     """(problems, independent systems counted). No problems means this half passes."""
     if body is None:
         return ([f"no `## Sources` section. Write one: at least {MIN_INDEPENDENT} `read:` rows "
-                 f"on different systems of record, or `Live state: none — <why>` (run "
+                 f"on different systems of record, one of them live unless you declare `Live state: none — <why>` (run "
                  f"scripts/source-snapshot.py for the skeleton)"], [])
     problems: list[str] = []
     live_none: str | None = None
@@ -253,6 +260,7 @@ def check_sources(body: str | None, classes: dict[str, dict]) -> tuple[list[str]
                                 "`Live state: none — <why no system holds state about this>`")
     rows = source_rows(body)
     systems: list[str] = []
+    live: list[str] = []
     for cls, ev in rows:
         label = f"sources row '{cls or '<blank>'}'"
         if cls not in classes:
@@ -266,20 +274,39 @@ def check_sources(body: str | None, classes: dict[str, dict]) -> tuple[list[str]
                             f"or `n/a: <why>`, got '{ev[:60]}'")
             continue
         spec = classes[cls]
-        if m.group(1).lower() == "read" and spec.get("counts", True) is not False:
-            key = system_key(spec["system"])
-            if key not in systems:
-                systems.append(key)
+        if m.group(1).lower() != "read":
+            continue
+        counts = spec.get("counts", True) is not False
+        key = system_key(spec["system"])
+        if counts and key not in systems:
+            systems.append(key)
+        if counts and spec.get("live") is True and key not in live:
+            live.append(key)
     if live_none is None and not rows and not problems:
         problems.append("`## Sources` is empty: no sources table rows and no "
                         "`Live state: none — <why>`. An empty section is a zero nobody stated")
-    if live_none is None and len(systems) < MIN_INDEPENDENT:
+    # Rule 1, always — `Live state: none` does NOT waive it (owner, 2026-10-16:
+    # "both above options are needed"). A finding that claims nothing live
+    # still claims something, and that claim needs two systems too.
+    if len(systems) < MIN_INDEPENDENT:
         problems.append(
             f"reads {len(systems)} independent system(s) of record"
             f"{' (' + ', '.join(systems) + ')' if systems else ''}; at least "
-            f"{MIN_INDEPENDENT} are needed. Two reads of one system, or a value the app "
-            f"derived (class `derived`), count once or not at all. Read a second system, "
-            f"or, if the finding makes no claim about live state, say so: "
+            f"{MIN_INDEPENDENT} are needed, with or without `Live state: none`. Two reads "
+            f"of one system, or a value the app derived (class `derived`), count once or "
+            f"not at all. A code-only finding reads code plus one more system — memory "
+            f"or the tracker")
+    # Rule 2, unless the assessment states there is no live-state claim: one of
+    # those systems must be LIVE (identity, data, runtime). Code, memory,
+    # tracker and derived values describe or copy the state; they are not it.
+    if live_none is None and not live:
+        live_names = sorted(n for n, c in classes.items()
+                            if c.get("live") is True and c.get("counts", True) is not False)
+        problems.append(
+            f"no read from a LIVE system ({', '.join(live_names) or 'none configured'}). "
+            f"A finding about a real user, row, flag or runtime behaviour must read where "
+            f"that state is kept; code, memory, tracker and derived values never satisfy "
+            f"this. If the finding makes no claim about live state, say so: "
             f"`Live state: none — <why>`")
     return problems, systems
 
@@ -395,6 +422,83 @@ def evaluate(root: Path, source: str, explicit: str | None = None,
     except OSError as exc:
         return hits[0], [f"{hits[0]}: cannot be read ({exc})"]
     return hits[0], evaluate_text(text, classes)
+
+
+# ---------------------------------------------------------------------------
+# THE APPROVER OF AN OVERRIDE (owner ruling, 2026-10-16, on urgent fixes:
+# "i should always review, nothing skips a human in loop at least once").
+#
+# An override moves a finding on without the evidence, so it must name the
+# HUMAN who decided that. There is no label-based skip of any kind: no flag,
+# no priority, no word in the finding opens the door. The approver is checked
+# three ways, strongest first:
+#
+#   1. ALLOWLIST. If <project>/.loopkit/approvers.txt exists (one name per
+#      line, `#` comments), the approver must be on it, case-insensitively.
+#      This is the strong form: the project names its humans explicitly.
+#   2. NOT THE ACTOR. The approver may not equal LOOPKIT_AGENT, the identity
+#      of the agent running the command. An agent approving itself is the
+#      self-approval the constitution already forbids.
+#   3. NOT AGENT-SHAPED. Without an allowlist, a name is refused when any of
+#      its words is a role or tool word below, when it carries `[bot]` or an
+#      `@` address, when it holds a run of 4+ digits (runner-4821, job ids),
+#      or when it has no word of two or more letters.
+#
+# Rule 3 is a tripwire, not proof of humanity: it stops an agent writing its
+# own role, its model or its CI identity into the field, which is the failure
+# that actually happens. A determined agent can type a human-looking name;
+# that is why rule 1 exists and why the name is committed where a human reads
+# it. Projects that want the guarantee add approvers.txt.
+# ---------------------------------------------------------------------------
+
+APPROVERS_FILE = (".loopkit", "approvers.txt")
+AGENT_WORDS = frozenset({
+    "agent", "agents", "subagent", "bot", "bots", "ai", "llm", "model", "claude", "anthropic",
+    "opus", "sonnet", "haiku", "fable", "gpt", "openai", "codex", "copilot", "gemini",
+    "loop", "loopkit", "tick", "planner", "implementer", "reviewer", "assessor",
+    "generator", "evaluator", "judge", "ci", "cd", "cron", "automation", "automated",
+    "auto", "system", "script", "pipeline", "workflow", "runner", "actions", "action",
+    "github", "gitlab", "noreply", "dependabot", "renovate", "service", "daemon",
+    "hook", "hooks", "scheduler", "scheduled", "job",
+})
+_WORDS = re.compile(r"[^\W\d_]+")
+_LONG_DIGITS = re.compile(r"\d{4,}")
+
+
+def approvers_allowlist(root: Path) -> list[str] | None:
+    path = Path(root).joinpath(*APPROVERS_FILE)
+    if not path.exists():
+        return None
+    names = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            names.append(norm(line).lower())
+    return names
+
+
+def approver_problems(name: str | None, acting_agent: str | None, root: Path) -> list[str]:
+    """Empty when `name` is acceptable as the human approving an override."""
+    who = norm(name or "")
+    if not has_substance(who) or not _WORDS.search(who):
+        return ["--override-sources must name the HUMAN who approved it: add "
+                "--approved-by \"<human name>\". Nothing skips a human (owner, 2026-10-16)"]
+    allow = approvers_allowlist(root)
+    if allow is not None:
+        if who.lower() not in allow:
+            return [f"approver '{who}' is not listed in {Path(root).joinpath(*APPROVERS_FILE)}"]
+        return []
+    if acting_agent and who.lower() == norm(acting_agent).lower():
+        return [f"approver '{who}' is the agent running this command (LOOPKIT_AGENT); "
+                f"an agent cannot approve its own override"]
+    words = {w.lower() for w in _WORDS.findall(who)}
+    hits = sorted(words & AGENT_WORDS)
+    if hits or "[bot]" in who.lower() or "@" in who or _LONG_DIGITS.search(who):
+        why = f"its words {hits}" if hits else "its shape (a bot tag, an address or an id number)"
+        return [f"approver '{who}' looks like an agent or process identity, not a human "
+                f"({why}). Name the person who decided; or list your humans in "
+                f".loopkit/approvers.txt"]
+    return []
 
 
 def match_nouns(finding: str, classes: dict[str, dict]) -> dict[str, list[str]]:

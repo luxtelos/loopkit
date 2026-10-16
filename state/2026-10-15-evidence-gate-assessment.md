@@ -50,6 +50,8 @@ recorded.
 
 ## Sources
 
+Live state: none — the claim is about what a CLI in this repository accepts, reproduced directly; no user, row or runtime state is claimed
+
 | class    | system of record | evidence |
 |----------|------------------|----------|
 | identity | identity provider | n/a: no claim here is about a user, role or tenant of this repo |
@@ -96,6 +98,7 @@ implementer on `feat/evidence-gate` → reviewer.
 - **Whether a reviewer believes a `read:` line** is not something a parser can
   decide. The gate makes the agent *name* two systems of record; it cannot
   prove the agent read them. That stays the reviewer's job and the ADR says so.
-- **Whether the gate may stop a hotfix** beyond the reasoned override is a
-  product decision, not a code one. Escalated in the PR body with both options
-  costed.
+- **Whether the gate may stop a hotfix** beyond the reasoned override was a
+  product decision, escalated with both options costed. Owner ruled
+  2026-10-16: "i should always review, nothing skips a human in loop at least
+  once" — override only, and the override names its human approver.
