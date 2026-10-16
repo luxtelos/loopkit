@@ -82,7 +82,9 @@ hook + spec: `state/2026-10-15-spec-draft-stop-review-loop.md` (EARS draft;
   fix the failure, which a waiting session does not do. If it is ever seen
   looping on a waiting session, give it the same waiting pass; that is an owner
   decision about the test gate, not part of this fix.
-- Whether the default "block once, then dispatch the reviewer" is acceptable in
+- RULED 2026-10-16 (owner): the model judge stays ON by default and may block
+  only once per stop chain. Implemented by running the judge from the command
+  hook. The original open question was whether the default "block once, then dispatch the reviewer" is acceptable in
   place of an in-hook model judge is a product decision. The fix keeps an
   in-hook judge possible through `LOOP_STOP_REVIEW_CMD`; the PR names the
   trade-off for the owner.

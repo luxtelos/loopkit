@@ -17,8 +17,10 @@ TRACKED_SUM="$(cksum < "$W/plugins/loopkit/hooks/stop_review.py")"
 
 SKEL="$(mktemp -d "${TMPDIR:-/tmp}/stop-review-prove-red.XXXXXX")"
 trap 'chmod -R u+w "$SKEL" 2>/dev/null; rm -rf "$SKEL" 2>/dev/null || true' EXIT
-mkdir -p "$SKEL/plugins/loopkit"
-cp -R "$W/plugins/loopkit/hooks" "$SKEL/plugins/loopkit/hooks" || { echo "could not stage a copy"; exit 2; }
+# The whole plugin, not just hooks/: the hook calls scripts/ticks.py through
+# its own location to record verdicts.
+mkdir -p "$SKEL/plugins"
+cp -R "$W/plugins/loopkit" "$SKEL/plugins/loopkit" || { echo "could not stage a copy"; exit 2; }
 HOOK="$SKEL/plugins/loopkit/hooks/stop_review.py"
 WIRING="$SKEL/plugins/loopkit/hooks/hooks.json"
 cp "$HOOK" "$SKEL/hook.pristine"; cp "$WIRING" "$SKEL/wiring.pristine"
@@ -93,13 +95,25 @@ check "MUT-EV-CODE: evidence may list code files" "C6 evidence that lists a code
 mutate "$HOOK" 'if scope == "tree" and ev_status == "valid":  # MUT-EV-SCOPE' 'if ev_status == "valid":  # MUT-EV-SCOPE'
 check "MUT-EV-SCOPE: a claim overrides git's measurement" "C7 with a turn record, evidence cannot override code git sees changed"
 
-mutate "$HOOK" '            verdict = "BLOCK"
-    emit(verdict, message)' '            verdict = "ALLOW"
-    emit(verdict, message)'
-check "MUT-NO-GATE: the default review step lets everything through" "C8 control: unfinished code with no background work is refused"
+mutate "$HOOK" '        elif jv == "REJECT":
+            verdict, message = "BLOCK", reject_reason' '        elif jv == "REJECT":
+            verdict, message = "ALLOW", reject_reason'
+check "MUT-NO-GATE: a REJECT from the judge lets the stop through" "C8 control: unfinished code with no background work is refused"
 
-mutate "$HOOK" '            if rc == 0:' '            if True:'
+mutate "$HOOK" 'return ("PASS" if rc == 0 else "REJECT")' 'return ("PASS" if True else "REJECT")'
 check "MUT-REVIEW-CMD: a failing review command is ignored" "C9 a failing review command blocks with its output"
+
+mutate "$HOOK" 'verdict = "ALLOW"  # MUT-SECOND' 'verdict = "BLOCK" if "REJECT" in message else "ALLOW"  # MUT-SECOND'
+check "MUT-SECOND: the judge's verdict on a second firing blocks" "J2 a second firing with stop_hook_active never blocks, whatever the judge says"
+
+mutate "$HOOK" '"--disallowedTools", "Bash",  # MUT-JUDGE-BASH' '"--allowedTools", "Bash",  # MUT-JUDGE-BASH'
+check "MUT-JUDGE-BASH: the judge is given Bash" "J1 the judge has no Bash and runs with hooks off"
+
+mutate "$HOOK" 'if nested():  # MUT-NESTED' 'if False:  # MUT-NESTED'
+check "MUT-NESTED: the stop review runs inside its own judge (recursion)" "J6 inside the judge's own session the stop review stands down (no recursion)"
+
+mutate "$HOOK" 'if jv == "PASS":  # MUT-JUDGE-PASS' 'if False:  # MUT-JUDGE-PASS'
+check "MUT-JUDGE-PASS: a PASS verdict is ignored" "J4 a PASS verdict allows the first stop"
 
 mutate "$HOOK" 'p = subprocess.run(["git", "-C", str(root), *args], input=stdin,' 'p = subprocess.run(["bash", "-c", 'git -C "$0" "$@"', str(root), *args], input=stdin,'
 check "MUT-NEEDS-BASH: the hook shells out through bash to run git" "C11 with no bash on PATH, a valid evidence file is accepted"

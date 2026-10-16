@@ -10,9 +10,10 @@ description: The evaluator. Different instructions from the implementer, judges 
 Judge whether the implementer's fix is done. Act, don't just read. Decide.
 
 You are the evaluator, and two mechanisms back that up. The plugin's Stop
-hooks run the stop gate, and `hooks/stop_review.py` blocks a turn that changed
-code once, asking for you — wired in `hooks/hooks.json`. It blocks at most once
-in a row, so your verdict, not the hook, is what decides the work. And
+hooks run the stop gate, and `hooks/stop_review.py` runs a model judge on a
+turn that changed code — wired in `hooks/hooks.json`. Its REJECT blocks at most
+once in a row, so it cannot hold work back on its own; your verdict is what
+decides the work. And
 nobody, you included, can merge or approve: the `gh-pr-merge` and
 `gh-pr-approve` patterns in `hooks/block_dangerous.py` refuse `gh pr merge` and
 `gh pr review --approve`.

@@ -6,15 +6,20 @@ The Stop review can no longer trap a session that is waiting, and a new inbox qu
 
 ### Fixed
 
-- **The Stop review is decided by code, and blocks at most once in a row.**
+- **The Stop review's model judge stays on, and blocks at most once in a row.**
   The agent-type Stop hook asked a model to find the changed code and run
   acceptance-review. In a real session it blocked a main session that was
   correctly waiting on background agents more than 30 times, until Claude Code
   overrode it ("A hook blocked the turn from ending 9 consecutive times"). It
   never read `stop_hook_active`. Claude Code runs every Stop hook in parallel,
   so a command hook placed in front of it could not have stopped it; it is
-  replaced by `hooks/stop_review.py`, a command hook. When `stop_hook_active`
-  is true it allows the stop and says it did not re-judge.
+  replaced by `hooks/stop_review.py`, a command hook, which runs the model
+  judge itself (owner decision, 2026-10-16: the judge stays on by default).
+  Because the hook runs the judge, the hook alone decides whether a verdict
+  can block: on the first stop a `VERDICT: REJECT` blocks once; when
+  `stop_hook_active` is true the stop is always allowed, and the judge's
+  verdict on that second firing is recorded in `state/ticks.jsonl` and in the
+  output, never enforced.
 - **Waiting on background work is an explicit pass.** Allowed when Claude
   Code's `background_tasks` lists a task that is still running AND the
   session's last message contains `LOOPKIT:WAITING`. Neither alone is enough:
@@ -45,12 +50,21 @@ The Stop review can no longer trap a session that is waiting, and a new inbox qu
 
 ### Changed
 
-- When this turn changed code and none of the passes apply, the default is to
-  block once with the turn's code files and ask the session to dispatch the
-  `loopkit:reviewer` agent. The model judgement no longer runs inside the
-  hook unless a project sets `LOOP_STOP_REVIEW_CMD` (exit 0 allows; the
-  turn's files arrive in `LOOPKIT_TURN_CODE_FILES`).
-- `hooks/stop_gate.sh` (tests, lint, typecheck, build) is unchanged.
+- The judge is `claude -p` with Read, Grep and Glob only
+  (`--disallowedTools Bash`), hooks switched off for that run
+  (`--settings '{"disableAllHooks": true}'`), and `LOOPKIT_STOP_REVIEW_NESTED=1`
+  so neither Stop hook runs inside it. It never runs git: the hook hands it
+  the turn's code files and the evidence file. Its last line must be
+  `VERDICT: PASS` or `VERDICT: REJECT <reason>`. It does not run when the
+  session is waiting, when no code changed, or when a valid evidence file
+  covers an unscoped turn.
+- `LOOP_STOP_REVIEW_CMD` swaps the judge (exit 0 = PASS; the turn's files
+  arrive in `LOOPKIT_TURN_CODE_FILES`). `LOOP_STOP_REVIEW_JUDGE=off` turns it
+  off; `LOOPKIT_JUDGE_CLAUDE` names the CLI. With no verdict (CLI missing,
+  timeout, no `VERDICT:` line, judge off) the hook blocks once with the turn's
+  files and asks for the `loopkit:reviewer` agent.
+- `hooks/stop_gate.sh` (tests, lint, typecheck, build) is unchanged except
+  that it stands down inside the judge's own session.
 
 ### Pinned
 
@@ -61,7 +75,8 @@ The Stop review can no longer trap a session that is waiting, and a new inbox qu
   the evidence verdicts still come out right — the old checker failed because
   its Bash was denied, and permission allow rules did not reach it.
   `tests/pins/stop-review-prove-red.sh` breaks each rule in a scratch copy and
-  requires the pin to fail on the case guarding it (14 mutations).
+  requires the pin to fail on the case guarding it (18 mutations). The judge
+  is a stub in every case: no test calls a real model.
 
 ### The inbox precedent gate (#58), in detail
 

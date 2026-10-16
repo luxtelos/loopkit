@@ -41,7 +41,7 @@ Constitution: the agent that wrote code never approves it.
 | PreToolUse (Bash)            | `require_commit_lock.py` — a bare `git commit` is refused; commit via `loop-commit.sh`       |
 | PreToolUse (Write/Edit)      | `protect_governance.py` — `constitution.md` and `specs/` need `GOVERNANCE_EDIT_OK=1`        |
 | PostToolUse (Write/Edit/Bash)| `notify_needs_human.py` — edits to `inbox/needs-human.md` ping a webhook (fail-open)        |
-| Stop                         | `stop_gate.sh` (inbox precedent line, precheck, tests, lint, typecheck, build) + `stop_review.py` (blocks once if this turn changed code; waiting and evidence passes — see its header) |
+| Stop                         | `stop_gate.sh` (inbox precedent line, precheck, tests, lint, typecheck, build) + `stop_review.py` (model judge on this turn's code, blocks at most once; waiting and evidence passes — see its header) |
 
 ## Running the loop (human-pulled, not timer-pushed)
 

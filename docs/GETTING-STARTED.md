@@ -229,12 +229,14 @@ When the agent tries to say "done" after changing code, the Stop hook runs
 your gate — precheck, regression diff, lint, typecheck, build. Red blocks the
 stop. That is the point.
 
-A second Stop hook, `hooks/stop_review.py`, asks for the review. It is code,
-not a model, and it decides in this order:
+A second Stop hook, `hooks/stop_review.py`, runs the review. A model judge is
+on by default, but the hook — code, not a model — decides when the judge runs
+and whether its verdict may block, in this order:
 
 1. `stop_hook_active` is true (it already blocked once in this chain) → the
-   stop is allowed and the output says it did not re-judge. It never blocks
-   twice in a row.
+   stop is allowed, always. If code changed, the judge may run again; its
+   verdict is recorded (output and `state/ticks.jsonl`), never enforced. It
+   never blocks twice in a row.
 2. The session is waiting on background work → allowed. Two things must both
    hold: Claude Code's `background_tasks` lists a task still running, and the
    session's last message contains `LOOPKIT:WAITING`. It is judged again when
@@ -250,10 +252,14 @@ not a model, and it decides in this order:
    ```
    It is accepted only at the current HEAD and for 15 minutes
    (`LOOPKIT_EVIDENCE_MAX_AGE`), and never when it lists a code file.
-5. Otherwise it blocks once and asks the session to dispatch the
-   `loopkit:reviewer` agent on the listed files. Set `LOOP_STOP_REVIEW_CMD` in
-   `.loopkit/config.env` to run a judge inside the hook instead (exit 0
-   allows; it gets the turn's files in `LOOPKIT_TURN_CODE_FILES`).
+5. Otherwise the judge runs: `claude -p` with Read, Grep and Glob only (no
+   Bash) and hooks off for that run. The hook hands it the turn's code files
+   and the evidence file, so it never needs git. `VERDICT: PASS` allows;
+   `VERDICT: REJECT <reason>` blocks this once. No verdict at all blocks once
+   and asks the session to dispatch the `loopkit:reviewer` agent.
+   `LOOP_STOP_REVIEW_CMD` in `.loopkit/config.env` swaps the judge (exit 0 =
+   PASS; it gets the turn's files in `LOOPKIT_TURN_CODE_FILES`);
+   `LOOP_STOP_REVIEW_JUDGE=off` turns it off.
 
 ## 8. Optional: the knowledge layer
 

@@ -29,16 +29,38 @@ trap 'rm -rf "$SCR" 2>/dev/null || true' EXIT
 # Turn records live under TMPDIR; give this run its own, so a real session's
 # records are never read and nothing is left behind.
 export TMPDIR="$SCR/tmp"; mkdir -p "$TMPDIR"
-unset CLAUDE_PROJECT_DIR LOOP_STOP_REVIEW_CMD LOOP_CODE_GLOBS LOOPKIT_EVIDENCE_MAX_AGE
+unset CLAUDE_PROJECT_DIR LOOP_STOP_REVIEW_CMD LOOP_CODE_GLOBS LOOPKIT_EVIDENCE_MAX_AGE \
+      LOOP_STOP_REVIEW_JUDGE LOOPKIT_STOP_REVIEW_NESTED
+
+# THE JUDGE IS A STUB. The default judge is `claude -p`; no case here may call a
+# real model. The stub records its argv, its environment and the prompt it was
+# handed, counts its calls, and answers with $STUB_VERDICT (default: REJECT).
+STUB_DIR="$SCR/judge"; mkdir -p "$STUB_DIR/calls"
+cat > "$STUB_DIR/claude" <<'STUB'
+#!/usr/bin/env bash
+d="$(dirname "$0")/calls"; n=$(( $(ls "$d" | grep -c '\.argv$') + 1 ))
+printf '%s\n' "$@" > "$d/$n.argv"
+cat > "$d/$n.prompt"
+printf 'NESTED=%s\nFILES=%s\n' "${LOOPKIT_STOP_REVIEW_NESTED:-}" "${LOOPKIT_TURN_CODE_FILES:-}" > "$d/$n.env"
+case "${STUB_VERDICT:-reject}" in
+  pass)    echo "Read the files. Criteria hold."; echo "VERDICT: PASS" ;;
+  garbage) echo "I could not decide." ;;
+  crash)   echo "boom" >&2; exit 3 ;;
+  *)       echo "Criterion 2 has no test."; echo "VERDICT: REJECT stub judge: criterion 2 has no test" ;;
+esac
+STUB
+chmod +x "$STUB_DIR/claude"
+export LOOPKIT_JUDGE_CLAUDE="$STUB_DIR/claude"
+judge_calls() { ls "$STUB_DIR/calls" | grep -c '\.argv$' || true; }
 
 fails=0
 ok()   { echo "  ok   $1"; }
 bad()  { echo "  FAIL $1"; fails=$((fails+1)); }
 
-N=0
 mkrepo() {  # -> prints the path of a fresh repo with one committed code file
-  N=$((N+1))
-  local r="$SCR/repo$N"
+  # mktemp, not a counter: this runs inside $( ), so a counter never advances
+  # in the caller and every case would share one repo (it did, once).
+  local r; r="$(mktemp -d "$SCR/repo.XXXXXX")"
   mkdir -p "$r/.loopkit"
   (
     cd "$r" && git init -q . \
@@ -109,9 +131,58 @@ R="$(mkrepo)"; S="c1-$$"
 turn_start "$S" "$R"
 printf 'print(2)\n' > "$R/new_code.py"
 stop "$R" "$(payload "$S" "$R" true "still working" "$NOTASKS")"
-expect ALLOW "C1 stop_hook_active true allows despite unfinished code" "did not re-judge"
+calls_before="$(judge_calls)"
+expect ALLOW "C1 stop_hook_active true allows despite unfinished code" "does not block again"
 stop "$R" "$(payload "$S" "$R" false "still working" "$NOTASKS")"
 expect BLOCK "C1 control: same tree, stop_hook_active false, is refused" "new_code.py"
+
+echo "== J the model judge is on by default, and blocks at most once per chain"
+R="$(mkrepo)"; S="j-$$"; mkdir -p "$R/state"
+turn_start "$S" "$R"
+printf 'def half():\n    pass\n' > "$R/half.py"
+calls_before="$(judge_calls)"
+stop "$R" "$(payload "$S" "$R" false "Done." "$NOTASKS")"
+expect BLOCK "J1 first stop with unfinished work: the judge runs and blocks once" "criterion 2 has no test"
+[ "$(judge_calls)" -gt "$calls_before" ] && ok "J1 the judge actually ran on the first stop" || bad "J1 the judge actually ran on the first stop"
+last="$STUB_DIR/calls/$(judge_calls)"
+if grep -qx -- '--disallowedTools' "$last.argv" && grep -qx 'Bash' "$last.argv" \
+   && ! sed -n '/^--allowedTools$/,/^--/p' "$last.argv" | grep -qx 'Bash' \
+   && grep -qx 'disableAllHooks' <(grep -o 'disableAllHooks' "$last.argv"); then
+  ok "J1 the judge has no Bash and runs with hooks off"
+else
+  bad "J1 the judge has no Bash and runs with hooks off :: $(tr '\n' ' ' < "$last.argv")"
+fi
+grep -q 'half.py' "$last.prompt" && grep -q 'turn-evidence.json' "$last.prompt" && grep -qx 'NESTED=1' "$last.env" \
+  && ok "J1 the judge is handed the hook's file list and the evidence file, and runs nested" \
+  || bad "J1 the judge is handed the hook's file list and the evidence file, and runs nested"
+calls_before="$(judge_calls)"
+stop "$R" "$(payload "$S" "$R" true "Still not done." "$NOTASKS")"
+expect ALLOW "J2 a second firing with stop_hook_active never blocks, whatever the judge says" "recorded, not enforced"
+[ "$(judge_calls)" -gt "$calls_before" ] && grep -q '"firing": "second"' "$R/state/ticks.jsonl" \
+  && grep -q '"result": "REJECT"' "$R/state/ticks.jsonl" \
+  && ok "J2 the second verdict is recorded in the ticks ledger" \
+  || bad "J2 the second verdict is recorded in the ticks ledger"
+calls_before="$(judge_calls)"
+stop "$R" "$(payload "$S" "$R" false "Reviewer dispatched. LOOPKIT:WAITING" "$RUNNING")"
+expect ALLOW "J3 waiting with background work allows, and the judge is not run" "task-7"
+[ "$(judge_calls)" = "$calls_before" ] && ok "J3 no judge call while waiting" || bad "J3 no judge call while waiting"
+STUB_VERDICT=pass stop "$R" "$(payload "$S" "$R" false "Done." "$NOTASKS")"
+expect ALLOW "J4 a PASS verdict allows the first stop" "PASSED"
+STUB_VERDICT=garbage stop "$R" "$(payload "$S" "$R" false "Done." "$NOTASKS")"
+expect BLOCK "J5 no VERDICT line blocks once and asks for the reviewer" "loopkit:reviewer"
+LOOPKIT_JUDGE_CLAUDE="$SCR/no-such-claude" stop "$R" "$(payload "$S" "$R" false "Done." "$NOTASKS")"
+expect BLOCK "J5 no judge CLI blocks once and says why" "could not run"
+LOOP_STOP_REVIEW_JUDGE=off stop "$R" "$(payload "$S" "$R" false "Done." "$NOTASKS")"
+expect BLOCK "J5 judge switched off falls back to asking for the reviewer" "switched off"
+calls_before="$(judge_calls)"
+OUT="$(printf '%s' "$(payload "$S" "$R" false "Done." "$NOTASKS")" | (cd "$R" && LOOPKIT_STOP_REVIEW_NESTED=1 python3 "$SR") 2>&1)"; RC=$?
+[ "$RC" = 0 ] && [ -z "$OUT" ] && [ "$(judge_calls)" = "$calls_before" ] \
+  && ok "J6 inside the judge's own session the stop review stands down (no recursion)" \
+  || bad "J6 inside the judge's own session the stop review stands down (no recursion) :: rc=$RC $OUT"
+OUT="$(cd "$R" && LOOPKIT_STOP_REVIEW_NESTED=1 LOOP_TEST_CMD=false LOOP_LINT_CMD=false bash "$P/hooks/stop_gate.sh" </dev/null 2>&1)"; RC=$?
+[ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q "judge session" \
+  && ok "J6 inside the judge's own session the test gate stands down too" \
+  || bad "J6 inside the judge's own session the test gate stands down too :: rc=$RC $(printf '%s' "$OUT" | tail -1)"
 
 echo "== C2 waiting on background work is an explicit signal, not prose"
 R="$(mkrepo)"; S="c2-$$"
@@ -224,7 +295,7 @@ R="$(mkrepo)"; S="c8-$$"
 turn_start "$S" "$R"
 printf 'def todo():\n    raise NotImplementedError\n' > "$R/unfinished.py"
 stop "$R" "$(payload "$S" "$R" false "All done!" "$NOTASKS")"
-expect BLOCK "C8 control: unfinished code with no background work is refused" "loopkit:reviewer"
+expect BLOCK "C8 control: unfinished code with no background work is refused" "REJECTED"
 
 echo "== C9 LOOP_STOP_REVIEW_CMD: an in-hook judge the project configures"
 LOOP_STOP_REVIEW_CMD='test -n "$LOOPKIT_TURN_CODE_FILES" && printf "%s" "$LOOPKIT_TURN_CODE_FILES" | grep -q unfinished.py' \

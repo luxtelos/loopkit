@@ -27,8 +27,9 @@ unreadable payload or an internal error allows the stop and says so.
 ## Acceptance (EARS)
 
 1. WHEN the Stop payload has `stop_hook_active: true`, the hook SHALL allow the
-   stop and SHALL say in its output that it did not re-judge, whatever the
-   working tree holds.
+   stop whatever the working tree holds and whatever the judge says. IF code
+   changed this turn, THEN the judge MAY run and its verdict SHALL be recorded
+   (ticks ledger and output), never enforced. (Owner decision 2026-10-16.)
 2. WHEN `background_tasks` lists at least one task not in a terminal state AND
    `last_assistant_message` contains `LOOPKIT:WAITING`, the hook SHALL allow the
    stop and name the tasks it is waiting on.
@@ -51,9 +52,13 @@ unreadable payload or an internal error allows the stop and says so.
 8. WHEN a turn record exists and git shows code changed this turn, the hook
    SHALL NOT let an evidence file override that measurement.
 9. WHEN code changed this turn and none of 1–8 allowed the stop, the hook SHALL
-   run `LOOP_STOP_REVIEW_CMD` if set (exit 0 allows, anything else blocks with
-   its output), and otherwise SHALL block once with a reason that lists the
-   turn's code files and asks for the `loopkit:reviewer` agent.
+   run the judge: `LOOP_STOP_REVIEW_CMD` if set (exit 0 = PASS), otherwise the
+   model judge (on by default; owner decision 2026-10-16) with no Bash and
+   hooks off, handed the turn's code files and the evidence file. PASS SHALL
+   allow; REJECT SHALL block once; no verdict SHALL block once with a reason
+   that lists the turn's code files and asks for the `loopkit:reviewer` agent.
+9a. WHILE `LOOPKIT_STOP_REVIEW_NESTED=1` (inside the judge's own session), both
+   Stop hooks SHALL stand down.
 10. The control: no background work, no earlier block, real code changed this
     turn, no evidence → refused.
 

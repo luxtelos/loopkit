@@ -20,13 +20,18 @@ Why a command hook and not a better prompt. The Claude Code hooks reference
     `stop_hook_active` — but obeying it is then a judgement, and agent hooks
     are marked experimental ("For production workflows, prefer command hooks").
 So the decision moved here, where it is a pure function of the payload plus
-facts read from git. Spec draft: state/2026-10-15-spec-draft-stop-review-loop.md.
+facts read from git. The MODEL JUDGE is still on by default (owner decision,
+2026-10-16) — but it is run BY this hook, headless, so this hook alone decides
+whether its verdict can block. That is the only way "blocks at most once" can
+be true while hooks run in parallel. Spec draft: state/2026-10-15-spec-draft-stop-review-loop.md.
 Pinned by tests/pins/stop-review-loop.sh, proven red by
 tests/pins/stop-review-prove-red.sh.
 
 THE LADDER (first match wins)
-  1. `stop_hook_active` is true → ALLOW. This stop follows a block already
-     given in this chain; it is not re-judged, and the output says so.
+  1. `stop_hook_active` is true → ALLOW, always. This stop follows a block
+     already given in this chain. If code changed, the judge may run again,
+     but its verdict is only RECORDED (ticks ledger, and the output), never
+     enforced.
   2. Waiting → ALLOW. Both must hold: `background_tasks` lists a task whose
      status is not terminal, AND `last_assistant_message` contains the literal
      marker LOOPKIT:WAITING. The harness's task list is the fact; the marker is
@@ -38,9 +43,16 @@ THE LADDER (first match wins)
   4. No turn record (scope fell back to the whole working tree) and a valid
      `.loopkit/turn-evidence.json` → ALLOW. The evidence is the main session's
      own record that this turn changed no code, with the file list it ran.
-  5. Otherwise → REVIEW: run LOOP_STOP_REVIEW_CMD when the project set one
-     (exit 0 allows, anything else blocks with its output); else block ONCE
-     with the turn's code files and a request to dispatch loopkit:reviewer.
+  5. Otherwise → the JUDGE runs. Default: `claude -p` with Read, Grep and Glob
+     only (`--disallowedTools Bash`), hooks off for that run
+     (`--settings '{"disableAllHooks": true}'`) and LOOPKIT_STOP_REVIEW_NESTED=1
+     so neither Stop hook runs inside it. It is handed the hook's own file list
+     and the evidence file — it never needs git. Its last line is
+     `VERDICT: PASS` (allow) or `VERDICT: REJECT <reason>` (block once).
+     LOOP_STOP_REVIEW_CMD swaps the judge (exit 0 = PASS);
+     LOOP_STOP_REVIEW_JUDGE=off turns it off; LOOPKIT_JUDGE_CLAUDE names the
+     CLI. No verdict (CLI missing, timeout, no VERDICT line, judge off) blocks
+     once with the turn's files and a request to dispatch loopkit:reviewer.
      Rule 1 guarantees the next stop is let through.
 
 THE TURN'S SCOPE
@@ -78,12 +90,15 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 WAIT_MARKER = "LOOPKIT:WAITING"
 EVIDENCE_REL = ".loopkit/turn-evidence.json"
 EVIDENCE_KIND = "no-code-change"
@@ -317,15 +332,16 @@ def _task_label(t):
 
 
 def decide(payload, facts):
-    """Pure. -> (verdict, message); verdict is ALLOW, ALLOW_QUIET or REVIEW.
+    """Pure. -> (verdict, message); verdict is SECOND, ALLOW, ALLOW_QUIET or REVIEW.
 
     facts: scope ("turn" | "tree"), code_files (list), evidence ((status, why)).
+    SECOND means stop_hook_active: the caller may run the judge to RECORD its
+    verdict, but must allow the stop whatever it says.
     """
     if payload.get("stop_hook_active") is True:  # MUT-ACTIVE
-        return "ALLOW", ("LOOPKIT stop review: stop_hook_active is true — this stop follows a "
-                         "block already given in this chain, so it did not re-judge the turn. "
-                         "Anything still unfinished is the session's to report, not this hook's "
-                         "to block again.")
+        return "SECOND", ("LOOPKIT stop review: stop_hook_active is true — this stop follows a "
+                          "block already given in this chain, so it does not block again. "
+                          "Anything still unfinished is the session's to report.")
     live = in_flight(payload)
     said_waiting = WAIT_MARKER in str(payload.get("last_assistant_message") or "")
     if live and said_waiting:  # MUT-WAIT
@@ -344,22 +360,27 @@ def decide(payload, facts):
     return "REVIEW", review_reason(payload, facts, live, said_waiting)
 
 
+def scope_notes(facts):
+    """What the scope was and what the evidence file said — on every block."""
+    ev_status, ev_why = facts["evidence"]
+    if facts["scope"] == "turn":
+        if ev_status == "valid":
+            return [f"{EVIDENCE_REL} says no code changed, but git shows the files above "
+                    "changed since the turn began; the measurement wins."]
+        return []
+    return ["No turn record for this session, so the scope is the WHOLE working tree; files "
+            "from other work may be listed.",
+            f"Evidence: {ev_why}. If none of these files are this turn's, write {EVIDENCE_REL} "
+            "(stop_review.py write-evidence --changed-file <each file you changed>) and stop again."]
+
+
 def review_reason(payload, facts, live, said_waiting):
     code, scope = facts["code_files"], facts["scope"]
     ev_status, ev_why = facts["evidence"]
     shown = ", ".join(code[:20]) + (f" (+{len(code) - 20} more)" if len(code) > 20 else "")
-    lines = ["LOOPKIT stop review: this turn changed code and nothing has reviewed it yet."]
-    if scope == "turn":
-        lines.append(f"Code changed this turn: {shown}")
-        if ev_status == "valid":
-            lines.append(f"{EVIDENCE_REL} says no code changed, but git shows the files above "
-                         "changed since the turn began; the measurement wins.")
-    else:
-        lines.append("No turn record for this session, so the scope is the WHOLE working tree; "
-                     f"files from other work may be listed. Code files: {shown}")
-        lines.append(f"Evidence: {ev_why}. If none of these files are this turn's, write "
-                     f"{EVIDENCE_REL} (stop_review.py write-evidence --changed-file <each file "
-                     "you changed>) and stop again.")
+    lines = ["LOOPKIT stop review: this turn changed code and nothing has reviewed it yet.",
+             f"Code files ({scope} scope): {shown}"]
+    lines += scope_notes(facts)
     lines.append("Next: dispatch the loopkit:reviewer agent (its instructions differ from yours) "
                  "to run loopkit:acceptance-review against specs/ for THESE files only, and act "
                  "on its verdict.")
@@ -370,8 +391,8 @@ def review_reason(payload, facts, live, said_waiting):
     elif said_waiting and not live:
         lines.append(f"You said {WAIT_MARKER}, but the payload lists no background task in "
                      "flight, so there is nothing to wait on.")
-    lines.append("This hook blocks at most once in a row: the next stop is not re-judged "
-                 "(stop_hook_active).")
+    lines.append("This hook blocks at most once in a row: on the next stop a verdict is "
+                 "recorded, not enforced (stop_hook_active).")
     return "\n".join(lines)
 
 
@@ -412,6 +433,107 @@ def run_review_cmd(cmd, root, payload, code):
         return 1, f"LOOP_STOP_REVIEW_CMD could not run: {e}"
 
 
+JUDGE_PROMPT = """You are the LoopKit stop-review judge, a separate model from the session
+that wrote this code. Your verdict decides whether the session may end its turn.
+
+You have Read, Grep and Glob ONLY. There is no Bash: do not try to run commands,
+tests or git. The hook has already measured the changes with git; trust the
+list below instead of re-deriving it.
+
+Repository root: {root}
+Scope: {scope}
+Code files changed this turn ({n}):
+{files}
+
+Evidence file {evidence_rel}: {evidence_status}
+{evidence_body}
+
+Run the loopkit:acceptance-review discipline against specs/ for THESE files only:
+read each file and the spec(s) whose EARS acceptance criteria it serves, and
+form a per-criterion verdict from the code and the criteria BEFORE reading the
+session's final message below; a judgement formed after the claim is not
+oversight. Flag only gaps that affect correctness. Files not in the list are
+not this turn's scope: never demand specs or tests for them. If no spec covers
+these files, judge them against the session's stated goal and say so.
+
+Session's final message (read LAST):
+{last_message}
+
+End your answer with exactly one line, the last line:
+VERDICT: PASS
+or
+VERDICT: REJECT <one-line reason>
+"""
+VERDICT_LINE = re.compile(r"^\s*VERDICT:\s*(PASS|REJECT)\b[:\s-]*(.*)$", re.M)
+
+
+def _int_env(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def run_judge(root, payload, facts):
+    """-> (PASS | REJECT | ERROR | OFF, text). Never decides whether to block."""
+    code = facts["code_files"]
+    cmd = os.environ.get("LOOP_STOP_REVIEW_CMD", "").strip()
+    if cmd:
+        rc, tail = run_review_cmd(cmd, root, payload, code)
+        return ("PASS" if rc == 0 else "REJECT"), f"LOOP_STOP_REVIEW_CMD exit {rc}. {tail}".strip()
+    if os.environ.get("LOOP_STOP_REVIEW_JUDGE", "on").strip().lower() in ("off", "0", "false", "no"):
+        return "OFF", "the model judge is switched off (LOOP_STOP_REVIEW_JUDGE=off)"
+    exe = os.environ.get("LOOPKIT_JUDGE_CLAUDE", "claude")
+    exe_path = exe if os.sep in exe else shutil.which(exe)
+    if not exe_path or not os.access(exe_path, os.X_OK):
+        return "ERROR", f"the judge could not run: `{exe}` is not an executable on PATH"
+    ev_path = root / EVIDENCE_REL
+    try:
+        ev_body = ev_path.read_text()[:4000] if ev_path.is_file() else "(no file)"
+    except Exception:
+        ev_body = "(unreadable)"
+    prompt = JUDGE_PROMPT.format(
+        root=root, scope=facts["scope"], n=len(code),
+        files="\n".join(f"- {f}" for f in code[:200]),
+        evidence_rel=EVIDENCE_REL, evidence_status=facts["evidence"][1], evidence_body=ev_body,
+        last_message=str(payload.get("last_assistant_message") or "(none)")[:4000])
+    argv = [exe_path, "-p",
+            "--allowedTools", "Read", "Grep", "Glob",
+            "--disallowedTools", "Bash",  # MUT-JUDGE-BASH
+            "--settings", '{"disableAllHooks": true}',
+            "--no-session-persistence", "--output-format", "text"]
+    env = dict(os.environ, LOOPKIT_STOP_REVIEW_NESTED="1",
+               LOOPKIT_TURN_CODE_FILES="\n".join(code))
+    timeout = _int_env("LOOP_STOP_REVIEW_TIMEOUT", 170)
+    try:
+        p = subprocess.run(argv, cwd=str(root), input=prompt, capture_output=True,
+                           text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return "ERROR", f"the judge timed out after {timeout}s"
+    except Exception as e:  # noqa: BLE001
+        return "ERROR", f"the judge could not run: {e}"
+    found = VERDICT_LINE.findall(p.stdout or "")
+    if p.returncode != 0 or not found:
+        tail = " ".join(((p.stdout or "") + (p.stderr or "")).strip().splitlines()[-3:])[:400]
+        return "ERROR", f"the judge gave no verdict (exit {p.returncode}): {tail}"
+    word, why = found[-1]
+    return word, (why.strip() or word)
+
+
+def record(root, firing, verdict, text):
+    """The ticks ledger is memory, not a control: a failure here changes nothing."""
+    if not (root / "state").is_dir():
+        return
+    try:
+        subprocess.run([sys.executable, str(PLUGIN_ROOT / "scripts" / "ticks.py"), "append",
+                        "--root", str(root), "--event", "stop_review",
+                        "--k", f"firing={firing}", "--k", f"result={verdict}",
+                        "--k", f"note={text[:200]}"],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
 def emit(verdict, message):
     if verdict == "BLOCK":
         print(json.dumps({"decision": "block", "reason": message}))
@@ -420,7 +542,14 @@ def emit(verdict, message):
     # ALLOW_QUIET prints nothing: a conversational turn needs no banner.
 
 
+def nested():
+    """True inside the judge's own headless session: both Stop hooks stand down there."""
+    return os.environ.get("LOOPKIT_STOP_REVIEW_NESTED") == "1"
+
+
 def stop_main(raw):
+    if nested():  # MUT-NESTED
+        return 0
     try:
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
@@ -435,25 +564,52 @@ def stop_main(raw):
         return 0
     facts = gather_facts(payload, root, time.time())
     verdict, message = decide(payload, facts)
-    if verdict == "REVIEW":
-        cmd = os.environ.get("LOOP_STOP_REVIEW_CMD", "").strip()
-        if cmd:
-            rc, tail = run_review_cmd(cmd, root, payload, facts["code_files"])
-            if rc == 0:
-                verdict, message = "ALLOW", f"LOOPKIT stop review: LOOP_STOP_REVIEW_CMD passed.\n{tail}".strip()
-            else:
-                verdict, message = "BLOCK", (f"LOOPKIT stop review: LOOP_STOP_REVIEW_CMD failed "
-                                             f"(exit {rc}).\n{tail}\nThis hook blocks at most once "
-                                             "in a row: the next stop is not re-judged.")
-        else:
-            verdict = "BLOCK"
+    if verdict == "SECOND":
+        # The judge may run again, but only to put its verdict on record. Whatever
+        # it says, this firing allows: one block per chain, enforced here, by code.
+        live = in_flight(payload)
+        waiting = live and WAIT_MARKER in str(payload.get("last_assistant_message") or "")
+        evidenced = facts["scope"] == "tree" and facts["evidence"][0] == "valid"
+        if facts["code_files"] and not waiting and not evidenced:
+            jv, jtext = run_judge(root, payload, facts)
+            record(root, "second", jv, jtext)
+            message += (f"\nThe judge's verdict on this second firing is recorded, not enforced: "
+                        f"{jv} — {jtext}")
+        verdict = "ALLOW"  # MUT-SECOND: never BLOCK on a second firing
+    elif verdict == "REVIEW":
+        jv, jtext = run_judge(root, payload, facts)
+        record(root, "first", jv, jtext)
+        if jv == "PASS":  # MUT-JUDGE-PASS
+            verdict, message = "ALLOW", f"LOOPKIT stop review: the judge PASSED this turn's code. {jtext}".strip()
+        elif jv == "REJECT":
+            verdict, message = "BLOCK", reject_reason(facts, jtext, payload)
+        else:  # ERROR or OFF: no verdict, so ask for the reviewer agent instead — once.
+            verdict, message = "BLOCK", f"{message}\nNo judge verdict: {jtext}."
     emit(verdict, message)
     return 0
+
+
+def reject_reason(facts, jtext, payload):
+    code = facts["code_files"]
+    shown = ", ".join(code[:20]) + (f" (+{len(code) - 20} more)" if len(code) > 20 else "")
+    lines = [f"LOOPKIT stop review: the judge REJECTED this turn's code ({facts['scope']} scope: {shown}).",
+             f"Judge: {jtext}",
+             "Fix what it names, or say plainly why it is wrong."]
+    lines += scope_notes(facts)
+    live = in_flight(payload)
+    if live and WAIT_MARKER not in str(payload.get("last_assistant_message") or ""):
+        lines.append(f"{len(live)} background task(s) are in flight. If you are waiting on them, "
+                     f"put {WAIT_MARKER} in your final message and stop.")
+    lines.append("This hook blocks at most once in a row: on the next stop the judge's verdict "
+                 "is recorded, not enforced (stop_hook_active).")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------- subcommands --
 def turn_start_main(raw):
     """UserPromptSubmit: record where this turn began. Silent, never blocks."""
+    if nested():
+        return 0
     try:
         payload = json.loads(raw) if raw.strip() else {}
         root = resolve_root(payload) if isinstance(payload, dict) else None
