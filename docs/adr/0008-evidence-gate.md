@@ -123,12 +123,20 @@ skip of any kind** — no flag, priority or word in the finding opens the door,
 urgent fixes included. Owner ruling, 2026-10-16: "i should always review,
 nothing skips a human in loop at least once".
 
-How a human approver is told from an agent, strongest rule first:
+How a human approver is told from an agent, in the order they are checked:
 
-1. If `<project>/.loopkit/approvers.txt` exists, the name must be on it
-   (case-insensitive). This is the guarantee; projects that want it add the
-   file.
-2. The name may not equal `LOOPKIT_AGENT`, the agent running the command.
+1. **Not the actor.** The name may not equal any identity the running process
+   is known by: `LOOPKIT_AGENT`, and `GIT_AUTHOR_NAME` / `GIT_COMMITTER_NAME`
+   when a harness sets them for its commits. Checked before the allowlist, so
+   an allowlisted name still cannot approve its own run. **Limit:** nothing in
+   this plugin sets `LOOPKIT_AGENT` — a harness or operator must export it per
+   agent — and `git config user.name` is deliberately not used, because in a
+   local session it is usually the human owner's own name and refusing it
+   would refuse the human. With none of these set, this rule checks nothing,
+   and the record says `run by unset`.
+2. **Allowlist.** If `<project>/.loopkit/approvers.txt` exists, the name must
+   be on it (case-insensitive). It is trusted only as described in §7, which is
+   what makes it the guarantee: adding a name takes a commit a reviewer sees.
 3. Without an allowlist, a name is refused when any of its words is a role or
    tool word (`agent`, `bot`, `claude`, `reviewer`, `implementer`, `ci`,
    `runner`, `github`, `noreply`, … — `evidence.AGENT_WORDS`), when it carries
@@ -149,12 +157,43 @@ commits — naming the date, the row, the target status, the reason, the human
 approver and the agent that ran it (or `unset`). It is written only after the row write succeeded, so a
 transition that failed for another reason leaves no override behind.
 
+### 7. The gate's own configuration is trusted only as committed
+
+`.loopkit/sources.json` decides what counts as a system of record and
+`.loopkit/approvers.txt` decides who may approve an override. An agent that
+could rewrite either could make the incident's evidence pass, or approve its
+own override. Two layers stop that (review of `0d7b8a7`):
+
+1. `protect_governance.py` lists both files beside `constitution.md` and
+   `specs/`, so a Write, an Edit or a shell redirect to either is refused.
+   This layer is a tool blocklist: an interpreter can write a file without
+   naming it where the hook looks.
+2. So the gate does not depend on spotting the write. `triage_state.py`
+   trusts each file only when it is **tracked and identical in the working
+   tree, the index and HEAD** (`git ls-files --error-unmatch`, then
+   `git status --porcelain -- <file>` empty). Untracked, modified, staged but
+   uncommitted, or not in a git checkout at all: refused, failing closed. A
+   project without the file uses the built-in defaults. Changing who may
+   approve, or what counts as a source, is therefore always a commit a
+   reviewer sees.
+
 ### 6. Fail closed
 
 An unreadable assessment, an invalid `sources.json`, or a helper module that
 will not load refuses the transition. This is the opposite of the ledger
 *write* (fail-open by design): a missing write is the ledger's problem; a check
 that could not run is not a pass.
+
+## Known limits
+
+- **A mislabelled read cannot be detected.** A cached flag written up as a
+  `data` read, or a URL parameter written up as `runtime`, looks exactly like a
+  real one. The gate does not try to detect it from the text — that would be
+  the blocklist decision 1 rejects. The `read:` line says what was read and
+  where, and the reviewer judges it.
+- **Placeholders are refused by a filler list** (`TODO`, `TBD`, `?`, `...`,
+  `<…>`, `n/a`, …): a list that can only make the gate stricter.
+- **The actor check depends on an identity being set** (§5 rule 1).
 
 ## Consequences
 

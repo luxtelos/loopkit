@@ -25,6 +25,10 @@ MUST_BLOCK = [
      "/repo/app/.claude/worktrees/other/specs/foo.md"),
     ("relative path to constitution", "Edit", "constitution.md"),
     ("notebook edit on a spec", "NotebookEdit", "/repo/app/specs/model.ipynb"),
+    ("the evidence gate's approver list", "Write", "/repo/app/.loopkit/approvers.txt"),
+    ("the approver list via another worktree", "Edit",
+     "/repo/app/.claude/worktrees/other/.loopkit/approvers.txt"),
+    ("the evidence gate's systems of record", "Write", "/repo/app/.loopkit/sources.json"),
 ]
 MUST_ALLOW = [
     ("an ordinary source file", "Edit", "/repo/app/lib/db/repos/usage.ts"),
@@ -32,6 +36,9 @@ MUST_ALLOW = [
     ("the inbox", "Edit", "/repo/app/inbox/needs-human.md"),
     ("a doc that merely mentions specs", "Edit", "/repo/app/docs/specs-guide.md"),
     ("a non-edit tool", "Bash", "/repo/app/constitution.md"),
+    ("the plugin's sources TEMPLATE (not a project's config)", "Edit",
+     "/repo/app/plugins/loopkit/templates/loopkit/sources.json"),
+    ("another .loopkit file", "Edit", "/repo/app/.loopkit/scopes.json"),
 ]
 
 

@@ -118,13 +118,27 @@ finding *should* have read; any new queue column or status.
   `--approved-by` is given without `--override-sources`, THE recorder SHALL
   refuse; WHEN an override is allowed, THE approver SHALL appear in both the
   `state/triage.md` line and the ledger event.
-- **E21** IF `.loopkit/approvers.txt` exists, THEN THE approver SHALL be on it;
-  OTHERWISE THE recorder SHALL refuse an approver equal to `LOOPKIT_AGENT`, or
+- **E21** THE recorder SHALL refuse an approver equal to `LOOPKIT_AGENT`,
+  `GIT_AUTHOR_NAME` or `GIT_COMMITTER_NAME` when set, before any allowlist.
+  IF `.loopkit/approvers.txt` exists, THEN THE approver SHALL be on it;
+  OTHERWISE THE recorder SHALL refuse one with
   one with a role/tool word (`evidence.AGENT_WORDS`), a `[bot]` tag, an `@`
   address or a run of 4+ digits.
 - **E22** THE recorder SHALL offer no label-, priority- or flag-based skip of
   the gate; a row labelled as an urgent fix with no evidence SHALL be refused
   like any other.
+
+**The gate's own configuration** (review of 0d7b8a7)
+
+- **E25** IF `.loopkit/sources.json` or `.loopkit/approvers.txt` exists and is
+  not tracked and identical in the working tree, the index and HEAD, THEN THE
+  recorder SHALL NOT trust it: a gated transition (sources.json) or an
+  override (approvers.txt) SHALL be refused, naming the file. AND
+  `protect_governance.py` SHALL refuse a Write, Edit or shell redirect to
+  either file.
+- **E26** A `read:`, `n/a:`, `explained:` or reason made only of filler words
+  or placeholders (`TODO`, `TBD`, `?`, `...`, `<…>`) SHALL NOT be usable;
+  `explained:` SHALL count only at the start of its own line under the item.
 
 **Control**
 

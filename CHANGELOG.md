@@ -49,6 +49,20 @@ contradiction — was never reconciled.
   `## Evidence-gate overrides` in `state/triage.md`, so they are committed with
   the tick — the ledger never is. Recorded only after the row write succeeded;
   an empty reason is refused.
+- **The gate's own configuration is trusted only as committed.**
+  `.loopkit/sources.json` and `.loopkit/approvers.txt` are refused by
+  `protect_governance.py` (Write, Edit, shell redirect), and — because that
+  hook is a tool blocklist an interpreter can walk past — `triage_state.py`
+  also refuses to trust either file unless it is tracked and identical in the
+  working tree, the index and HEAD. So who may approve, and what counts as a
+  source, change only through a commit a reviewer sees. **Commit
+  `.loopkit/sources.json` after init**, or the gate refuses until you do.
+- Placeholder reads (`read: TODO`, `TBD`, `?`, `...`, `<…>`) are refused, and
+  `explained:` counts only at the start of its own line under the item.
+- The approver may not equal `LOOPKIT_AGENT`, `GIT_AUTHOR_NAME` or
+  `GIT_COMMITTER_NAME` when set, even if allowlisted. Nothing in the plugin
+  sets `LOOPKIT_AGENT`; `git config user.name` is not used (locally it is
+  usually the human's own name).
 - **`scripts/source-snapshot.py`** (loop-assess step A0): writes the
   `## Sources` skeleton, one row per class, matches the finding's nouns to
   classes as a suggestion, and probes which CLIs answer. Anything it cannot
@@ -57,8 +71,8 @@ contradiction — was never reconciled.
 - **`templates/loopkit/sources.json`**, laid down by init; identical to the
   built-in defaults (pinned).
 - **`loopkit_core/evidence.py`**, the pure parser.
-- Pins: `tests/pins/evidence-gate.py` (244 cases) and
-  `tests/pins/evidence-gate-prove-red.sh` (34 mutations, one per half of the
+- Pins: `tests/pins/evidence-gate.py` (299 cases) and
+  `tests/pins/evidence-gate-prove-red.sh` (43 mutations, one per half of the
   gate, each in a scratch copy).
 
 ### Also in this release
@@ -79,7 +93,7 @@ contradiction — was never reconciled.
   recorder ignores the file, so `--regen <older ref>` still works.
 - `tests/selftest.sh`: the end-to-end `spec-draft` move first proves the
   refusal with no assessment, then writes one; and `docs/GETTING-STARTED.md`'s
-  citation of the suite's citation-gate line moved with it (332 → 342).
+  citation of the suite's citation-gate line moved with it (now 350).
 
 ### Upgrading
 

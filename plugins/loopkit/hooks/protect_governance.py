@@ -13,6 +13,16 @@ Protected by default:
 
   constitution.md     ratified governance
   specs/              the source of truth; code is its build output
+  .loopkit/approvers.txt   who may approve an evidence-gate override
+  .loopkit/sources.json    what counts as a system of record for that gate
+
+The last two were added with the evidence gate (docs/adr/0008): an agent that
+could rewrite either could approve its own override, or make a derived value
+count as a source, and "nothing skips a human" would be a sentence. This hook
+is the first layer only: it is a tool blocklist, and an interpreter can write
+a file without naming it on a command line. So `triage_state.py` also refuses
+to trust either file while it has uncommitted changes — the second layer, and
+the one that does not depend on spotting the write.
 
 Per-project extension: <project>/.loopkit/protected.txt, one regex per line,
 matched against the normalised absolute path.
@@ -45,6 +55,10 @@ from pathlib import Path
 PROTECTED: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?:^|/)constitution\.md$"), "constitution.md is ratified governance"),
     (re.compile(r"(?:^|/)specs/"), "specs/ is the source of truth"),
+    (re.compile(r"(?:^|/)\.loopkit/approvers\.txt$"),
+     ".loopkit/approvers.txt decides who may approve an evidence-gate override"),
+    (re.compile(r"(?:^|/)\.loopkit/sources\.json$"),
+     ".loopkit/sources.json decides what counts as a system of record"),
 ]
 
 

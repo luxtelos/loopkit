@@ -646,6 +646,54 @@ def _evidence_module():
         ) from exc
 
 
+# The two files that decide what the gate accepts. A tool-level guard
+# (protect_governance.py) blocks the obvious writes, but it is a blocklist and
+# an interpreter walks past it. So the gate itself trusts either file only as
+# COMMITTED: tracked, and identical in the working tree, the index and HEAD.
+# Then changing who may approve, or what counts as a source, takes a commit a
+# reviewer sees (review of 0d7b8a7: an agent could add itself to the approver
+# list, or make `derived` count, and the incident's evidence then passed).
+GATE_CONFIG_FILES = (".loopkit/sources.json", ".loopkit/approvers.txt")
+
+
+def uncommitted_config(root: Path, rel: str) -> str:
+    """Empty when `rel` is absent, or tracked and clean. Otherwise why the gate
+    will not trust it. Fails CLOSED: if git cannot answer, the file is not
+    trusted."""
+    import subprocess
+    if not (root / rel).exists():
+        return ""
+    git = ["git", "-C", str(root), "-c", "core.quotepath=off"]
+    try:
+        tracked = subprocess.run(git + ["ls-files", "--error-unmatch", "--", rel],
+                                 capture_output=True, text=True, timeout=20)
+        if tracked.returncode != 0:
+            return (f"{rel} exists but is not committed (or this is not a git checkout). "
+                    f"The evidence gate trusts it only as committed, so a reviewer sees "
+                    f"every change to it: commit it, or remove it to use the defaults")
+        dirty = subprocess.run(git + ["status", "--porcelain", "--", rel],
+                               capture_output=True, text=True, timeout=20)
+        if dirty.returncode != 0:
+            return f"{rel}: git status failed ({dirty.stderr.strip()[:120]}); not trusted"
+        if dirty.stdout.strip():
+            return (f"{rel} has UNCOMMITTED changes. The evidence gate trusts it only as "
+                    f"committed — who may approve, and what counts as a source, change "
+                    f"through a commit a reviewer sees. Commit it, or restore it")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"{rel}: could not ask git whether it is committed ({exc}); not trusted"
+    return ""
+
+
+def acting_identities() -> dict[str, str]:
+    """Identities the running process is known by. `LOOPKIT_AGENT` is set by
+    nobody in this plugin — a harness or the operator must export it per agent
+    — so it is often absent; the git identity variables are used when a
+    harness sets them. `git config user.name` is not used: locally it is
+    usually the human owner's own name."""
+    names = ("LOOPKIT_AGENT", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
+    return {n: os.environ[n] for n in names if os.environ.get(n, "").strip()}
+
+
 def check_evidence(
     state: Path,
     source: str,
@@ -668,15 +716,22 @@ def check_evidence(
             "--override-sources needs a reason. An override with no reason is not a "
             "decision, it is the gate switched off."
         )
+    root = project_root_for(state)
     if override is not None:
-        who = ev.approver_problems(approved_by, os.environ.get("LOOPKIT_AGENT"),
-                                   project_root_for(state))
+        dirty = uncommitted_config(root, ".loopkit/approvers.txt")
+        if dirty:
+            raise ValueError(dirty)
+        who = ev.approver_problems(approved_by, acting_identities(), root)
         if who:
             raise ValueError(who[0])
-    try:
-        path, problems = ev.evaluate(project_root_for(state), normalize_cell(source), assessment)
-    except ValueError as exc:
-        path, problems = None, [str(exc)]
+    dirty = uncommitted_config(root, ".loopkit/sources.json")
+    if dirty:
+        path, problems = None, [dirty]
+    else:
+        try:
+            path, problems = ev.evaluate(root, normalize_cell(source), assessment)
+        except ValueError as exc:
+            path, problems = None, [str(exc)]
     if not problems:
         return None
     if override is not None:

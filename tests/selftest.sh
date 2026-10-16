@@ -225,6 +225,11 @@ python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status
   && fail "spec-draft was allowed with no assessment on disk" \
   || ok "spec-draft is refused while the row has no assessment"
 printf 'Row source: GitHub #12\n\n## Sources\n\n| class | system of record | evidence |\n|---|---|---|\n| data | database | read: invoice and refund rows, dev |\n| runtime | logs | read: the refund handler log at the time, dev |\n\n## Does not fit\n\n- none — compared both reads; they agree\n' > "$T/state/2026-01-01-invoice-drift-assessment.md"
+# init laid down .loopkit/sources.json; the gate trusts it only once committed.
+python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null 2>&1 \
+  && fail "spec-draft was allowed while .loopkit/sources.json is uncommitted" \
+  || ok "spec-draft is refused while init's .loopkit/sources.json is uncommitted"
+git -C "$T" add .loopkit/sources.json && git -C "$T" -c commit.gpgsign=false -c user.email=t@t -c user.name=t commit -q --no-verify -m "commit the gate's systems of record" -- .loopkit/sources.json
 python3 "$TS" update --state "$T/state/triage.md" --source "GitHub #12" --status spec-draft >/dev/null
 # Capture first, grep second: under pipefail, `script | grep -q` fails when grep
 # exits on the first match and the script takes SIGPIPE on its next echo.
@@ -1237,18 +1242,18 @@ echo "== evidence gate: a cause moves forward only on evidence it wrote down"
 eg="$(python3 "$REPO/tests/pins/evidence-gate.py" 2>&1)"; eg_rc=$?
 printf '%s\n' "$eg" | grep '^  FAIL' || true
 eg_ok="$(printf '%s\n' "$eg" | grep -c '^  ok ' || true)"
-[ "$eg_rc" = 0 ] && [ "$eg_ok" -ge 244 ] \
+[ "$eg_rc" = 0 ] && [ "$eg_ok" -ge 299 ] \
   && ok "one source, one system read twice, derived values, missing or empty sections and unexplained contradictions are refused; two systems with one live, a stated 'Live state: none' with two systems, and a human-approved override pass ($eg_ok cases)" \
-  || fail "evidence gate: rc=$eg_rc, $eg_ok/244 cases ok — $(printf '%s' "$eg" | tail -1)"
+  || fail "evidence gate: rc=$eg_rc, $eg_ok/299 cases ok — $(printf '%s' "$eg" | tail -1)"
 # Each half must be able to fail on its own: one mutation per half, each in a
 # scratch copy, each required to turn its own line red.
 egr="$(bash "$REPO/tests/pins/evidence-gate-prove-red.sh" "$REPO" 2>&1)"
 egr_red="$(printf '%s\n' "$egr" | grep -c '^RED, as required' || true)"
 egr_not="$(printf '%s\n' "$egr" | grep -c 'NOT RED' || true)"
 printf '%s\n' "$egr" | grep 'NOT RED' || true
-[ "$egr_red" = 34 ] && [ "$egr_not" = 0 ] \
-  && ok "all 34 halves of the evidence gate are provably catchable, and the harness left the tracked tree alone" \
-  || fail "evidence gate mutations: $egr_red/34 red, $egr_not not red"
+[ "$egr_red" = 43 ] && [ "$egr_not" = 0 ] \
+  && ok "all 43 halves of the evidence gate are provably catchable, and the harness left the tracked tree alone" \
+  || fail "evidence gate mutations: $egr_red/43 red, $egr_not not red"
 
 
 echo "== the queue never parses as empty when it is not"

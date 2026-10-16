@@ -126,7 +126,10 @@ _LIVE_NONE = re.compile(rf"^\s*(?:[-*+]\s+)?Live state:\s*none\b\s*(?:{_SEP}\s*(
 _EVIDENCE = re.compile(r"^(read|n/a)\s*:\s*(.*)$", re.I)
 _BULLET = re.compile(r"^ ?(?:[-*+]|\d+[.)])\s+(.*)$")
 _NONE_ITEM = re.compile(rf"^none\b\s*(?:{_SEP}\s*(.*))?$", re.I)
-_EXPLAINED = re.compile(r"\bexplained\s*:(.*)$", re.I)
+# `explained:` must START its own line under the item (review of 0d7b8a7:
+# "- sign-in did not loop (not explained: yet)" passed when it could match
+# anywhere). The observation line itself never counts.
+_EXPLAINED = re.compile(r"^(?:[-*+]\s+)?explained\s*:(.*)$", re.I)
 
 
 def norm(value: str) -> str:
@@ -137,12 +140,28 @@ def system_key(value: str) -> str:
     return norm(value).lower()
 
 
+# Words that stand in for content without being any. A `read:` / `n/a:` /
+# `explained:` / reason made ONLY of these is a placeholder, not evidence
+# (review of 0d7b8a7: `read: TODO` counted as a read). A list of filler, not of
+# claims: it can only make the gate stricter, never let a claim through.
+FILLER_WORDS = frozenset({
+    "todo", "tbd", "tba", "tbc", "fixme", "xxx", "tk", "wip", "later", "pending",
+    "unknown", "placeholder", "none", "nothing", "etc", "misc", "yes", "no", "ok",
+    "same", "na", "nil", "null", "fill", "in",
+})
+
+
 def has_substance(text: str | None) -> bool:
-    """Two consecutive letters or digits once `<…>` placeholders are gone.
-    `read: <what, env>`, `none —`, `explained:` and ` - ` all fail it."""
+    """Two consecutive letters or digits once `<…>` placeholders are gone, and
+    at least one word that is not filler. `read: <what, env>`, `read: TODO`,
+    `read: ...`, `none —`, `explained:` and ` - ` all fail it."""
     if text is None:
         return False
-    return bool(_SUBSTANCE.search(_PLACEHOLDER.sub("", text)))
+    bare = _PLACEHOLDER.sub("", text)
+    if not _SUBSTANCE.search(bare):
+        return False
+    words = [w.lower() for w in re.findall(r"[^\W_]+", bare)]
+    return any(w not in FILLER_WORDS and len(w) >= 2 for w in words)
 
 
 def strip_noise(text: str) -> str:
@@ -342,7 +361,7 @@ def check_does_not_fit(body: str | None) -> list[str]:
         return []
     problems = []
     for item in items:
-        reasons = [m.group(1) for m in (_EXPLAINED.search(l) for l in item.splitlines()) if m]
+        reasons = [m.group(1) for m in (_EXPLAINED.match(l.strip()) for l in item.splitlines()[1:]) if m]
         if not any(has_substance(r) for r in reasons):
             first = item.splitlines()[0].strip()
             problems.append(f"does-not-fit item not explained: '{first[:90]}'. Add "
@@ -477,20 +496,32 @@ def approvers_allowlist(root: Path) -> list[str] | None:
     return names
 
 
-def approver_problems(name: str | None, acting_agent: str | None, root: Path) -> list[str]:
-    """Empty when `name` is acceptable as the human approving an override."""
+def approver_problems(name: str | None, acting: dict[str, str] | str | None,
+                      root: Path) -> list[str]:
+    """Empty when `name` is acceptable as the human approving an override.
+
+    `acting` maps a label to an identity the RUNNING process is known by:
+    LOOPKIT_AGENT, and GIT_AUTHOR_NAME / GIT_COMMITTER_NAME when the harness
+    sets them for its commits. The approver may equal none of them — checked
+    BEFORE the allowlist, so an allowlisted name still cannot approve its own
+    run (ADR 0008 §5 rule 2). `git config user.name` is deliberately NOT one of
+    them: in a local session it is usually the human owner's own name, and
+    refusing it would refuse the human."""
     who = norm(name or "")
     if not has_substance(who) or not _WORDS.search(who):
         return ["--override-sources must name the HUMAN who approved it: add "
                 "--approved-by \"<human name>\". Nothing skips a human (owner, 2026-10-16)"]
+    if isinstance(acting, str):
+        acting = {"LOOPKIT_AGENT": acting}
+    for label, ident in (acting or {}).items():
+        if ident and who.lower() == norm(ident).lower():
+            return [f"approver '{who}' is the identity running this command ({label}); "
+                    f"an agent cannot approve its own override"]
     allow = approvers_allowlist(root)
     if allow is not None:
         if who.lower() not in allow:
             return [f"approver '{who}' is not listed in {Path(root).joinpath(*APPROVERS_FILE)}"]
         return []
-    if acting_agent and who.lower() == norm(acting_agent).lower():
-        return [f"approver '{who}' is the agent running this command (LOOPKIT_AGENT); "
-                f"an agent cannot approve its own override"]
     words = {w.lower() for w in _WORDS.findall(who)}
     hits = sorted(words & AGENT_WORDS)
     if hits or "[bot]" in who.lower() or "@" in who or _LONG_DIGITS.search(who):

@@ -163,9 +163,9 @@ plugins/loopkit/loopkit_core/evidence.py
 @@
 FAIL [E6] REFUSED: the snapshot's placeholders
 @@
-    return bool(_SUBSTANCE.search(_PLACEHOLDER.sub("", text)))
+    bare = _PLACEHOLDER.sub("", text)
 @@
-    return bool(_SUBSTANCE.search(text))
+    bare = text
 @@@@
 COMMENTS-COUNT
 @@
@@ -340,11 +340,9 @@ plugins/loopkit/loopkit_core/triage_state.py
 @@
 FAIL [E20] REFUSED: an override with NO named approver
 @@
-    if override is not None:
-        who = ev.approver_problems(
+        who = ev.approver_problems(approved_by, acting_identities(), root)
 @@
-    if False:
-        who = ev.approver_problems(
+        who = []
 @@@@
 APPROVED-BY-ALONE
 @@
@@ -382,9 +380,9 @@ plugins/loopkit/loopkit_core/evidence.py
 @@
 FAIL [E21] REFUSED: an approver equal to the acting agent
 @@
-    if acting_agent and who.lower() == norm(acting_agent).lower():
+        if ident and who.lower() == norm(ident).lower():
 @@
-    if False:
+        if False:
 @@@@
 ALLOWLIST-IGNORED
 @@
@@ -408,6 +406,100 @@ FAIL [E24] REFUSED: an in-flight fixing row with NO assessment
     if not hits:
         return None, []
         return None, [f"no assessment under
+@@@@
+FILLER-COUNTS
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E6] REFUSED: a placeholder read is not a read: `read: TODO`
+@@
+    return any(w not in FILLER_WORDS and len(w) >= 2 for w in words)
+@@
+    return True
+@@@@
+EXPLAINED-ANYWHERE
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E9] REFUSED: `explained:` buried inside the observation line
+@@
+        reasons = [m.group(1) for m in (_EXPLAINED.match(l.strip()) for l in item.splitlines()[1:]) if m]
+@@
+        reasons = [m.group(1) for m in (re.search(r"explained\s*:(.*)$", l, re.I) for l in item.splitlines()) if m]
+@@@@
+ALLOWLIST-SKIPS-SELF-CHECK
+@@
+plugins/loopkit/loopkit_core/evidence.py
+@@
+FAIL [E21] REFUSED: an allowlisted name that is also the acting LOOPKIT_AGENT
+@@
+    for label, ident in (acting or {}).items():
+@@
+    for label, ident in ({} if approvers_allowlist(root) is not None else (acting or {})).items():
+@@@@
+GIT-IDENTITY-IGNORED
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E21] REFUSED: an approver equal to the commit identity
+@@
+    names = ("LOOPKIT_AGENT", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
+@@
+    names = ("LOOPKIT_AGENT",)
+@@@@
+DIRTY-APPROVERS-TRUSTED
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E25] layer 2: a python-heredoc write to approvers.txt
+@@
+        dirty = uncommitted_config(root, ".loopkit/approvers.txt")
+        if dirty:
+            raise ValueError(dirty)
+@@
+        pass  # mutation: dirty approvers.txt trusted
+@@@@
+DIRTY-SOURCES-TRUSTED
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E25] an UNCOMMITTED sources.json
+@@
+    dirty = uncommitted_config(root, ".loopkit/sources.json")
+    if dirty:
+@@
+    dirty = ""
+    if dirty:
+@@@@
+STAGED-COUNTS-AS-COMMITTED
+@@
+plugins/loopkit/loopkit_core/triage_state.py
+@@
+FAIL [E25] staged but not committed is still refused
+@@
+        dirty = subprocess.run(git + ["status", "--porcelain", "--", rel],
+@@
+        dirty = subprocess.run(git + ["diff", "--name-only", "--", rel],
+@@@@
+GOVERNANCE-APPROVERS-UNPROTECTED
+@@
+plugins/loopkit/hooks/protect_governance.py
+@@
+FAIL [E25] layer 1: a Write to .loopkit/approvers.txt
+@@
+    (re.compile(r"(?:^|/)\.loopkit/approvers\.txt$"),
+@@
+    (re.compile(r"(?:^|/)\.loopkit/approvers\.txt-never$"),
+@@@@
+GOVERNANCE-SOURCES-UNPROTECTED
+@@
+plugins/loopkit/hooks/protect_governance.py
+@@
+FAIL [E25] layer 1: a Write to .loopkit/sources.json
+@@
+    (re.compile(r"(?:^|/)\.loopkit/sources\.json$"),
+@@
+    (re.compile(r"(?:^|/)\.loopkit/sources\.json-never$"),
 EOF
 
 # Split the data into one directory per mutation: id, file, want, old, new.

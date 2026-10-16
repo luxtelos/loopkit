@@ -84,8 +84,12 @@ whether the finding may move on, and `triage_state.py` enforces both at
   `explained:` line. The incident's own note — "a plain sign-in did not loop"
   — was the contradiction nobody reconciled.
 
-The gate cannot tell whether a `read:` happened or whether you read the right
-systems; it makes you say which, where a reviewer will see it. If a human
+The gate cannot tell whether a `read:` happened, and it cannot tell a cached
+flag written up as a `data` read from a real row — it does not guess from the
+text. It makes you say what you read and where, so a reviewer can judge it.
+`read: TODO`, `TBD`, `?` and `...` are refused as placeholders.
+`.loopkit/sources.json` and `.loopkit/approvers.txt` count only as committed:
+edit them in a commit a reviewer sees, never mid-assessment. If a human
 decides to move on without the evidence, the door is
 `--override-sources "<reason>" --approved-by "<human name>"`. Nothing skips a
 human: the approver must be a person (an agent, bot or CI identity is

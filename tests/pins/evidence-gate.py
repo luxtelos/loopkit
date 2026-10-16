@@ -101,7 +101,26 @@ def project(text: str | None = None, *, status: str = "new",
     if sources_json is not None:
         (root / ".loopkit").mkdir()
         (root / ".loopkit" / "sources.json").write_text(sources_json)
+        commit_all(root)
     return root
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True,
+                          env=clean_env())
+
+
+def commit_all(root):
+    """Make `root` a git checkout with everything committed. The gate trusts
+    .loopkit/sources.json and approvers.txt only as committed, so a fixture that
+    means to test what those files SAY must commit them first. Signing is off
+    for the fixture (clean_env), so this never waits on a key agent."""
+    if not (root / ".git").exists():
+        git(root, "init", "-q", ".")
+    git(root, "add", "-A", ".")
+    r = git(root, "-c", "user.email=fixture@example.invalid", "-c", "user.name=Fixture",
+            "commit", "-q", "--no-verify", "-m", "fixture")
+    assert r.returncode == 0, r.stderr
 
 
 def run(root, *args, env=None, cwd=None):
@@ -247,6 +266,16 @@ refused("E6", "the snapshot's placeholders left in (`read: <what, env>`)", proje
 | data     | database          | read: <what, env> |
 """)))
 
+for filler in ("TODO", "TBD", "?", "...", "…", "<what, env>", "tbd, later", "n/a"):
+    refused("E6", f"a placeholder read is not a read: `read: {filler}`", project(assessment(
+        sources=f"""## Sources
+
+| class    | system of record  | evidence |
+|---|---|---|
+| identity | identity provider | read: {filler} |
+| data     | database          | read: role rows, dev |
+""")))
+
 refused("E6", "a class the project never configured is refused, not ignored", project(assessment(
     sources="""## Sources
 
@@ -276,6 +305,13 @@ out = refused("E9", "an observation that does not fit, left unexplained", projec
   explained: profile rows are written at first sign-in, not at invite
 """)))
 check("E9", "  ...and the refusal quotes the unexplained item", "plain sign-in" in out, out)
+
+refused("E9", "`explained:` buried inside the observation line does not count", project(assessment(
+    dnf="## Does not fit\n\n- a plain sign-in did not loop (not explained: yet)\n")))
+refused("E9", "`explained: TODO` is a placeholder, not an explanation", project(assessment(
+    dnf="## Does not fit\n\n- a plain sign-in did not loop\n  explained: TODO\n")))
+allowed("E9", "`- explained: …` as a sub-bullet on its own line counts", project(assessment(
+    dnf="## Does not fit\n\n- a plain sign-in did not loop\n  - explained: the plain path never reads the flag\n")))
 
 refused("E9", "`explained:` with nothing after it", project(assessment(
     dnf="## Does not fit\n\n- a plain sign-in did not loop\n  explained:\n")))
@@ -365,12 +401,118 @@ check("E21", "REFUSED: an approver equal to the acting agent (LOOPKIT_AGENT) —
 p = project(assessment(sources=None))
 (p / ".loopkit").mkdir()
 (p / ".loopkit" / "approvers.txt").write_text("# humans who may approve an override\nAsha Rao\n")
+commit_all(p)
 r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Sam Lee")
 check("E21", "REFUSED: with .loopkit/approvers.txt present, a name not on it",
       r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
 r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "asha rao")
 check("E21", "ALLOWED: a name on .loopkit/approvers.txt (case-insensitive)",
       r.returncode == 0 and status_of(p) == "spec-draft", r.stdout + r.stderr)
+# Rule 2 before rule 1: an allowlisted name still cannot approve its own run.
+p = project(assessment(sources=None))
+(p / ".loopkit").mkdir()
+(p / ".loopkit" / "approvers.txt").write_text("Asha Rao\n")
+commit_all(p)
+r = run(p, "update", "--source", "src/one", "--status", "spec-draft",
+        "--override-sources", "owner said go", "--approved-by", "Asha Rao",
+        env={"LOOPKIT_AGENT": "asha rao"})
+check("E21", "REFUSED: an allowlisted name that is also the acting LOOPKIT_AGENT",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+p = project(assessment(sources=None))
+r = run(p, "update", "--source", "src/one", "--status", "spec-draft",
+        "--override-sources", "owner said go", "--approved-by", "Pat Kim",
+        env={"GIT_COMMITTER_NAME": "Pat Kim"})
+check("E21", "REFUSED: an approver equal to the commit identity the harness set (GIT_COMMITTER_NAME)",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+
+# ---- the gate trusts its two config files only as COMMITTED (review of 0d7b8a7)
+print("== the gate's own config is trusted only as committed")
+GOV = PLUGIN / "hooks" / "protect_governance.py"
+
+
+def hook_rc(root, payload):
+    env = clean_env({"CLAUDE_PROJECT_DIR": str(root)})
+    env.pop("GOVERNANCE_EDIT_OK", None)
+    return subprocess.run([sys.executable, str(GOV)], input=json.dumps(payload),
+                          capture_output=True, text=True, env=env).returncode
+
+
+def with_allowlist():
+    p = project(assessment(sources=None))
+    (p / ".loopkit").mkdir()
+    (p / ".loopkit" / "approvers.txt").write_text("Asha Rao\n")
+    commit_all(p)
+    return p
+
+
+# Layer 1: the tool guard refuses the obvious writes.
+p = with_allowlist()
+ap = p / ".loopkit" / "approvers.txt"
+check("E25", "layer 1: a Write to .loopkit/approvers.txt is blocked by protect_governance (rc=2)",
+      hook_rc(p, {"tool_name": "Write", "tool_input": {"file_path": str(ap), "content": "x"}}) == 2)
+check("E25", "layer 1: a Write to .loopkit/sources.json is blocked (rc=2)",
+      hook_rc(p, {"tool_name": "Write", "tool_input": {
+          "file_path": str(p / ".loopkit" / "sources.json"), "content": "{}"}}) == 2)
+check("E25", "layer 1: `echo Mallory Doe >> .loopkit/approvers.txt` is blocked (rc=2)",
+      hook_rc(p, {"tool_name": "Bash", "tool_input": {
+          "command": f"echo Mallory Doe >> {ap}"}}) == 2)
+# Layer 2: a write the hook never sees (an interpreter heredoc) is still refused BY THE GATE.
+subprocess.run([sys.executable, "-", str(ap)], input=(
+    "import sys; open(sys.argv[1], 'a').write('Mallory Doe\\n')\n"), text=True, check=True)
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Mallory Doe")
+check("E25", "layer 2: a python-heredoc write to approvers.txt is REFUSED by the gate (uncommitted)",
+      r.returncode != 0 and status_of(p) == "new" and "UNCOMMITTED" in (r.stdout + r.stderr),
+      r.stdout + r.stderr)
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Asha Rao")
+check("E25", "...even for a name that WAS on the committed list: a dirty list is not trusted at all",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+git(p, "add", ".loopkit/approvers.txt")
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Mallory Doe")
+check("E25", "staged but not committed is still refused", r.returncode != 0 and status_of(p) == "new",
+      r.stdout + r.stderr)
+p = project(assessment(sources=None))
+(p / ".loopkit").mkdir()
+(p / ".loopkit" / "approvers.txt").write_text("Mallory Doe\n")
+r = move(p, "spec-draft", "--override-sources", "owner said go", "--approved-by", "Mallory Doe")
+check("E25", "an approvers.txt that was never committed (or no git at all) is refused",
+      r.returncode != 0 and status_of(p) == "new", r.stdout + r.stderr)
+
+# sources.json: the incident's evidence must not pass because an agent flipped `derived`.
+INCIDENT = assessment(sources="""## Sources
+
+| class   | system of record | evidence |
+|---|---|---|
+| derived | app output       | read: the response field says the invite is pending |
+| code    | code graph + git | read: the handler that sets it |
+""")
+p = project(INCIDENT)
+commit_all(p)
+flipped = json.loads(TEMPLATE.read_text())
+flipped["classes"]["derived"]["counts"] = True
+flipped["classes"]["derived"]["live"] = True
+(p / ".loopkit").mkdir()
+# Written by an interpreter heredoc, the shape layer 1 cannot see.
+subprocess.run([sys.executable, "-", str(p / ".loopkit" / "sources.json"), json.dumps(flipped)],
+               input="import sys; open(sys.argv[1], 'w').write(sys.argv[2])\n",
+               text=True, check=True)
+before = (p / "state" / "triage.md").read_bytes()
+r = move(p, "spec-draft")
+check("E25", "an UNCOMMITTED sources.json that makes `derived` count and count as live is refused",
+      r.returncode != 0 and status_of(p) == "new"
+      and (p / "state" / "triage.md").read_bytes() == before, r.stdout + r.stderr)
+commit_all(p)
+r = move(p, "spec-draft")
+check("E25", "...and once COMMITTED it is honoured: the change is now a commit a reviewer sees",
+      r.returncode == 0 and status_of(p) == "spec-draft", r.stdout + r.stderr)
+p = project(assessment(), sources_json=TEMPLATE.read_text())
+check("E25", "a committed, unchanged sources.json is honoured",
+      move(p, "spec-draft").returncode == 0 and status_of(p) == "spec-draft")
+p2 = project(assessment(), sources_json=TEMPLATE.read_text())
+(p2 / ".loopkit" / "sources.json").write_text(TEMPLATE.read_text() + "\n")
+r = move(p2, "spec-draft")
+check("E25", "a whitespace-only uncommitted edit to sources.json is still refused (no diff is 'harmless')",
+      r.returncode != 0 and status_of(p2) == "new", r.stdout + r.stderr)
+
 r = move(project(assessment()), "spec-draft", "--approved-by", "Asha Rao")
 check("E20", "REFUSED: --approved-by without --override-sources (an approval of nothing)",
       r.returncode != 0, r.stdout + r.stderr)
