@@ -56,6 +56,39 @@ splits the command the way the shell does and reads each `git push` argv.
 Unlike the rest of this file it FAILS CLOSED: a command that mentions git and
 push and cannot be read, or that crashes the hook, is blocked. The rule names
 `git-force-push` and `git-push-delete` are unchanged.
+
+A FIFTH lesson, 2026-10-08: Bash is not the only tool that runs a shell line.
+An MCP tool can type one too — the desktop terminal's `run_in_terminal
+{command}`, desktop-commander's `start_process {command}` and
+`interact_with_process {input}`, any server's `execute_command`. This hook was
+wired to the `Bash` matcher only, so `gh pr merge 1` sent through such a tool
+met no hook at all (independent review FAIL of PR #61). It is now wired on
+`Bash|mcp__.*`, and `commands_from_payload` decides what an MCP call would run:
+
+  * a SHELL-CAPABLE tool (is_shell_tool: a pinned name in SHELL_TOOL_NAMES,
+    a shell-only word such as terminal/shell/bash/ssh, or a run-verb with a
+    command-object such as execute_command or start_process) has EVERY
+    string in its input checked, because the line may arrive under any key
+    (`input`, `keys`, `text`). `execute` alone is not enough:
+    execute_workflow's chat input is prose (review of 5514e4d);
+  * ANY OTHER MCP tool has the strings under its command-like keys checked
+    (COMMAND_KEY_TOKENS: command, cmd, script, shell, commandLine, argv, ...),
+    to depth 64, so an unknown tool that carries a command is checked rather
+    than skipped;
+  * an argv list is also checked joined (`{command: gh, args: [pr, merge, 1]}`
+    reads as `gh pr merge 1`), and a list of commands one by one.
+
+LIMITS, stated rather than implied. The reader stops at depth 64 and 5000
+strings. For a shell-capable tool, reaching either limit, or a payload that
+will not parse at all (a 100000-deep one made json.loads raise
+RecursionError), is a REFUSAL (`mcp-input-unreadable`). For any other MCP tool
+the strings read so far are checked and the rest is allowed: what it carries
+is not a command line unless it sits under a command-like key above depth 64.
+
+Every check below — secrets, patterns, push — runs on each extracted line, by
+the same code that reads a Bash command. There is no second copy of the rules.
+A non-shell tool's prose (`body`, `title`, `query`) is NOT a command and is not
+read, so a PR comment that says "gh pr merge is for a human" still posts.
 """
 
 from __future__ import annotations
@@ -63,6 +96,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -247,25 +281,208 @@ def secret_shapes(command: str, root: Path | None = None) -> list[str]:
     return _secrets.scan(command)
 
 
+# Which MCP tools run shell commands. A token is one `_`-separated word of the
+# tool's short name (after the last `__`, camelCase folded), so
+# `run_in_terminal`, `start_process`, `interact_with_process`,
+# `execute_command` and `runShellCommand` are all shell-named. Wide on purpose:
+# a false match only means more of that tool's strings are read as commands.
+# Which MCP tools run shell commands — a RULE plus a PINNED LIST, both on the
+# tool's short name (after the last `__`, camelCase folded, split on `_`):
+#
+#   * SHELL_TOOL_NAMES — known shell tools, exactly: the desktop terminal's
+#     run_in_terminal, desktop-commander's start_process and
+#     interact_with_process, and the common exec-command spellings;
+#   * a word that only a shell tool carries (SHELL_WORDS: terminal, shell,
+#     bash, ssh, tmux, ...); or
+#   * a run-verb AND a command-object together (SHELL_VERBS x SHELL_OBJECTS):
+#     execute_command, run_script, spawn_process — but NOT execute_workflow or
+#     execute_javascript. `execute` alone made a workflow runner's chat input
+#     read as shell lines (independent review of 5514e4d), and a refusal on
+#     prose gets the guard switched off.
+SHELL_TOOL_NAMES = frozenset({
+    "run_in_terminal", "start_process", "interact_with_process", "execute_command",
+    "run_command", "exec_command", "run_shell_command", "execute_shell_command",
+    "shell_exec", "run_script", "bash", "shell",
+})
+SHELL_WORDS = frozenset({"terminal", "shell", "bash", "zsh", "sh", "pwsh", "powershell", "ssh", "tmux"})
+SHELL_VERBS = frozenset({"exec", "execute", "run", "start", "spawn", "interact", "send"})
+SHELL_OBJECTS = frozenset({"command", "commands", "cmd", "cmdline", "process", "script", "shell"})
+# Input keys whose string value is a command line, on ANY MCP tool. A key
+# matches when one of its tokens is in this set: `command`, `shell_command`,
+# `commandLine`, `cmd`, `script`, `bash_script`, `argv`.
+COMMAND_KEY_TOKENS = frozenset({
+    "command", "commands", "cmd", "cmds", "cmdline", "commandline", "script",
+    "scripts", "shell", "argv",
+})
+# Keys that hold the ARGUMENTS of a command held under a command-like key.
+ARGS_KEY_NAMES = frozenset({"args", "argv", "arguments", "params", "parameters"})
+# How far the reader goes. Past either limit a SHELL-CAPABLE tool is refused
+# (`mcp-input-unreadable`): the first version stopped silently at depth 8 and
+# 500 strings and then allowed the call. Any other MCP tool keeps what was read
+# and is allowed — its prose is not a command line, so an unread remainder of
+# it is not an unread command; that limit is stated in the CHANGELOG.
+_MAX_DEPTH = 64
+_MAX_STRINGS = 5000
+INPUT_RULE = "mcp-input-unreadable"
+
+
+class Unreadable(Exception):
+    """The input is deeper or larger than this hook will read."""
+
+
+def _snake(name: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).lower().replace("-", "_")
+
+
+def _tokens(name: str) -> set[str]:
+    return {t for t in _snake(name).split("_") if t}
+
+
+def is_shell_tool(tool_name: str) -> bool:
+    """True for an MCP tool that runs shell lines (rule + pinned list above)."""
+    if not tool_name.startswith("mcp__"):
+        return False
+    short = tool_name.rsplit("__", 1)[-1]
+    if _snake(short) in SHELL_TOOL_NAMES:
+        return True
+    ts = _tokens(short)
+    return bool(ts & SHELL_WORDS) or bool(ts & SHELL_VERBS and ts & SHELL_OBJECTS)
+
+
+def _is_command_key(key: str) -> bool:
+    return bool(_tokens(key) & COMMAND_KEY_TOKENS)
+
+
+def _str_list(v: object) -> list[str] | None:
+    if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+        return v
+    return None
+
+
+def _join(argv: list[str]) -> str:
+    try:
+        return shlex.join(argv)
+    except Exception:
+        return " ".join(argv)
+
+
+def commands_from_payload(tool_name: str, tool_input: object) -> list[str]:
+    """Every command line this tool call would run, for the checks below.
+    What was read before a limit, if one was hit (see commands_and_limit)."""
+    return commands_and_limit(tool_name, tool_input)[0]
+
+
+def commands_and_limit(tool_name: str, tool_input: object) -> tuple[list[str], str | None]:
+    """(command lines, the limit that stopped the reader or None).
+
+    Bash (and any non-MCP tool): `command` or `script`, exactly as before.
+    An MCP tool: see the module docstring, FIFTH lesson.
+    """
+    if not isinstance(tool_input, dict):
+        return [], None
+    if not tool_name.startswith("mcp__"):
+        c = tool_input.get("command") or tool_input.get("script") or ""
+        return ([str(c)] if c else []), None
+
+    every = is_shell_tool(tool_name)
+    out: list[str] = []
+
+    def add(s: str) -> None:
+        if s.strip():
+            if len(out) >= _MAX_STRINGS:
+                raise Unreadable(f"more than {_MAX_STRINGS} strings")
+            out.append(s)
+
+    def walk(node: object, depth: int, under_cmd: bool) -> None:
+        if depth > _MAX_DEPTH:
+            raise Unreadable(f"nested deeper than {_MAX_DEPTH}")
+        if isinstance(node, str):
+            if every or under_cmd:
+                add(node)
+            return
+        if isinstance(node, list):
+            argv = _str_list(node)
+            if argv and (every or under_cmd) and len(argv) > 1:
+                add(_join(argv))  # an argv list reads as one line
+            for x in node:
+                walk(x, depth + 1, under_cmd)
+            return
+        if isinstance(node, dict):
+            # `{command: "gh", args: ["pr", "merge", "1"]}` is ONE line.
+            for k, v in node.items():
+                if isinstance(v, str) and (every or _is_command_key(str(k))):
+                    for ak, av in node.items():
+                        if str(ak).lower() in ARGS_KEY_NAMES and _str_list(av):
+                            add(v + " " + _join(av))
+            for k, v in node.items():
+                walk(v, depth + 1, under_cmd or _is_command_key(str(k)))
+
+    try:
+        walk(tool_input, 0, False)
+    except Unreadable as exc:
+        return out, str(exc)
+    except RecursionError:
+        return out, "too deep to walk"
+    return out, None
+
+
+def _name_from_raw(raw: str) -> str:
+    """The tool name from a payload json.loads could not read, by plain string
+    search. "" when there is none."""
+    i = raw.find('"tool_name"')
+    if i < 0:
+        return ""
+    j = raw.find('"', raw.find(":", i) + 1)
+    k = raw.find('"', j + 1) if j >= 0 else -1
+    return raw[j + 1:k] if j >= 0 and k > j else ""
+
+
+_LAST_UNPARSED = {"name": ""}  # the name of a payload that would not parse
+
+
+def read_payload_from_stdin() -> tuple[str, object]:
+    """(tool_name, tool_input) from the PreToolUse JSON Claude pipes in.
+    ("", {}) on anything unreadable: a parse error is an allow — except for a
+    shell-capable MCP tool, whose name is then kept in _LAST_UNPARSED so the
+    caller can refuse it (a 100000-deep payload made json.loads raise
+    RecursionError and the hook allow; independent review of 5514e4d)."""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return "", {}
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError, RecursionError, MemoryError):
+        _LAST_UNPARSED["name"] = _name_from_raw(raw)
+        return "", {}
+    if not isinstance(payload, dict):
+        return "", {}
+    name = payload.get("tool_name")
+    return (name if isinstance(name, str) else ""), payload.get("tool_input", {})
+
+
 def read_command_from_stdin() -> str:
     """Pull the shell command out of the PreToolUse JSON that Claude pipes in.
 
-    Returns "" when there is nothing to inspect (non-Bash tool, malformed
-    input). We only block on a positive match, so an empty string means
-    "nothing dangerous to see" — the safe default for a denylist. It never
-    blocks the whole session on parse trouble.
+    Kept for callers that load this hook and read one command (the downstream
+    copy's tests). Returns "" when there is nothing to inspect. For an MCP tool
+    that carries several lines, they are joined by newlines, which every
+    pattern here reads as separate command positions.
     """
-    raw = sys.stdin.read()
-    if not raw.strip():
-        return ""
-    try:
-        payload = json.loads(raw)
-    except (ValueError, TypeError):
-        return ""
-    tool_input = payload.get("tool_input", {}) if isinstance(payload, dict) else {}
-    if not isinstance(tool_input, dict):
-        return ""
-    return str(tool_input.get("command") or tool_input.get("script") or "")
+    name, tool_input = read_payload_from_stdin()
+    return "\n".join(commands_from_payload(name, tool_input))
+
+
+def check_command(cmd: str) -> tuple[list[str], str | None, str | None]:
+    """(secret shapes, rule hit, push reason) for ONE command line — the single
+    code path a Bash command and an MCP tool's command both go through."""
+    shapes = secret_shapes(cmd)  # FIRST: a secret must never reach the quoting branch
+    hit = is_dangerous(cmd)
+    why = None
+    if not hit:
+        found = push_hit(cmd)
+        if found:
+            hit, why = found
+    return shapes, hit, why
 
 
 if __name__ == "__main__":
@@ -273,17 +490,24 @@ if __name__ == "__main__":
     shapes: list[str] = []
     hit = None
     why = None  # the reason, when a PUSH_RULES rule matched rather than a regex
+    tool = ""
+    unreadable = None  # why a shell-capable tool's input could not be read in full
     try:
-        cmd = read_command_from_stdin()
-        if cmd:
-            # FIRST, always. A command carrying a secret must never reach the
-            # pattern branch below, which quotes the command back.
-            shapes = secret_shapes(cmd)
-            hit = is_dangerous(cmd)
-            if not hit:
-                found = push_hit(cmd)
-                if found:
-                    hit, why = found
+        tool, tool_input = read_payload_from_stdin()
+        if not tool and is_shell_tool(_LAST_UNPARSED["name"]):
+            tool, unreadable = _LAST_UNPARSED["name"], "the payload does not parse"
+        cmds, limit = commands_and_limit(tool, tool_input)
+        if limit and is_shell_tool(tool):
+            unreadable = limit
+        cmd = "\n".join(cmds)  # what the crash path below reads
+        # Each line separately, through the same check a Bash command gets.
+        # The first line that trips anything decides, and that line is the
+        # one quoted (redacted) in the message.
+        for one in cmds:
+            shapes, hit, why = check_command(one)
+            if shapes or hit:
+                cmd = one
+                break
     except Exception as exc:
         shapes, hit, why = [], None, None  # a crash is an allow...
         # ...EXCEPT on a push. Exit 1 lets the command run, so a hook that
@@ -306,6 +530,22 @@ if __name__ == "__main__":
                 )
                 sys.exit(2)
 
+    if unreadable and INPUT_RULE not in set(_read_list(project_root() / ".loopkit" / "block-disabled.txt")):
+        # Checked AFTER the lines that were read: a command that was found
+        # still reports its own rule above. This is for the unread remainder.
+        if not (shapes or hit):
+            print(
+                f"BLOCKED [{INPUT_RULE}]: {tool} runs shell commands and its input "
+                f"could not be read in full ({unreadable}); an unread command is "
+                "refused, not trusted. Send a smaller, flatter input.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    def _via(name: str) -> str:
+        # Which MCP tool carried the line, so the refusal reads as one.
+        return f" (via MCP tool {name})" if name.startswith("mcp__") else ""
+
     def _ruling(name: str) -> str:
         builtin = {n for n, _ in BUILTIN_PATTERNS} | {n for n, _ in PUSH_RULES}
         return "" if name.startswith("project-") or name in builtin else f" ruling: {name}"
@@ -322,7 +562,7 @@ if __name__ == "__main__":
         # reader as the thing standing guard. Both reasons, no command text.
         also = f"\nAlso matches [{hit}]:{_ruling(hit)}" if hit else ""
         print(
-            f"BLOCKED [{SECRET_RULE}]: {_secrets.advice(shapes)}{also}\n"
+            f"BLOCKED [{SECRET_RULE}]:{_via(tool)} {_secrets.advice(shapes)}{also}\n"
             "If this is genuinely not a secret, name "
             f"`{SECRET_RULE}` in .loopkit/block-disabled.txt (a reviewed "
             "change to a tracked file).",
@@ -332,7 +572,7 @@ if __name__ == "__main__":
 
     if hit and why:
         print(
-            f"BLOCKED [{hit}]: force push or remote delete: {_secrets.redact(why)}: "
+            f"BLOCKED [{hit}]:{_via(tool)} force push or remote delete: {_secrets.redact(why)}: "
             f"{_secrets.redact(cmd)}\n"
             "If this is a false positive, name the rule in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
@@ -349,7 +589,7 @@ if __name__ == "__main__":
         # secret branch above catches most of it; this is the backstop for a
         # shape the table does not know yet.
         print(
-            f"BLOCKED [{hit}]:{ruling} dangerous command pattern detected: {_secrets.redact(cmd)}\n"
+            f"BLOCKED [{hit}]:{ruling}{_via(tool)} dangerous command pattern detected: {_secrets.redact(cmd)}\n"
             "If this is a false positive, name the pattern in "
             ".loopkit/block-disabled.txt (a reviewed change), do not rephrase "
             "the command around the guard.",

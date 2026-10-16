@@ -30,10 +30,10 @@ that transfers.
 | The chat window is the memory, and it compacts       | `state/triage.md` is the queue, `specs/` is the truth, `inbox/needs-human.md` is the door. Findings go to disk, not to the conversation.                   |
 | The model picks what to work on, and drifts          | `loop-next.sh` — the next stage is a **lookup** over the state file. One stage per tick, every row at it, each transition recorded.                        |
 | A PR in flight starves the backlog                   | `loop-watch.sh` — a cheap poll (a few hundred bytes) before any full read; QUIET means do the real work.                                                   |
-| Rules in CLAUDE.md are forgotten under pressure      | Hooks that **block**: no `rm -rf`, no history rewrite, no `git add -A`, no `gh pr merge`, no self-approve, no edits to `constitution.md`/`specs/`.        |
+| Rules in CLAUDE.md are forgotten under pressure      | Hooks that **block**: no `rm -rf`, no history rewrite, no `git add -A`, no `gh pr merge` (on Bash or typed through an MCP shell tool), no merge-, auto-merge- or approve-shaped MCP call, no edits to `constitution.md`/`specs/`.        |
 | "Done" is claimed, not proven                        | A Stop hook that runs precheck → regression diff → lint → typecheck → build, then an acceptance review against the spec. Red blocks the stop.               |
 | The suite has known failures so the gate never passes| `test-regressions.sh` diffs one run against a committed baseline. Zero NEW failures is the bar; the baseline is a debt with a name.                          |
-| The agent that wrote it approves it                  | Separate implementer and reviewer agents; the reviewer's default stance is *broken until proven otherwise*; merge and approve are refused for everyone.    |
+| The agent that wrote it approves it                  | Separate implementer and reviewer agents; the reviewer's default stance is *broken until proven otherwise*; merge and approve are refused for everyone: the gh CLI on Bash and through MCP shell tools, and merge-/approve-shaped MCP calls (limits in the CHANGELOG, 0.2.5). |
 | Things that need a human get guessed                 | `inbox/needs-human.md` with a required shape: whole context, both options costed. Edits ping a webhook. Rows can sit `blocked`, counted but never polled. |
 | Findings become code whether or not code was the fix | `loop-assess` classifies first — measurement, code, tool, spec, process, architecture, prompt, decision — and only `code` reaches the spec-writer.        |
 | A design has two writers or a guard-then-write       | `run-state-model` — FizzBee, Quint/Apalache and TLA+ behind one driver with one honest exit-code contract (PASS / VIOLATION / ERROR / UNPROVEN).           |
@@ -104,7 +104,8 @@ per line). Seed the baseline once with `--update-baseline`.
 plugins/loopkit/
   .claude-plugin/plugin.json
   hooks/hooks.json                 the wiring (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop)
-  hooks/block_dangerous.py         destructive floor + merge/approve/stage-all refusal; project extras and disables
+  hooks/block_dangerous.py         destructive floor + merge/approve/stage-all refusal, on Bash and on the command an MCP tool would run; project extras and disables
+  hooks/block_mcp_merge_approve.py MCP tool names and parameters: merge-, auto-merge- and approve-shaped calls on the code-review surface, refused unless the exact name is pinned safe
   hooks/protect_governance.py      constitution.md and specs/ by ABSOLUTE path (worktree-proof); GOVERNANCE_EDIT_OK=1 is the door
   hooks/require_contracts.py       read FILES/TOOLS/COMMANDS before any work tool; passive until init
   hooks/loop_doctrine.py           injects the tick discipline when a prompt looks like a tick; never blocks

@@ -182,4 +182,4 @@ echo "  3. Seed the test baseline once:  bash \"$PLUGIN_ROOT/scripts/test-regres
 echo "  4. Find work:                    /loopkit:morning-triage   (or bash \"$PLUGIN_ROOT/scripts/morning-triage.sh\")"
 echo "  5. Tick:                         /loop work the loopkit backlog"
 echo
-echo "Guards active from the next tool call: block_dangerous, protect_governance (constitution.md, specs/), require_contracts."
+echo "Guards active from the next tool call: block_dangerous, block_mcp_merge_approve, protect_governance (constitution.md, specs/), require_contracts."
