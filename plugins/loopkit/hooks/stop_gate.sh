@@ -52,6 +52,14 @@ fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$HERE")}"
 
+# Inside the stop review's own headless judge session (hooks/stop_review.py
+# sets this): the judge only reads, so there is nothing to gate, and running
+# the whole suite inside a judge that has 170 s would only time it out.
+if [[ "${LOOPKIT_STOP_REVIEW_NESTED:-}" == "1" ]]; then
+    echo ">> SKIP: inside the stop review's judge session — nothing to gate."
+    exit 0
+fi
+
 # --- Resolve gate root (session worktree over CLAUDE_PROJECT_DIR) -----------
 # See header comment. Helpers are local to this block; they must not leak names
 # into the rest of the script's environment assumptions.

@@ -83,8 +83,9 @@ positions swapped (TIE on disagreement), the judge never the generator.
   schema, and prove counts with `count(*)`, never an estimate.
 - Form the per-criterion verdict from the diff and the criteria BEFORE reading
   the implementer's summary; the order is the review.
-- The Stop hook runs this skill on THIS TURN's changes only. Orphaned work from
-  other sessions is an inbox note, never a reason to block.
+- Run on THIS TURN's changes only — the files `hooks/stop_review.py` listed
+  when it asked for the review. Orphaned work from other sessions is an inbox
+  note, never a reason to block.
 
 ## Never
 

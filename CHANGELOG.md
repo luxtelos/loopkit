@@ -1,11 +1,85 @@
 # Changelog
 
-## Unreleased — after 0.2.4
+## 0.2.5 — 2026-10-15
 
-Not in any installed copy yet: Claude Code caches a plugin per version string,
-so this reaches consumers only when the manifest version is bumped.
+The Stop review can no longer trap a session that is waiting, and a new inbox question says what was searched before a human is asked.
+
+### Fixed
+
+- **The Stop review's model judge stays on, and blocks at most once in a row.**
+  The agent-type Stop hook asked a model to find the changed code and run
+  acceptance-review. In a real session it blocked a main session that was
+  correctly waiting on background agents more than 30 times, until Claude Code
+  overrode it ("A hook blocked the turn from ending 9 consecutive times"). It
+  never read `stop_hook_active`. Claude Code runs every Stop hook in parallel,
+  so a command hook placed in front of it could not have stopped it; it is
+  replaced by `hooks/stop_review.py`, a command hook, which runs the model
+  judge itself (owner decision, 2026-10-16: the judge stays on by default).
+  Because the hook runs the judge, the hook alone decides whether a verdict
+  can block: on the first stop a `VERDICT: REJECT` blocks once; when
+  `stop_hook_active` is true the stop is always allowed, and the judge's
+  verdict on that second firing is recorded in `state/ticks.jsonl` and in the
+  output, never enforced.
+- **Waiting on background work is an explicit pass.** Allowed when Claude
+  Code's `background_tasks` lists a task that is still running AND the
+  session's last message contains `LOOPKIT:WAITING`. Neither alone is enough:
+  a perpetual log monitor is not a reason to stop, and the word without a
+  running task is just a word. The session is judged again when it is
+  re-invoked with the results. A Claude Code that does not send
+  `background_tasks` gets no waiting pass.
+- **Only this turn's changes are judged.** `stop_review.py turn-start`, a new
+  UserPromptSubmit hook, records HEAD and a content hash of every file already
+  dirty when the turn starts (in `$TMPDIR`, keyed by session and repo root).
+  Untracked files from other work, files dirty before the turn and left
+  alone, and untracked nested worktrees are no longer graded.
+- **The main session can vouch for a no-code turn.** When there is no turn
+  record, the hook accepts `.loopkit/turn-evidence.json`
+  (`stop_review.py write-evidence`) only at the current HEAD, for
+  `LOOPKIT_EVIDENCE_MAX_AGE` seconds (default 900), and never when it lists a
+  code file. With a turn record, git's measurement wins over the file. Init
+  now gitignores it.
+- **A command hook has no tools to be denied.** The old checker could never
+  pass when its own Bash or memory tools were refused.
 
 ### Added
+
+- **The inbox precedent gate (#58) ships in this version.** A new open section of
+  `inbox/needs-human.md` must carry a `Precedent searched: <queries> → <result>`
+  line, checked at commit (`loop-commit.sh`, merge commits included) and at stop
+  (`stop_gate.sh`, before its no-code short-circuit). Details below.
+
+### Changed
+
+- The judge is `claude -p` with Read, Grep and Glob only
+  (`--disallowedTools Bash`), hooks switched off for that run
+  (`--settings '{"disableAllHooks": true}'`), and `LOOPKIT_STOP_REVIEW_NESTED=1`
+  so neither Stop hook runs inside it. It never runs git: the hook hands it
+  the turn's code files and the evidence file. Its last line must be
+  `VERDICT: PASS` or `VERDICT: REJECT <reason>`. It does not run when the
+  session is waiting, when no code changed, or when a valid evidence file
+  covers an unscoped turn.
+- `LOOP_STOP_REVIEW_CMD` swaps the judge (exit 0 = PASS; the turn's files
+  arrive in `LOOPKIT_TURN_CODE_FILES`). `LOOP_STOP_REVIEW_JUDGE=off` turns it
+  off; `LOOPKIT_JUDGE_CLAUDE` names the CLI. With no verdict (CLI missing,
+  timeout, no `VERDICT:` line, judge off) the hook blocks once with the turn's
+  files and asks for the `loopkit:reviewer` agent.
+- `hooks/stop_gate.sh` (tests, lint, typecheck, build) is unchanged except
+  that it stands down inside the judge's own session.
+
+### Pinned
+
+- `tests/pins/stop-review-loop.sh` drives the hook with real Stop payloads:
+  a second stop with `stop_hook_active`, a waiting session, a valid and a stale
+  evidence file, the scope cases, and the control (no background work, real
+  unfinished code: refused), and a run with no `bash` on PATH at all, where
+  the evidence verdicts still come out right — the old checker failed because
+  its Bash was denied, and permission allow rules did not reach it.
+  `tests/pins/stop-review-prove-red.sh` breaks each rule in a scratch copy and
+  requires the pin to fail on the case guarding it (18 mutations). The judge
+  is a stub in every case: no test calls a real model.
+
+### The inbox precedent gate (#58), in detail
+
 
 - **A new inbox section says what was searched before a human was asked.**
   Every NEW open `## ` section of `inbox/needs-human.md` carries
