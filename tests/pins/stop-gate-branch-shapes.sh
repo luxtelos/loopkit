@@ -38,6 +38,16 @@ REPO="$(cd "$REPO" 2>/dev/null && pwd)" || { echo "FAIL no such repo root: $1"; 
 GATE="$REPO/plugins/loopkit/hooks/stop_gate.sh"
 [ -f "$GATE" ] || { echo "FAIL no stop_gate.sh at $GATE"; exit 2; }
 
+# This pin runs the gate as a child. Under the reviewer's forced gate it
+# inherited LOOP_FORCE_GATE=1 and the control below ("an unchanged branch must
+# still SKIP") ran the suite instead — the pin's one failure on 2026-09-18.
+# Scrub the outer gate's environment at entry; run_gate's own assignments and
+# the explicit LOOP_FORCE_GATE=1 in case 8 still take. Resolved next to THIS
+# file, not under $REPO: stop-gate-prove-red.sh points this pin at a skeleton
+# that holds plugins/ only. See tests/lib/scrub-gate-env.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/scrub-gate-env.sh" || { echo "FAIL cannot source tests/lib/scrub-gate-env.sh"; exit 2; }
+scrub_gate_env
+
 fails=0
 ok()   { echo "  ok   $1"; }
 bad()  { echo "  FAIL $1"; fails=$((fails+1)); }
