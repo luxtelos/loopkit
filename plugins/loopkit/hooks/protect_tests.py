@@ -53,6 +53,15 @@ DESTRUCTIVE = re.compile(r"(?:\A|[;&|]\s*|\n\s*)(?P<cmd>rm|git\s+rm|mv|git\s+mv)
 ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
 OVERRIDE_WORD = "TEST_EDIT_OK=1"
 OVERRIDE_NAME = "TEST_EDIT_OK="
+FAIL_CLOSED_TOKENS = ("$(", "`", "<(", ">(", "<<")
+# NAME=value words, value quoted or bare; used to keep secrets out of the ledger.
+ASSIGN_WORD = re.compile(r"""(?:(?<=\s)|(?<=[;&|(])|\A)([A-Za-z_][A-Za-z0-9_]*)=("[^"]*"|'[^']*'|\S*)""")
+
+
+def redact(command: str) -> str:
+    """Every NAME=value word except TEST_EDIT_OK=1 becomes NAME=***."""
+    return ASSIGN_WORD.sub(
+        lambda m: m.group(0) if m.group(0) == OVERRIDE_WORD else f"{m.group(1)}=***", command)
 
 
 def project_root() -> Path:
@@ -245,7 +254,14 @@ def split_commands(cmd: str) -> list[Segment] | None:
             i += width
         elif c == "&":
             # `>&`, `<&` and `&>` are redirections, not separators.
-            if (i > 0 and cmd[i - 1] in "<>") or (i + 1 < n and cmd[i + 1] == ">"):
+            # `>&` / `<&` only when the < or > is itself unescaped (even run of
+            # backslashes before it); `&>` when > follows.
+            k = i - 1
+            nb = 0
+            while k - 1 - nb >= 0 and cmd[k - 1 - nb] == "\\":
+                nb += 1
+            prev_redirect = i > 0 and cmd[i - 1] in "<>" and nb % 2 == 0
+            if prev_redirect or (i + 1 < n and cmd[i + 1] == ">"):
                 if wstart < 0:
                     wstart = i
                 i += 1
@@ -303,6 +319,11 @@ def bash_hits(cmd: str, root: Path, globs: list[str]) -> list[dict]:
     nothing it blocked is lost; the per-command reader adds the shapes it
     missed (a leading assignment, `$VAR`, `env`)."""
     segs = split_commands(cmd)
+    # Fail closed: when the line holds anything whose real execution order this
+    # small reader cannot be sure of (command substitution, process
+    # substitution, a heredoc, unbalanced quoting), NO inline override is
+    # honoured anywhere in it. The line is then judged exactly as 0.2.5 did.
+    unsure = segs is None or any(t in cmd for t in FAIL_CLOSED_TOKENS)
     hits: list[dict] = []
     seen: set[tuple[int, str]] = set()
 
@@ -320,7 +341,9 @@ def bash_hits(cmd: str, root: Path, globs: list[str]) -> list[dict]:
         if (idx, tok) in seen:
             return
         seen.add((idx, tok))
-        inline = bool(segs is not None and idx >= 0 and segs[idx].override)
+        # honoured only when that simple command IS the removal, carries the
+        # prefix itself, and the whole line parsed cleanly.
+        inline = bool(not unsure and idx >= 0 and segs[idx].override and command_hits(cmd, segs[idx]))
         hits.append({"path": tok, "inline": inline, "msg":
                      f"`{cmd.strip()[:120]}` removes or moves a test path: {tok}"})
 
@@ -428,7 +451,7 @@ def record_override(payload: dict, root: Path, paths: list[str], via: str) -> No
             root, "test_edit_override",
             tool=payload.get("tool_name"),
             via=via,
-            command=command[:200] if command else None,
+            command=redact(command)[:200] if command else None,
             paths=paths,
             cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd(),
         )

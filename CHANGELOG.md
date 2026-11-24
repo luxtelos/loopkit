@@ -26,12 +26,23 @@ record.
   `TEST_EDIT_OK=0 git rm <test>`, `$V git rm <test>` and `env X=1 git rm <test>`
   were not seen at all. They are now judged like any other removal.
 
+- **Fail closed.** An inline override is honoured only when the command it
+  prefixes IS the removal (`rm`, `mv`, `git rm`, `git mv`) and the whole line is
+  plain: no `$( )`, backtick, `<( )` / `>( )`, no heredoc (`<<`), no unbalanced
+  quote. If the line has any of those, every inline override in it is ignored and
+  the line is judged exactly as 0.2.5 judged it. So `TEST_EDIT_OK=1 echo $(true;
+  git rm <test>)`, `TEST_EDIT_OK=1 bash -c 'true; git rm <test>'`, a heredoc whose
+  body mentions the prefix, and `TEST_EDIT_OK=1 echo \>& git rm <test>` (the `&`
+  backgrounds the echo) all stay blocked. `&` is a separator unless it is part
+  of an unescaped `>&`, `<&` or `&>`. Cost: a legitimate removal on a line that
+  also uses a substitution or heredoc needs the hook's own environment.
+
 ### Added
 
 - **Overrides are recorded.** Each honoured override (inline or in the hook's
   own environment) prints `>> protect_tests: ALLOWED by TEST_EDIT_OK — <path>`
   per test path and, when the project has a `state/` directory, appends a
-  `test_edit_override` event (command cut to 200 characters, paths, cwd, tool,
+  `test_edit_override` event (command with every `NAME=value` word except `TEST_EDIT_OK=1` shown as `NAME=***`, cut to 200 characters, paths, cwd, tool,
   `via` = `inline` or `env`) to `state/ticks.jsonl`. Best effort: a ledger
   failure never changes the verdict.
 - `hooks/test_protect_tests.py` (run by `tests/selftest.sh`) with the 0.2.5 hook

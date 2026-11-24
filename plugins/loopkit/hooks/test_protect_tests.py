@@ -99,7 +99,13 @@ root = make_root()
 run(bash("TEST_EDIT_OK=1 git rm " + T + " # " + "x" * 400), root)
 rows = ticks(root)
 check("E4 command is cut to 200 characters", bool(rows) and len(rows[0].get("command", "")) <= 200, str(rows)[:120])
-rc_case("E2 assignment BEFORE the override", f"FOO=bar TEST_EDIT_OK=1 rm {T}", 0)
+root = make_root()
+fake = "ghp_FAKE" + "0123456789abcdefTOKENVALUE"
+run(bash(f'GH_TOKEN={fake} OTHER="a b {fake}" TEST_EDIT_OK=1 git rm {T}'), root)
+raw = Path(root, "state", "ticks.jsonl").read_text(encoding="utf-8") if ticks(root) else ""
+check("tick never holds an assignment value other than TEST_EDIT_OK=1",
+      bool(raw) and fake not in raw and "GH_TOKEN=***" in raw and "OTHER=***" in raw and "TEST_EDIT_OK=1" in raw, raw[:200])
+rc_case("E2 assignment BEFORE the override",f"FOO=bar TEST_EDIT_OK=1 rm {T}", 0)
 rc_case("E2 assignment AFTER the override", f"TEST_EDIT_OK=1 FOO=bar rm {T}", 0)
 rc_case("E2 two extra assignments", f"A=1 TEST_EDIT_OK=1 B=2 rm {T}", 0)
 rc_case("E2 quoted value in a neighbour assignment", f'FOO="a b" TEST_EDIT_OK=1 git rm {T}', 0)
@@ -142,6 +148,24 @@ rc_case("E10 last assignment wins (1 then 0)", f"TEST_EDIT_OK=1 TEST_EDIT_OK=0 g
 rc_case("E10 last assignment wins (0 then 1)", f"TEST_EDIT_OK=0 TEST_EDIT_OK=1 git rm {T}", 0)
 rc_case("E11 export", f"export TEST_EDIT_OK=1; git rm {T}", 2)
 rc_case("E11 env", f"env TEST_EDIT_OK=1 git rm {T}", 2)
+
+# Review of PR 67: six lines 0.2.5 BLOCKED and a first draft of this hook allowed,
+# while the real shell ran the removal WITHOUT the override. Each must stay blocked.
+# Fail closed: any command substitution, process substitution, heredoc or
+# unbalanced quote voids every inline override on the line.
+rc_case("R1 removal inside $( ) under an outer prefix", f"TEST_EDIT_OK=1 echo $(true; git rm {T} )", 2)
+rc_case("R2 same with backticks", f"TEST_EDIT_OK=1 echo `true; git rm {T} `", 2)
+rc_case("R3 same inside double quotes", f'TEST_EDIT_OK=1 echo "$(true; git rm {T} )"', 2)
+rc_case("R4 escaped > then & backgrounds the echo", f"TEST_EDIT_OK=1 echo \\>& git rm {T}", 2)
+rc_case("R5 heredoc body whose odd quote swallows a later removal",
+        'cat <<EOF\nTEST_EDIT_OK=1 x"\nEOF\n' + f"git rm {T}" + '\ncat <<EOF\n"\nEOF', 2)
+rc_case("R6 quoted ) inside $( ) then a removal", f'TEST_EDIT_OK=1 echo $(echo ")"; git rm {T} # "\n)', 2)
+rc_case("R7 wrapped removal under a prefix is NOT honoured (as 0.2.5)", f"TEST_EDIT_OK=1 bash -c 'true; git rm {T} '", 2)
+rc_case("R8 prefix on echo does not cover a removal quoted into it", f'TEST_EDIT_OK=1 echo "x; git rm {T}"', 2)
+rc_case("R9 process substitution voids the line", f"TEST_EDIT_OK=1 git rm {T} <(true)", 2)
+rc_case("R10 heredoc anywhere voids the line", f"TEST_EDIT_OK=1 git rm {T} <<EOF\nx\nEOF", 2)
+rc_case("R11 unescaped >& is still a redirect, not a separator", f"TEST_EDIT_OK=1 git rm {T} >&2", 0)
+rc_case("R11 &> is still a redirect", f"TEST_EDIT_OK=1 git rm {T} &> /dev/null", 0)
 rc_case("E12 GOVERNANCE_EDIT_OK is not this door", f"GOVERNANCE_EDIT_OK=1 git rm {T}", 2)
 rc_case("E12 LOOPKIT_COMMIT_UNLOCKED is not this door", f"LOOPKIT_COMMIT_UNLOCKED=1 git rm {T}", 2)
 rc_case("unbalanced quote falls back to the 0.2.5 reading: still blocked", f'git rm {T} "x', 2)
