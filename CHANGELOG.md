@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.2.6 — 2026-11-24
+
+`protect_tests.py`: the `TEST_EDIT_OK=1` door its own block message points to
+now opens from a Bash command, for that one command, and every use leaves a
+record.
+
+### Fixed
+
+- **An inline `TEST_EDIT_OK=1` prefix is read from the command text.** The hook
+  is its own process, so a prefix typed in a Bash command never reached
+  `os.getenv`; the block message said "re-run with TEST_EDIT_OK=1" and that
+  could not work. The hook now cuts the command into simple commands (on
+  unquoted `;`, `&&`, `||`, `|`, `&`, `(`, `)` and newline, respecting quotes,
+  comments, `$( )` and backticks) and honours the override per command: only the
+  command the prefix sits in front of. `TEST_EDIT_OK=1 git rm docs/x.md && git rm
+  <test>` still blocks the second command; `a && TEST_EDIT_OK=1 git rm <test>`
+  is allowed. Not an override: `export TEST_EDIT_OK=1`, `env TEST_EDIT_OK=1 ...`,
+  text in quotes, a comment or an argument, `$VAR` / `$( )` / backtick forms,
+  any value but the single character `1`, another hook's override word.
+  protect_governance's whole-line regex was deliberately not reused: it would
+  let that two-command line through.
+- **A leading `VAR=value` no longer hides a removal.** 0.2.5 only looked for
+  `rm` / `git rm` / `mv` at the start of a command, so `FOO=1 git rm <test>`,
+  `TEST_EDIT_OK=0 git rm <test>`, `$V git rm <test>` and `env X=1 git rm <test>`
+  were not seen at all. They are now judged like any other removal.
+
+### Added
+
+- **Overrides are recorded.** Each honoured override (inline or in the hook's
+  own environment) prints `>> protect_tests: ALLOWED by TEST_EDIT_OK — <path>`
+  per test path and, when the project has a `state/` directory, appends a
+  `test_edit_override` event (command cut to 200 characters, paths, cwd, tool,
+  `via` = `inline` or `env`) to `state/ticks.jsonl`. Best effort: a ledger
+  failure never changes the verdict.
+- `hooks/test_protect_tests.py` (run by `tests/selftest.sh`) with the 0.2.5 hook
+  kept as `tests/fixtures/protect_tests_0.2.5.py` so the red side and the
+  byte-identical control (a plain removal is blocked with the same message) can
+  be re-proved.
+
+### Not changed, on purpose
+
+- Write, Edit and MultiEdit cannot carry a prefix; only the hook's own
+  environment unblocks them.
+- `bash -c '...'`, `sed -i`, `python -c` and heredoc-wrapped removals behave as
+  in 0.2.5 (not closed, not made worse); the hook is still not wired to MCP
+  shell tools; heredoc bodies and quoted text are still read as commands.
+- `protect_governance.py` is untouched.
+
 ## Unreleased
 
 ### Fixed (tests only — #66, after #62; nothing under `plugins/loopkit/` changes)
